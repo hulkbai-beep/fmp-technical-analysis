@@ -238,7 +238,7 @@
     }
     let i0 = daily.findIndex(b => b.d >= from);
     if (i0 < 0) i0 = N - 1;
-    return { i0: Math.max(0, Math.min(i0, N - Math.min(N, 5))), i1: N - 1 };
+    return { i0: Math.max(0, Math.min(i0, N - Math.min(N, MIN_VIEW))), i1: N - 1 };
   }
 
   // ------------------------------------------------------------------ chart drawing
@@ -291,9 +291,11 @@
 
     // ---- main price scale: candles, plus visible lines / levels that sit reasonably close
     const viewH = global.innerHeight || 900, HT = 18, HS = W < 560 ? 54 : 68, LANE = 18;
-    const fs = global.document.fullscreenElement?.contains(box);
-    // full screen: the price panel takes the screen height (the sub-panels scroll into view below it)
-    const top = 8, HM = fs ? Math.round(Math.max(280, Math.min(W * 0.7, viewH - box.getBoundingClientRect().top - top - 120)))
+    const fsEl = global.document.fullscreenElement, fs = fsEl?.contains(box);
+    // full screen: the price panel takes the screen height (the sub-panels scroll into view below it);
+    // the box's offset is taken inside the scrolled full-screen card, so scrolling does not change it
+    const boxTop = fs ? box.getBoundingClientRect().top - fsEl.getBoundingClientRect().top + fsEl.scrollTop : 0;
+    const top = 8, HM = fs ? Math.round(Math.max(280, Math.min(W * 0.7, viewH - boxTop - top - 120)))
       : Math.round(Math.max(280, Math.min(W * 0.5, viewH * 0.66, 760)));
     let lo0 = Infinity, hi0 = -Infinity;
     for (const b of bars) { if (b.l < lo0) lo0 = b.l; if (b.h > hi0) hi0 = b.h; }
@@ -364,10 +366,10 @@
         zones += `<rect x="0" y="${yt.toFixed(1)}" width="${PW}" height="${h.toFixed(1)}" fill="var(${col}-zone)"/>` +
           (h > 6 ? `<rect x="0.5" y="${(yt + 0.5).toFixed(1)}" width="${PW - 1}" height="${(h - 1).toFixed(1)}" fill="none" stroke="var(${col}-edge)"/>` : "") +
           `<line x1="0" x2="${PW}" y1="${yl}" y2="${yl}" stroke="var(${col})" stroke-width="1" opacity=".7"/>`;
-        tags.push({ y: y(x.price), at: y(x.price), up: isAbove(x), text: tagText(x), cls: x.side, title: `${x.tag} ${fmtPx(x.price)}` });
+        tags.push({ y: y(x.price), at: y(x.price), up: isAbove(x), price: x.price, text: tagText(x), cls: x.side, title: `${x.tag} ${fmtPx(x.price)}` });
       } else {
         const above = x.price > hi;
-        tags.push({ y: above ? top + EDGE : top + HM - EDGE, at: null, up: above, text: `${tagText(x)} ${above ? "↑" : "↓"}`, cls: x.side, title: `${x.tag} ${fmtPx(x.price)}` });
+        tags.push({ y: above ? top + EDGE : top + HM - EDGE, at: null, up: above, price: x.price, text: `${tagText(x)} ${above ? "↑" : "↓"}`, cls: x.side, title: `${x.tag} ${fmtPx(x.price)}` });
       }
     }
     // spread the tags on each side of the last-close chip (which stays put): at least CH from the chip,
@@ -375,7 +377,7 @@
     const spread = (list, dir, edge) => {
       const far = (edge - lastY) * dir, s = list.length > 1 ? Math.min(LH, Math.max(0, far - CH) / (list.length - 1)) : LH;
       list.forEach(l => { l.dist = (l.y - lastY) * dir; });
-      list.sort((p, q) => p.dist - q.dist);
+      list.sort((p, q) => Math.abs(p.price - last.c) - Math.abs(q.price - last.c));   // nearest the close first
       list.forEach((l, i) => { l.dist = Math.max(l.dist, i ? list[i - 1].dist + s : CH); });
       for (let i = list.length - 1; i >= 0; i--) list[i].dist = Math.min(list[i].dist, i === list.length - 1 ? far : list[i + 1].dist - s);
       list.forEach(l => { l.y = lastY + dir * l.dist; });
@@ -533,6 +535,7 @@
     }
     const H = bottom + 22;
 
+    const hadFocus = box.contains(global.document.activeElement), keep = { di: st.hoverDi, y: st.hoverY };
     box.innerHTML = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" tabindex="0" aria-label="${esc(t("chart_aria"))}">
       <defs><clipPath id="${id}-clip"><rect x="0" y="${top}" width="${PW}" height="${HM}"/></clipPath></defs>
       ${back}<line x1="0" x2="${PW}" y1="${top + HM + 0.5}" y2="${top + HM + 0.5}" stroke="var(--border)"/>
@@ -564,6 +567,7 @@
     };
     const point = (i, py) => {
       st.hover = Math.max(0, Math.min(n - 1, i));
+      st.hoverDi = bars[st.hover].di; st.hoverY = py;
       const xx = wx(st.hover);
       xv.setAttribute("x1", xx); xv.setAttribute("x2", xx); xv.setAttribute("visibility", "visible");
       const inPrice = py != null && py >= top && py <= top + HM;
@@ -577,7 +581,7 @@
       show(st.hover);
     };
     const leave = () => {
-      st.hover = null;
+      st.hover = st.hoverDi = st.hoverY = null;
       [xv, xy, xp].forEach(el => el.setAttribute("visibility", "hidden"));
       show(n - 1);
     };
@@ -598,14 +602,17 @@
       e.preventDefault();
       point((st.hover ?? n - 1) + step, null);
     });
-    if (st.hover != null && st.hover < n) point(st.hover, null); else show(n - 1);
+    // after a zoom, pan or toggle the crosshair stays on the same bar (and price height) if it is still in view
+    const at = keep.di != null && keep.di >= view.i0 && keep.di <= view.i1 ? bars.findIndex(b => b.di >= keep.di) : -1;
+    if (at >= 0) point(at, keep.y); else { st.hover = st.hoverDi = st.hoverY = null; show(n - 1); }
+    if (hadFocus) svg.focus({ preventScroll: true });
   }
 
   // ------------------------------------------------------------------ public
   function render(root, data) {
     const st = root._ta || (root._ta = { vis: loadVis(), userTf: null, hover: null, id: "ta" + (++uid) });
     if (st.ro) st.ro.disconnect();
-    if (st.data !== data) { st.hover = null; st.view = null; }
+    if (st.data !== data) { st.hover = st.hoverDi = st.hoverY = null; st.view = null; }
     st.root = root; st.data = data; st.prep = prepare(data);
     const legend = legendItems(data, st.prep).map(it =>
       `<button type="button" class="ta-chip" data-k="${esc(it.key)}" aria-pressed="${st.vis[it.key] !== false}"${it.title ? ` title="${esc(it.title)}"` : ""}>` +
@@ -653,12 +660,15 @@
       st.view = { i0, i1: i0 + c - 1 };
       redraw();
     };
+    // c bars from i0 become nc bars, keeping the bar at fraction f of the width in place
+    const zoomTo = (i0, c, nc, f) => {
+      nc = Math.max(Math.min(MIN_VIEW, N), Math.min(N, nc));
+      setView(Math.round(i0 + f * (c - nc)), nc);
+    };
     st.zoom = (factor, frac) => {
       if (!N) return;
-      const v = currentView(st), c = v.i1 - v.i0 + 1;
-      const f = frac ?? (v.i1 === N - 1 ? 1 : 0.5), nc = Math.round(c * factor);
-      if (nc === c) return;
-      setView(Math.round(v.i0 + f * (c - 1) - f * (Math.max(Math.min(MIN_VIEW, N), Math.min(N, nc)) - 1)), nc);
+      const v = currentView(st), c = v.i1 - v.i0 + 1, nc = Math.round(c * factor);
+      if (nc !== c) zoomTo(v.i0, c, nc, frac ?? (v.i1 === N - 1 ? 1 : 0.5));
     };
     root.querySelectorAll(".ta-range button").forEach(b => b.addEventListener("click", () => {
       if (!N) return;
@@ -666,28 +676,53 @@
       setView(r.i0, r.i1 - r.i0 + 1);
     }));
     root.querySelectorAll(".ta-zoom button").forEach(b => b.addEventListener("click", () => st.zoom(b.dataset.z === "in" ? 1 / 1.5 : 1.5)));
-    const box = st.box;
+    const box = st.box, frac = x => Math.max(0, Math.min(1, (x - box.getBoundingClientRect().left) / st.geom.PW));
+    // a trackpad pinch arrives as many small Ctrl+wheel steps: add them up until they move a whole bar
+    let wheelZoom = 0;
     box.addEventListener("wheel", e => {
       if (!(e.ctrlKey || e.metaKey) || !st.geom) return;      // a plain wheel keeps scrolling the page
       e.preventDefault();
-      const r = box.getBoundingClientRect();
-      st.zoom(Math.exp(Math.max(-1, Math.min(1, e.deltaY / 100)) * 0.35), Math.max(0, Math.min(1, (e.clientX - r.left) / st.geom.PW)));
+      const dy = e.deltaY * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1);
+      wheelZoom += Math.max(-1, Math.min(1, dy / 100)) * 0.35;
+      const v = currentView(st), c = v.i1 - v.i0 + 1;
+      if (Math.round(c * Math.exp(wheelZoom)) === c) return;
+      st.zoom(Math.exp(wheelZoom), frac(e.clientX));
+      wheelZoom = 0;
     }, { passive: false });
-    let drag = null, frame = 0;
+    // the mouse or one finger drags sideways to pan (a vertical swipe still scrolls the page); two fingers pinch
+    const pts = new Map();
+    let drag = null, pinch = null, frame = 0;
+    const later = fn => { cancelAnimationFrame(frame); frame = requestAnimationFrame(fn); };
+    const gap = () => { const [a, b] = [...pts.values()]; return Math.hypot(a.x - b.x, a.y - b.y) || 1; };
     box.addEventListener("pointerdown", e => {
-      if (e.pointerType !== "mouse" || e.button !== 0 || !st.geom) return;
-      const v = currentView(st);
-      drag = { x: e.clientX, i0: v.i0, c: v.i1 - v.i0 + 1, per: st.geom.PW / (v.i1 - v.i0 + 1), moved: false };
+      if (!st.geom || e.button !== 0) return;
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (e.pointerType !== "mouse") box.setPointerCapture(e.pointerId);   // keeps the finger through redraws
+      const v = currentView(st), c = v.i1 - v.i0 + 1;
+      drag = null; pinch = null;
+      if (pts.size === 1) drag = { x: e.clientX, i0: v.i0, c, per: st.geom.PW / c, moved: false };
+      else if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = { d: gap(), i0: v.i0, c, f: frac((a.x + b.x) / 2) }; }
     });
     box.addEventListener("pointermove", e => {
-      if (!drag || !(e.buttons & 1)) return;
+      if (!pts.has(e.pointerId)) return;
+      if (e.pointerType === "mouse" && !(e.buttons & 1)) { endDrag(e); return; }
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pinch && pts.size === 2) {
+        const nc = Math.round(pinch.c * pinch.d / gap());
+        later(() => { if (pinch) zoomTo(pinch.i0, pinch.c, nc, pinch.f); });
+        return;
+      }
+      if (!drag) return;
       const k = Math.round((drag.x - e.clientX) / drag.per);
       if (!drag.moved && Math.abs(drag.x - e.clientX) < 4) return;
       if (!drag.moved) { drag.moved = true; box.setPointerCapture(e.pointerId); box.classList.add("dragging"); }
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => { if (drag && drag.i0 + k !== currentView(st).i0) setView(drag.i0 + k, drag.c); });
+      later(() => { if (drag && drag.i0 + k !== currentView(st).i0) setView(drag.i0 + k, drag.c); });
     });
-    const endDrag = () => { drag = null; box.classList.remove("dragging"); };
+    const endDrag = e => {
+      pts.delete(e.pointerId);
+      drag = null; pinch = null;
+      box.classList.remove("dragging");
+    };
     box.addEventListener("pointerup", endDrag);
     box.addEventListener("pointercancel", endDrag);
     box.addEventListener("dblclick", () => { st.view = null; redraw(); });

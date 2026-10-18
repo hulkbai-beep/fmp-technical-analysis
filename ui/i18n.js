@@ -39,7 +39,7 @@
       chart_aria: "K 线图：价格、均线、锚定 VWAP、支撑阻力、成交量、RSI 与相对强度",
       approx: "锚定 VWAP 与成交量分布均为日线近似：VWAP = 典型价 (H+L+C)/3 × 日成交量，从锚定日起累计；成交量分布把每根 K 线的成交量平均分配到其最高-最低区间。都不是盘中逐笔数据。",
       vp_window: (n, d) => `成交量分布：最近 ${n} 根 K 线（自 ${d}）`,
-      kb_hint: "按住鼠标左右拖动可平移，Ctrl+滚轮或触控板双指可缩放，双击恢复全部；图表获得焦点后 ← → 移动十字线，+ − 缩放",
+      kb_hint: "用鼠标或手指左右拖动可平移，Ctrl+滚轮、触控板或双指捏合可缩放，双击恢复全部；图表获得焦点后 ← → 移动十字线，+ − 缩放",
       // side panels
       t_regime: "市场状态", t_score: "评分卡", t_signals: "信号统计", t_levels: "关键价位", t_notes: "数据说明",
       rg_type: "类型", rg_dir: "方向", rg_strength: "趋势强度", rg_vol: "波动率", rg_weekly: "周线",
@@ -99,7 +99,7 @@
       chart_aria: "Candlestick chart: price, moving averages, anchored VWAPs, support and resistance, volume, RSI and relative strength",
       approx: "Anchored VWAPs and the volume profile are daily-bar approximations: VWAP = typical price (H+L+C)/3 × daily volume, cumulated from the anchor bar; the profile spreads each bar's volume evenly across its high-low range. Neither uses intraday data.",
       vp_window: (n, d) => `Volume profile: last ${n} bars (from ${d})`,
-      kb_hint: "Drag to pan, Ctrl+wheel or pinch to zoom, double-click to show everything; with the chart focused, ← → move the crosshair and + − zoom",
+      kb_hint: "Drag sideways to pan, Ctrl+wheel or pinch to zoom, double-click to show everything; with the chart focused, ← → move the crosshair and + − zoom",
       t_regime: "Regime", t_score: "Scorecard", t_signals: "Signal statistics", t_levels: "Key levels", t_notes: "Data notes",
       rg_type: "Type", rg_dir: "Direction", rg_strength: "Trend strength", rg_vol: "Volatility", rg_weekly: "Weekly",
       type_trend: "Trend", type_range: "Range", type_transitional: "Transitional", type_vol_extreme: "Vol extreme",

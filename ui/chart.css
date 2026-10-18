@@ -111,7 +111,7 @@ button { font: inherit; }
 .ta-zoom button { min-width: 30px; font-size: 14px; line-height: 16px; }
 .ta-main:fullscreen { overflow: auto; border-radius: 0; border: 0; padding: 16px 20px; }
 .ta-main::backdrop { background: var(--bg); }
-.ta-chartbox { cursor: grab; } .ta-chartbox.dragging { cursor: grabbing; }
+.ta-chartbox { cursor: grab; -webkit-user-select: none; user-select: none; } .ta-chartbox.dragging { cursor: grabbing; }
 .ta-readout { display: flex; flex-wrap: wrap; gap: 0 12px; min-height: 40px; align-content: flex-start;
   font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; margin: 2px 0 4px; }
 .ta-readout b { color: var(--text); font-weight: 600; }
