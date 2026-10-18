@@ -410,6 +410,7 @@ def load_all(client, ticker, now=None, start=None) -> dict:
                      f"between {C.SPAC_PRICE_BAND[0]:.0f} and {C.SPAC_PRICE_BAND[1]:.0f}): this looks like a "
                      f"pre-merger SPAC shell, which long-history statistics include; re-run with "
                      f"--history-start set to the merger date to exclude it")
+        dq["warnings"].append(notes[-1])
 
     # a plan without /dividend-adjusted: benchmarks go straight to /full (no wasted requests)
     adj_restricted = not adj_rows and str(adj_problem or "").startswith("restricted")

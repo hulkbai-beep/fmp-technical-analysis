@@ -319,6 +319,10 @@ def summary(metrics: dict, paths: dict) -> str:
                      f"business days behind {st['expected_session']}")
     if (dq.get("liquidity") or {}).get("illiquid"):
         lines.append(f"  WARNING      : illiquid ({dq['liquidity']['reason']})")
+    if dq.get("spac_like_start"):
+        sp = dq["spac_like_start"]
+        lines.append(f"  WARNING      : history from {sp['first_date']} looks like a pre-merger SPAC shell "
+                     f"(median close {sp['median_close']:.2f}); use --history-start <merger date> to exclude it")
     for e in meta["errors"]:
         lines.append(f"  error        : {e}")
     return "\n".join(lines)

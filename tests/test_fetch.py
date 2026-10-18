@@ -544,6 +544,7 @@ def test_spac_like_start_is_flagged_but_kept():
     sp = out["data_quality"]["spac_like_start"]
     assert sp and sp["first_date"] == "2021-01-04"
     assert any("pre-merger SPAC" in n for n in out["notes"])
+    assert any("pre-merger SPAC" in w for w in out["data_quality"]["warnings"])
     assert day(out["bars"].index[0]) == "2021-01-04"          # flagged, never silently dropped
 
 

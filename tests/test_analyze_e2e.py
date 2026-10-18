@@ -360,3 +360,15 @@ def test_cli_history_start_cuts_history(cli, tmp_path, capsys):
 def test_cli_bad_history_start_exits_1(cli, tmp_path, capsys):
     assert analyze.main(["ACME", "--history-start", "not-a-date", "--out", str(tmp_path)]) == 1
     assert "not a date" in capsys.readouterr().err
+
+
+def test_cli_prints_the_spac_warning(monkeypatch, tmp_path, capsys):
+    df = series("2021-01-04", seed=11).copy()
+    for c in ("open", "high", "low", "close"):
+        df.iloc[:130, df.columns.get_loc(c)] = 10.4
+        df["adj_" + c] = df[c] * 0.98
+    fake = market(stock="IONQ", prices={"IONQ": df}, profile=profile_row("IONQ", ipo="2021-01-04"))
+    monkeypatch.setattr(analyze.fmp_client, "FMPClient", lambda refresh=False: fake)
+    monkeypatch.setattr(fetch, "market_now", lambda: NOW)
+    assert analyze.main(["IONQ", "--out", str(tmp_path / "run")]) == 0
+    assert "looks like a pre-merger SPAC shell" in capsys.readouterr().out
