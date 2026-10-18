@@ -139,6 +139,9 @@ def analyze_request(query: dict) -> tuple[int, dict]:
             metrics, chart_data = analyze.run_analysis(symbol, horizon, **kwargs)
         except Exception as exc:  # report it as JSON and keep the server alive
             return _error(exc)
+    if chart_data is None:
+        errors = "; ".join((metrics.get("meta") or {}).get("errors") or []) or "unknown error"
+        return 500, {"error": redact(f"chart could not be built: {errors}")}
     return 200, {"metrics": metrics, "chart": chart_data}
 
 

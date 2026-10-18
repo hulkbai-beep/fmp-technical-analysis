@@ -4,7 +4,8 @@ Data layer: fetch daily bars and reference data from FMP, then validate them.
 load_all() makes about ten requests for an uncached stock (profile, quote, earnings, two
 chunks each of /full and /dividend-adjusted history, SPY, the sector ETF and ^VIX); a
 same-day re-run is served from the client's cache. Missing or plan-restricted data is
-recorded in `skipped` / `notes` and never filled in.
+recorded in `skipped` / `notes` and never filled in. A benchmark without dividend-adjusted
+prices falls back to split-adjusted /full prices (price return), and says so.
 """
 from __future__ import annotations
 
@@ -17,9 +18,6 @@ import fmp_client
 FULL = "historical-price-eod/full"
 ADJUSTED = "historical-price-eod/dividend-adjusted"
 
-CHUNK_FIT_SHARE = getattr(C, "CHUNK_FIT_SHARE", 0.97)
-HISTORY_EXHAUSTED_DAYS = getattr(C, "HISTORY_EXHAUSTED_DAYS", 10)
-LIQUIDITY_BARS = getattr(C, "LIQUIDITY_BARS", 50)
 LIST_MAX = 10  # dates kept per data-quality flag (most recent)
 
 PRICE = ["open", "high", "low", "close"]
@@ -27,6 +25,7 @@ COLUMNS = PRICE + ["volume"] + ["adj_" + c for c in PRICE]
 FULL_FIELDS = {"open": "open", "high": "high", "low": "low", "close": "close", "volume": "volume"}
 ADJ_FIELDS = {"adjOpen": "adj_open", "adjHigh": "adj_high", "adjLow": "adj_low", "adjClose": "adj_close"}
 BENCH_FIELDS = {"adjOpen": "open", "adjHigh": "high", "adjLow": "low", "adjClose": "close", "volume": "volume"}
+BASIS = {ADJUSTED: "dividend-adjusted", FULL: "split-adjusted"}   # price basis of a benchmark frame
 
 
 # ---------------------------------------------------------------------------- time
@@ -113,7 +112,7 @@ def history_start(profile) -> pd.Timestamp:
 # ---------------------------------------------------------------------------- history
 def _fits_cap(start, to) -> bool:
     sessions = (to - start).days * C.TRADING_DAYS_PER_YEAR / 365.25
-    return sessions <= C.EOD_ROW_CAP * CHUNK_FIT_SHARE
+    return sessions <= C.EOD_ROW_CAP * C.CHUNK_FIT_SHARE
 
 
 def fetch_history(client, endpoint, symbol, start, end):
@@ -140,7 +139,7 @@ def fetch_history(client, endpoint, symbol, start, end):
         earliest = min(pd.Timestamp(str(r["date"])[:10]) for r in chunk)
         if len(chunk) >= C.EOD_ROW_CAP:
             to = earliest - pd.Timedelta(days=1)
-        elif frm <= start or (earliest - frm).days > HISTORY_EXHAUSTED_DAYS:
+        elif frm <= start or (earliest - frm).days > C.HISTORY_EXHAUSTED_DAYS:
             break
         else:
             to = frm - pd.Timedelta(days=1)
@@ -175,15 +174,6 @@ def stock_frame(full_rows, adj_rows) -> pd.DataFrame:
     adj = _frame(adj_rows, ADJ_FIELDS).sort_index(kind="mergesort")
     adj = adj[~adj.index.duplicated(keep="last")]
     return full.join(adj, how="left")[COLUMNS]
-
-
-def _as_benchmark(bars: pd.DataFrame) -> pd.DataFrame:
-    """The analysed symbol's own bars in benchmark form (prices = dividend-adjusted). Bars without
-    adjusted prices are left out rather than mixed in; with none at all, split-adjusted prices are used."""
-    adj = bars.dropna(subset=["adj_" + c for c in PRICE])
-    if adj.empty:
-        return _with_adj_copy(bars)
-    return adj.assign(**{c: adj["adj_" + c] for c in PRICE})[COLUMNS]
 
 
 # ---------------------------------------------------------------------------- validation
@@ -255,16 +245,22 @@ def validate(bars, now_ny=None, symbol=None, check_volume=True):
             warnings.append(f"{tag}last bar {_day(last_bar)} is {behind} business days behind the "
                             f"expected session {_day(expected)} (stale data)")
 
-    adj_coverage = None
+    adj_coverage, adj_missing = None, None
     if "adj_close" in df and len(df):
         adj_coverage = float(df["adj_close"].notna().mean())
-        if adj_coverage == 0:
+        miss = df.index[df["adj_close"].isna()]
+        adj_missing = {"count": int(len(miss)), "latest": _day(miss[-1]) if len(miss) else None,
+                       "dates": [_day(d) for d in miss[-LIST_MAX:]]}
+        first_adj = df["adj_close"].first_valid_index()
+        if first_adj is None:
             warnings.append(f"{tag}no dividend-adjusted prices: return statistics use split-adjusted "
                             f"closes (price return only)")
-        elif adj_coverage < 1:
-            first_adj = df["adj_close"].first_valid_index()
-            warnings.append(f"{tag}dividend-adjusted prices cover {adj_coverage:.1%} of bars "
-                            f"(from {_day(first_adj)})")
+        elif len(miss) and miss[-1] < first_adj:
+            warnings.append(f"{tag}dividend-adjusted prices start {_day(first_adj)}: returns on the "
+                            f"{len(miss)} earlier bars are price returns")
+        elif len(miss):
+            warnings.append(f"{tag}{len(miss)} of {len(df)} bars have no dividend-adjusted prices "
+                            f"(latest {_day(miss[-1])}): returns on those bars are price returns")
 
     liquidity = _liquidity(df) if check_volume else \
         {"avg_volume": None, "avg_dollar_volume": None, "bars": 0, "illiquid": False,
@@ -286,6 +282,7 @@ def validate(bars, now_ny=None, symbol=None, check_volume=True):
         "partial_bar_excluded": partial,
         "stale": stale,
         "adj_coverage": adj_coverage,
+        "adj_missing": adj_missing,
         "liquidity": liquidity,
         "warnings": warnings,
     }
@@ -293,8 +290,8 @@ def validate(bars, now_ny=None, symbol=None, check_volume=True):
 
 
 def _liquidity(df):
-    """Average shares and dollar volume (split-adjusted close x volume) over the last LIQUIDITY_BARS bars."""
-    tail = df.tail(LIQUIDITY_BARS)
+    """Average shares and dollar volume (split-adjusted close x volume) over the last C.LIQUIDITY_BARS bars."""
+    tail = df.tail(C.LIQUIDITY_BARS)
     if tail.empty:
         return {"avg_volume": None, "avg_dollar_volume": None, "bars": 0, "illiquid": False,
                 "reason": "no bars"}
@@ -317,16 +314,23 @@ def _reference(client, endpoint, symbol):
     return row, (None if row else problem or "no data returned")
 
 
-def _benchmark(client, symbol, endpoint, now, start):
-    """Benchmark bars in the benchmark column convention -> (bars|None, data_quality|None, reason|None)."""
-    rows, problem = fetch_history(client, endpoint, symbol, start, pd.Timestamp(now.date()))
-    if not rows:
-        return None, None, problem
-    fields = BENCH_FIELDS if endpoint == ADJUSTED else FULL_FIELDS
-    bars, dq = validate(_with_adj_copy(_frame(rows, fields)), now, symbol, check_volume=symbol != C.VIX)
-    if bars.empty:
-        return None, dq, "no valid rows"
-    return bars, dq, None
+def _benchmark(client, symbol, endpoints, now, start):
+    """Benchmark bars (benchmark column convention) from the first of `endpoints` that returns
+    valid rows -> (bars|None, data_quality|None, problems). data_quality["basis"] names the price
+    basis used; `problems` says why each earlier endpoint (or every one) gave nothing."""
+    problems = []
+    for endpoint in endpoints:
+        rows, problem = fetch_history(client, endpoint, symbol, start, pd.Timestamp(now.date()))
+        if not rows:
+            problems.append(problem)
+            continue
+        fields = BENCH_FIELDS if endpoint == ADJUSTED else FULL_FIELDS
+        bars, dq = validate(_with_adj_copy(_frame(rows, fields)), now, symbol, check_volume=symbol != C.VIX)
+        if bars.empty:
+            problems.append(f"{endpoint}: no valid rows")
+            continue
+        return bars, {**dq, "basis": BASIS[endpoint]}, problems
+    return None, None, problems
 
 
 def load_all(client, ticker, now=None) -> dict:
@@ -368,22 +372,39 @@ def load_all(client, ticker, now=None) -> dict:
     if problem:
         notes.append(f"price history: {problem}")
     first_full = pd.Timestamp(min(str(r["date"])[:10] for r in full_rows))
-    adj_rows, problem = fetch_history(client, ADJUSTED, symbol, max(start, first_full), today)
-    if problem:
-        notes.append(f"dividend-adjusted prices: {problem}")
+    adj_rows, adj_problem = fetch_history(client, ADJUSTED, symbol, max(start, first_full), today)
+    if adj_problem:
+        notes.append(f"dividend-adjusted prices: {adj_problem}")
     bars, dq = validate(stock_frame(full_rows, adj_rows), now, symbol)
     if bars.empty:
         raise ValueError(f"no price data for {symbol} (no valid rows after validation)")
     notes.extend(dq["warnings"])
 
+    # a plan without /dividend-adjusted: benchmarks go straight to /full (no wasted requests)
+    adj_restricted = not adj_rows and str(adj_problem or "").startswith("restricted")
+    bench_endpoints = (FULL,) if adj_restricted else (ADJUSTED, FULL)
     bench_start = today - pd.DateOffset(years=C.BENCHMARK_YEARS)
-    benchmarks = {}
+    benchmarks, basis = {}, {}
+
+    def benchmark(module, sym):
+        frame, bdq, problems = _benchmark(client, sym, bench_endpoints, now, bench_start)
+        if frame is None:
+            unavailable(module, f"{sym} data unavailable ({'; '.join(problems)})")
+            return None
+        benchmarks[sym], basis[sym] = bdq, bdq["basis"]
+        if bdq["basis"] == BASIS[FULL]:
+            why = "; ".join(problems) or "restricted on this plan"
+            mixed = (f"; {symbol}'s own returns are dividend-adjusted, so relative strength vs {sym} "
+                     f"is overstated by roughly {sym}'s dividend yield") if dq["adj_coverage"] else ""
+            notes.append(f"{sym}: no dividend-adjusted prices ({why}); split-adjusted /full prices used, so "
+                         f"its returns and SMA readings are price-only{mixed}")
+        return frame
+
     if symbol == C.SPY:
-        spy = _as_benchmark(bars)
+        # SPY's own bars, on the regime's split-adjusted closes, so the two sections cannot disagree
+        spy, basis[C.SPY] = bars, "split-adjusted (the analysed bars)"
     else:
-        spy, benchmarks[C.SPY], why = _benchmark(client, C.SPY, ADJUSTED, now, bench_start)
-        if spy is None:
-            unavailable("spy", f"{C.SPY} data unavailable ({why})")
+        spy = benchmark("spy", C.SPY)
 
     sector, sector_etf = None, None
     if is_etf:
@@ -395,21 +416,21 @@ def load_all(client, ticker, now=None) -> dict:
         if etf is None:
             unavailable("sector", f"no sector ETF mapped for sector {profile.get('sector') or '(blank)'!r}")
         else:
-            sector, benchmarks[etf], why = _benchmark(client, etf, ADJUSTED, now, bench_start)
-            if sector is None:
-                unavailable("sector", f"{etf} data unavailable ({why})")
-            else:
-                sector_etf = etf
+            sector = benchmark("sector", etf)
+            sector_etf = etf if sector is not None else None
 
-    vix, benchmarks[C.VIX], why = _benchmark(client, C.VIX, FULL, now, bench_start)
+    vix, vix_dq, problems = _benchmark(client, C.VIX, (FULL,), now, bench_start)
     if vix is None:
-        unavailable("vix", f"{C.VIX} data unavailable ({why})")
+        unavailable("vix", f"{C.VIX} data unavailable ({'; '.join(problems)})")
+    else:
+        benchmarks[C.VIX] = vix_dq
 
     for bdq in filter(None, benchmarks.values()):
         # a benchmark's partial bar needs no extra note when the analysed symbol's was dropped too
         same = dq["partial_bar_excluded"] and bdq["partial_bar_excluded"]
         notes.extend(w for w in bdq["warnings"] if not (same and bdq["partial_bar_excluded"]["reason"] in w))
-    dq["benchmarks"] = {s: d for s, d in benchmarks.items() if d}
+    dq["benchmarks"] = benchmarks
+    dq["benchmark_basis"] = basis
 
     return {
         "bars": bars, "spy": spy, "sector": sector, "sector_etf": sector_etf, "vix": vix,

@@ -1,2 +1,3 @@
 pandas>=2.2
 numpy>=1.26
+tzdata; sys_platform == "win32"   # IANA time zones for zoneinfo on Windows

@@ -46,7 +46,7 @@
       vol_low: "低", vol_normal: "正常", vol_high: "高", vol_extreme: "极端",
       vol_pctl: p => `一年分位 ${p}`, compression: "压缩",
       al_confirms: "周线确认日线", al_contradicts: "周线与日线相反", al_mixed: "周线不明确",
-      dir_Uptrend: "上升", dir_Downtrend: "下降", dir_Mixed: "不明",
+      dir_1: "上升", "dir_-1": "下降", dir_0: "不明",
       bias: "整体倾向", wscore: "加权分", confidence: "置信度", weight: "权重",
       conf_high: "高", conf_medium: "中", conf_low: "低",
       conflicts: "相互矛盾的信号",
@@ -54,11 +54,11 @@
       pl_volatility_setup: "波动结构", pl_mean_reversion: "均值回归",
       sig_h: h => `历史前瞻 ${h} 日收益（本股自身历史）`,
       sig_none: "当前没有活跃信号（最近 3 根 K 线内未触发）。",
-      th_signal: "信号", th_fired: "触发", th_n: "n", th_hit: "胜率", th_med: "中位数", th_edge: "超额", th_conf: "样本",
+      th_signal: "信号", th_fired: "触发", th_n: "n", th_hit: "胜率", th_med: "中位数", th_edge: "超额", sample: "样本",
       bars_ago: n => n === 0 ? "今日" : `${n} 根前`,
       sc_normal: "正常", sc_low: "偏少", sc_insufficient: "不足",
       edge_note: "超额 = 信号中位数 − 同状态基准中位数（括号内为胜率差）；样本不足（n < 15）的信号不计入评分。",
-      th_level: "价位", th_zone: "区间", th_dist: "距离", th_src: "来源", th_touch: "触及",
+      th_level: "价位", th_dist: "距离", th_src: "来源", touches: n => `触及 ${n} 次`,
       lv_none: "没有可用的关键价位。",
       dn_partial: "未完成 K 线已排除", dn_stale: "数据可能过期", dn_illiquid: "流动性提示", dn_skipped: "已跳过的模块",
       dn_notes: "其他说明", dn_approx: "近似方法",
@@ -103,7 +103,7 @@
       vol_low: "low", vol_normal: "normal", vol_high: "high", vol_extreme: "extreme",
       vol_pctl: p => `1y percentile ${p}`, compression: "compression",
       al_confirms: "weekly confirms daily", al_contradicts: "weekly contradicts daily", al_mixed: "weekly unclear",
-      dir_Uptrend: "up", dir_Downtrend: "down", dir_Mixed: "mixed",
+      dir_1: "up", "dir_-1": "down", dir_0: "mixed",
       bias: "Bias", wscore: "Weighted score", confidence: "Confidence", weight: "Weight",
       conf_high: "high", conf_medium: "medium", conf_low: "low",
       conflicts: "Conflicting signals",
@@ -111,11 +111,11 @@
       pl_volatility_setup: "Volatility setup", pl_mean_reversion: "Mean reversion",
       sig_h: h => `Forward ${h}-day returns (this stock's own history)`,
       sig_none: "No active signals (none fired in the last 3 bars).",
-      th_signal: "Signal", th_fired: "Fired", th_n: "n", th_hit: "Hit", th_med: "Median", th_edge: "Edge", th_conf: "Sample",
-      bars_ago: n => n === 0 ? "today" : `${n} bars ago`,
+      th_signal: "Signal", th_fired: "Fired", th_n: "n", th_hit: "Hit", th_med: "Median", th_edge: "Edge", sample: "sample",
+      bars_ago: n => n === 0 ? "today" : n === 1 ? "1 bar ago" : `${n} bars ago`,
       sc_normal: "normal", sc_low: "low", sc_insufficient: "insufficient",
       edge_note: "Edge = signal median − same-regime baseline median (hit-rate difference in brackets); signals with n < 15 are not scored.",
-      th_level: "Level", th_zone: "Zone", th_dist: "Distance", th_src: "Sources", th_touch: "Touches",
+      th_level: "Level", th_dist: "Distance", th_src: "Sources", touches: n => `${n} touch${n === 1 ? "" : "es"}`,
       lv_none: "No key levels available.",
       dn_partial: "Partial bar excluded", dn_stale: "Possibly stale data", dn_illiquid: "Liquidity warning", dn_skipped: "Skipped modules",
       dn_notes: "Other notes", dn_approx: "Approximations",
@@ -174,6 +174,12 @@
     return typeof v === "function" ? v(...args) : (v ?? key);
   }
 
+  // Label for a value from metrics.json (t(prefix + value)); unknown values are shown as they are.
+  function tv(prefix, value) {
+    if (value == null || value === "") return "–";
+    return (prefix + value) in STR.en ? t(prefix + value) : String(value);
+  }
+
   function setLang(next) {
     lang = next === "en" ? "en" : "zh";
     try { global.localStorage.setItem(KEY, lang); } catch (e) { /* storage blocked */ }
@@ -213,12 +219,12 @@
   const biasLabel = s => lang === "zh" ? (BIAS_ZH[s] ?? s) : s;
 
   function sourceLabel(src) {
-    if (src.startsWith("avwap_")) return "AVWAP·" + t("anchor_" + src.slice(6));
+    if (src.startsWith("avwap_")) return "AVWAP·" + tv("anchor_", src.slice(6));
     return (lang === "zh" ? SOURCE_ZH : SOURCE_EN)[src] ?? src;
   }
 
   global.TA_I18N = {
-    t, setLang, applyStatic, bindToggle, regimeLabel, signalName, biasLabel, sourceLabel,
+    t, tv, setLang, applyStatic, bindToggle, regimeLabel, signalName, biasLabel, sourceLabel,
     lang: () => lang,
     onChange: fn => listeners.push(fn),
   };

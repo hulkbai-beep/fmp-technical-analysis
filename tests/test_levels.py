@@ -175,21 +175,83 @@ def test_score_levels_touches_volume_and_source_bonus():
     expected_share = L._zone_volume(vp, 9.9, 10.1) / vp["total_volume"]
     assert scored[0]["volume_share"] == pytest.approx(expected_share)
     assert scored[0]["score"] == pytest.approx(1.0 + scored[0]["volume_share"] / max(
-        c["volume_share"] for c in scored) + L.LEVEL_SOURCE_BONUS)
+        c["volume_share"] for c in scored) + C.LEVEL_SOURCE_BONUS)
     assert scored[1]["score"] == pytest.approx(scored[1]["volume_share"] / scored[0]["volume_share"])
 
 
-def test_select_levels_nearest_first_on_each_side():
-    clusters = [{"price": p, "score": s} for p, s in
-                [(90, 3.0), (95, 0.1), (97, 1.0), (99, 0.5), (100, 9.0), (101, 0.2), (104, 2.0), (110, 5.0),
-                 (120, 1.0)]]
-    sup, res = L.select_levels(clusters, close=100.0, atr=2.0, per_side=3)
-    assert [c["price"] for c in sup] == [99, 97, 95]      # proximity, not score; 100 == close is neither
-    assert [c["price"] for c in res] == [101, 104, 110]
+def test_merge_levels_keeps_a_candidate_zone():
+    cands = [{"price": 100.0, "zone_low": 99.6, "zone_high": 100.4, "source": "gap_up"},
+             {"price": 100.3, "source": "pivot_low"}]
+    (cl,) = L.merge_levels(cands, atr=1.0, merge_atr=0.5)
+    assert (cl["zone_low"], cl["zone_high"]) == (99.6, 100.4)
+    assert cl["price"] == pytest.approx(100.15)
+    assert cl["source_types"] == ["gap", "pivot"]
+
+
+def test_gap_candidates_one_zone_when_narrow_two_edges_when_wide():
+    narrow = {"date": "2024-03-01", "direction": "up", "top": 10.8, "bottom": 10.0}
+    (zone,) = L._gap_candidates(narrow, atr=1.0)                   # 0.8 ATR <= GAP_ZONE_MAX_ATR
+    assert zone == {"price": pytest.approx(10.4), "zone_low": 10.0, "zone_high": 10.8, "source": "gap_up",
+                    "date": "2024-03-01"}
+    wide = {**narrow, "direction": "down", "top": 12.0}
+    assert [c["source"] for c in L._gap_candidates(wide, atr=1.0)] == ["gap_down_top", "gap_down_bottom"]
+
+
+def lv(price, score, lo=None, hi=None, sources=("pivot_low",)):
+    return {"price": price, "score": score, "zone_low": price if lo is None else lo,
+            "zone_high": price if hi is None else hi, "sources": list(sources)}
+
+
+def test_select_levels_nearest_qualifying_first_on_each_side():
+    clusters = [lv(90, 3.0), lv(95, 0.1), lv(97, 1.0), lv(99, 0.5), lv(101, 0.2), lv(104, 2.0),
+                lv(110, 5.0), lv(120, 1.0)]
+    sup, res = L.select_levels(clusters, close=100.0, atr=2.0, per_side=3, min_score=0.25)
+    assert [c["price"] for c in sup] == [99, 97, 90]      # 95 is too weak to be a key level
+    assert [c["price"] for c in res] == [104, 110, 120]   # so is 101
     assert sup[0]["distance_pct"] == pytest.approx(-0.01)
     assert sup[0]["distance_atr"] == pytest.approx(-0.5)
-    assert res[1]["distance_atr"] == pytest.approx(2.0)
-    assert [c["score"] for c in res] == [0.2, 2.0, 5.0]
+    assert res[0]["distance_atr"] == pytest.approx(2.0)
+
+
+def test_select_levels_keeps_weak_52_week_extremes_and_drops_zones_holding_the_close():
+    clusters = [lv(98, 0.01, sources=["low_52w"]), lv(103, 0.0, sources=["high_52w"]),
+                lv(100.2, 2.0, lo=99.7, hi=100.6)]                # contains the close of 100
+    sup, res = L.select_levels(clusters, close=100.0, atr=2.0, per_side=3, min_score=0.25)
+    assert [c["price"] for c in sup] == [98] and [c["price"] for c in res] == [103]
+
+
+def patched_candidates(monkeypatch, make):
+    """Run build_levels on synthetic bars with _candidates replaced by make(close, atr)."""
+    bars = synthetic_bars(n=400)
+    ctx = make_ctx(bars)
+    close, atr = float(bars["close"].iloc[-1]), float(ctx["ind"]["atr14"].iloc[-1])
+    monkeypatch.setattr(L, "_candidates", lambda *a, **k: make(close, atr))
+    monkeypatch.setattr(C, "LEVEL_MIN_SCORE", 0.0)               # keep every cluster: this tests sides only
+    return L.build_levels(ctx), close, atr
+
+
+def test_build_levels_splits_a_cluster_that_would_straddle_the_close(monkeypatch):
+    # reviewer's case: pivot low 0.15 ATR below, SMA50 0.3 ATR above -> one zone holding the close
+    # under a single merge; per-side merging keeps the support at the pivot low
+    out, close, atr = patched_candidates(monkeypatch, lambda c, a: [
+        {"price": c - 0.15 * a, "source": "pivot_low"}, {"price": c + 0.3 * a, "source": "sma50"},
+        {"price": c - 3.0 * a, "source": "pivot_low"}, {"price": c + 4.0 * a, "source": "pivot_high"}])
+    s1, r1 = out["supports"][0], out["resistances"][0]
+    assert s1["price"] == pytest.approx(close - 0.15 * atr) and s1["sources"] == ["pivot_low"]
+    assert r1["price"] == pytest.approx(close + 0.3 * atr) and r1["sources"] == ["sma50"]
+    for x in out["supports"]:
+        assert x["zone_high"] < close
+    for x in out["resistances"]:
+        assert x["zone_low"] > close
+
+
+def test_build_levels_files_the_52_week_high_above_the_close_as_resistance(monkeypatch):
+    out, close, atr = patched_candidates(monkeypatch, lambda c, a: [
+        {"price": c - 0.1 * a, "source": "pivot_high"}, {"price": c + 0.1 * a, "source": "high_52w"},
+        {"price": c - 0.3 * a, "source": "avwap_high_52w"}])
+    assert [x["sources"] for x in out["resistances"]] == [["high_52w"]]
+    assert all("high_52w" not in x["sources"] for x in out["supports"])
+    assert not any("no resistance levels" in n for n in out["notes"])
 
 
 # ---------------------------------------------------------------------------- build_levels
@@ -247,6 +309,19 @@ def test_build_levels_uses_anchored_vwaps_when_available(monkeypatch):
     monkeypatch.setitem(sys.modules, "modules", fake)
     out = L.build_levels(make_ctx(bars))
     assert {"price": 77.7, "source": "avwap_ytd_start"} in out["candidates"]
+
+
+def test_build_levels_ignores_anchored_vwaps_anchored_a_few_bars_ago(monkeypatch):
+    bars = synthetic_bars(n=400)
+    young = pd.Series(np.nan, index=bars.index)
+    young.iloc[-3:] = 77.7                                        # anchored 2 bars before the last bar
+    fake = types.ModuleType("modules")
+    fake.anchored_vwap_series = lambda ctx: {"high_52w": young, "ytd_start": pd.Series(66.6, index=bars.index)}
+    monkeypatch.setitem(sys.modules, "modules", fake)
+    out = L.build_levels(make_ctx(bars))
+    sources = {c["source"] for c in out["candidates"]}
+    assert "avwap_ytd_start" in sources and "avwap_high_52w" not in sources
+    assert any("anchored VWAP high_52w not used as a level: anchored 2 bar(s) ago" in n for n in out["notes"])
 
 
 def test_build_levels_skips_anchored_vwaps_on_error(monkeypatch):

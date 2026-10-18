@@ -58,10 +58,11 @@ button { font: inherit; }
 .ta-sub { color: var(--muted); font-size: 12.5px; }
 .ta-badge { display: inline-block; border: 1px solid var(--border); border-radius: 999px; padding: 0 8px;
   font-size: 12px; color: var(--muted); }
-.ta-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 8px; margin: 12px 0 0; }
+.ta-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin: 12px 0 0; }
 .ta-stat { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; min-width: 0; }
 .ta-stat .k { font-size: 12px; color: var(--muted); }
 .ta-stat .v { font-size: 17px; font-weight: 650; overflow-wrap: anywhere; }
+.ta-stat .v.sm { font-size: 15px; line-height: 25px; }
 .ta-stat .s { font-size: 12px; color: var(--muted); }
 .pos { color: var(--up); } .neg { color: var(--down); }
 
@@ -73,7 +74,12 @@ button { font: inherit; }
 .ta-below { grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); }
 @media (max-width: 1080px) {
   .ta-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; grid-template-areas: "main" "side" "below"; }
-  .ta-side { grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); }
+}
+/* tablets: the tall scorecard on the right, regime and signal statistics stacked on its left */
+@media (min-width: 720px) and (max-width: 1080px) {
+  .ta-side { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto 1fr;
+    grid-template-areas: "regime score" "signals score"; }
+  .ta-a-regime { grid-area: regime; } .ta-a-score { grid-area: score; } .ta-a-signals { grid-area: signals; }
 }
 .ta-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px; min-width: 0; }
 .ta-card h3 { margin: 0 0 8px; font-size: 15px; }
@@ -137,6 +143,9 @@ button { font: inherit; }
 .ta-table th:first-child, .ta-table td:first-child, .ta-table .l { text-align: left; }
 .ta-table td.wrap { white-space: normal; min-width: 120px; }
 .ta-table tr.price td { background: var(--row); font-weight: 650; }
+.ta-table tr.dim :is(td, .pos, .neg) { color: var(--muted); }
+.ta-sig th, .ta-sig td { padding: 5px 4px; }
+.ta-sig td:first-child { width: 100%; min-width: 0; }
 .ta-small { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
 .ta-list { margin: 4px 0 0; padding-left: 18px; font-size: 12.5px; }
 .ta-list li { margin: 2px 0; overflow-wrap: anywhere; }

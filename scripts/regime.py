@@ -171,6 +171,11 @@ def daily_direction(ctx) -> dict:
 
 
 # ---------------------------------------------------------------------------- A. market context
+def _price_basis(ctx, symbol) -> str | None:
+    """Price basis fetch used for a benchmark ("dividend-adjusted", "split-adjusted", ...)."""
+    return ((ctx.get("data_quality") or {}).get("benchmark_basis") or {}).get(symbol)
+
+
 def _spy_block(ctx, notes: list) -> dict:
     spy = frame(ctx, "spy")
     if spy is None:
@@ -184,6 +189,7 @@ def _spy_block(ctx, notes: list) -> dict:
         "available": True, "date": iso(spy.index[-1]), "close": c, "sma200": s,
         "above_sma200": None if s is None else bool(c > s), "pct_vs_sma200": pct(c, s),
         "sma200_slope_20d": last(sma200 / sma200.shift(C.SLOPE_BARS) - 1.0),
+        "price_basis": _price_basis(ctx, C.SPY),
     }
 
 
@@ -227,6 +233,7 @@ def _sector_block(ctx, notes: list) -> dict:
         "available": True, "etf": etf, "date": iso(sec.index[-1]), "close": c,
         "sma50": s50, "sma200": s200, "pct_vs_sma50": pct(c, s50), "pct_vs_sma200": pct(c, s200),
         "sma50_slope": slope50, "sma200_slope": slope200, "trend_label": label, "trend_sign": sgn,
+        "price_basis": _price_basis(ctx, etf),
     }
     spy = frame(ctx, "spy")
     if spy is None:

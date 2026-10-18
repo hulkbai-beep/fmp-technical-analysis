@@ -8,6 +8,7 @@
 
   const I18N = global.TA_I18N;
   const t = (key, ...a) => I18N.t(key, ...a);
+  const tv = (prefix, value) => I18N.tv(prefix, value);
   const VIS_KEY = "ta-vis";
   const SMA_KEYS = ["sma20", "sma50", "sma200"];
   const MIN_PX_PER_DAY = 3;   // below this the chart switches to weekly candles by itself
@@ -87,7 +88,7 @@
       tile(t("k_rsi"), esc(fmtNum(k.rsi14, 1))),
       tile(t("k_rvol"), esc(fmtNum(k.rvol, 2))),
       tile(t("k_adx"), esc(fmtNum(k.adx, 1))),
-      tile(t("k_range52"), `${esc(fmtPx(k.low_52w))} – ${esc(fmtPx(k.high_52w))}`),
+      tile(t("k_range52"), `${esc(fmtPx(k.low_52w))}–${esc(fmtPx(k.high_52w))}`, "", "sm"),
     ];
     if (isNum(k.expected_move_1sd_pct)) tiles.push(tile(t("k_move", k.expected_move_horizon ?? m.primary_horizon), "±" + esc(fmtPct(k.expected_move_1sd_pct, 1))));
     if (ne) tiles.push(tile(t("k_next_e"), esc(ne.date), isNum(ne.calendar_days) ? esc(t("days_away", ne.calendar_days, ne.trading_days_est)) : ""));
@@ -98,58 +99,64 @@
   }
 
   function regimeHtml(r) {
-    if (!r || !r.available) return card(t("t_regime"), `<p class="ta-small">${esc(t("unavailable"))}: ${esc(r?.reason)}</p>`);
-    const dir = r.direction ? t("dir_" + r.direction) : "–";
-    const vol = r.vol_label ? `${t("vol_" + r.vol_label)} · ${t("vol_pctl", fmtNum(r.vol_pctl, 0))}${r.compression ? " · " + t("compression") : ""}` : "–";
-    const weekly = r.alignment ? `${r.weekly_direction ? t("dir_" + r.weekly_direction) : "–"} · ${t("al_" + r.alignment)}` : "–";
+    if (!r || !r.available) return card(t("t_regime"), `<p class="ta-small">${esc(t("unavailable"))}: ${esc(r?.reason)}</p>`, "regime");
+    const dir = r.direction ? tv("dir_", r.direction_sign) : "–";
+    const vol = r.vol_label ? `${tv("vol_", r.vol_label)} · ${t("vol_pctl", fmtNum(r.vol_pctl, 0))}${r.compression ? " · " + t("compression") : ""}` : "–";
+    const weekly = r.alignment ? `${r.weekly_direction ? tv("dir_", r.weekly_sign) : "–"} · ${tv("al_", r.alignment)}` : "–";
     const body = `<p class="ta-regime" title="${esc(r.label)}">${esc(I18N.regimeLabel(r.label))}</p>
       <dl class="ta-kv">
-        <dt>${esc(t("rg_type"))}</dt><dd>${esc(r.type ? t("type_" + r.type) : "–")}</dd>
-        <dt>${esc(t("rg_strength"))}</dt><dd>ADX ${esc(fmtNum(r.adx, 1))}${r.strength ? " · " + esc(t("st_" + r.strength)) : ""}</dd>
+        <dt>${esc(t("rg_type"))}</dt><dd>${esc(tv("type_", r.type))}</dd>
+        <dt>${esc(t("rg_strength"))}</dt><dd>ADX ${esc(fmtNum(r.adx, 1))}${r.strength ? " · " + esc(tv("st_", r.strength)) : ""}</dd>
         <dt>${esc(t("rg_dir"))}</dt><dd>${esc(dir)}</dd>
         <dt>${esc(t("rg_vol"))}</dt><dd>${esc(vol)}</dd>
         <dt>${esc(t("rg_weekly"))}</dt><dd>${esc(weekly)}</dd>
       </dl>${r.mtf_note && I18N.lang() === "en" ? `<p class="ta-small">${esc(r.mtf_note)}</p>` : ""}`;
-    return card(t("t_regime"), body);
+    return card(t("t_regime"), body, "regime");
   }
 
   function scoreHtml(s) {
-    if (!s || !s.available) return card(t("t_score"), `<p class="ta-small">${esc(t("unavailable"))}: ${esc(s?.reason)}</p>`);
+    if (!s || !s.available) return card(t("t_score"), `<p class="ta-small">${esc(t("unavailable"))}: ${esc(s?.reason)}</p>`, "score");
     const biasCls = /bull/i.test(s.bias || "") ? "pos" : /bear/i.test(s.bias || "") ? "neg" : "";
-    const conf = s.confidence?.level ? t("conf_" + s.confidence.level) : "–";
+    const conf = tv("conf_", s.confidence?.level);
     const rows = s.pillars.map(p => {
       const v = isNum(p.score) ? Math.max(-2, Math.min(2, p.score)) : 0, w = Math.abs(v) / 2 * 50;
       const bar = `<i style="left:${v >= 0 ? 50 : 50 - w}%;width:${w}%;background:var(${v >= 0 ? "--up" : "--down"})"></i>`;
-      return `<div class="ta-pillar"><div class="ta-prow"><span>${esc(t("pl_" + p.name))}</span>
-          <div class="ta-pbar" role="img" aria-label="${esc(t("pl_" + p.name))} ${isNum(p.score) ? p.score : "–"}">${bar}</div>
+      return `<div class="ta-pillar"><div class="ta-prow"><span>${esc(tv("pl_", p.name))}</span>
+          <div class="ta-pbar" role="img" aria-label="${esc(tv("pl_", p.name))} ${isNum(p.score) ? p.score : "–"}">${bar}</div>
           <span class="sc ${pctCls(p.score)}">${isNum(p.score) ? sign(p.score) + Math.abs(p.score) : "–"}</span>
           <span class="w">${isNum(p.weight) ? Math.round(p.weight * 100) + "%" : "–"}</span></div>
         ${p.reason ? `<div class="ta-reason">${esc(p.reason)}</div>` : ""}</div>`;
     }).join("");
     const head = `<div class="ta-prow ta-small" aria-hidden="true"><span></span><span style="display:flex;justify-content:space-between"><span>−2</span><span>0</span><span>+2</span></span><span></span><span class="w">${esc(t("weight"))}</span></div>`;
-    const list = (title, xs) => xs && xs.length ? `<h4 class="ta-small" style="margin-top:10px">${esc(title)}</h4><ul class="ta-list">${xs.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
+    const list = (title, items) => items.length ? `<h4 class="ta-small" style="margin-top:10px">${esc(title)}</h4><ul class="ta-list">${items.join("")}</ul>` : "";
+    const reasons = (s.confidence?.reasons || []).map(x => `<li>${esc(x)}</li>`);
+    const conflicts = (s.conflicts || []).map(c =>
+      `<li>${esc(c.description)}${c.typical_meaning ? `<div class="ta-reason">${esc(c.typical_meaning)}</div>` : ""}</li>`);
     return card(t("t_score"), `<div class="ta-bias"><span class="b ${biasCls}">${esc(I18N.biasLabel(s.bias) || "–")}</span>
         <span class="ta-sub">${esc(t("wscore"))} <b>${esc(fmtSigned(s.weighted_score, 2))}</b></span>
         <span class="ta-sub">${esc(t("confidence"))} <b>${esc(conf)}</b></span></div>
-      ${head}${rows}${list(t("confidence"), s.confidence?.reasons)}${list(t("conflicts"), s.conflicts)}`);
+      ${head}${rows}${list(t("confidence"), reasons)}${list(t("conflicts"), conflicts)}`, "score");
   }
 
   function signalsHtml(sg) {
     const title = t("t_signals");
-    if (!sg || !sg.available) return card(title, `<p class="ta-small">${esc(t("unavailable"))}: ${esc(sg?.reason)}</p>`);
-    if (!sg.active.length) return card(title, `<p class="ta-small">${esc(t("sig_none"))}</p>`);
+    if (!sg || !sg.available) return card(title, `<p class="ta-small">${esc(t("unavailable"))}: ${esc(sg?.reason)}</p>`, "signals");
+    if (!sg.active.length) return card(title, `<p class="ta-small">${esc(t("sig_none"))}</p>`, "signals");
     const rows = sg.active.map(a => {
       const arrow = a.bias > 0 ? `<span class="pos" aria-hidden="true">▲</span> ` : a.bias < 0 ? `<span class="neg" aria-hidden="true">▼</span> ` : "";
-      return `<tr><td class="wrap">${arrow}${esc(I18N.signalName(a.id, a.name))}<br><span class="ta-sub" style="white-space:nowrap" title="${esc(a.fired_date)}">${esc(t("th_fired"))} ${esc(t("bars_ago", a.bars_ago))} · ${esc(String(a.fired_date || "").slice(5))}</span></td>
-        <td>${esc(a.n ?? "–")}<br><span class="ta-sub">${esc(a.confidence ? t("sc_" + a.confidence) : "–")}</span></td>
+      const fired = `${t("th_fired")} ${t("bars_ago", a.bars_ago)} · ${String(a.fired_date || "").slice(5)}`;
+      const sample = a.confidence ? ` · ${t("sample")} ${tv("sc_", a.confidence)}` : "";
+      return `<tr class="${a.confidence === "insufficient" ? "dim" : ""}"><td class="l wrap">${arrow}${esc(I18N.signalName(a.id, a.name))}
+          <div class="ta-sub" title="${esc(a.fired_date)}">${esc(fired + sample)}</div></td>
+        <td>${esc(a.n ?? "–")}</td>
         <td>${esc(fmtPct(a.hit_rate, 0))}</td>
         <td class="${pctCls(a.median)}">${esc(fmtPct(a.median, 1, true))}</td>
         <td class="${pctCls(a.edge_median)}">${esc(fmtPct(a.edge_median, 1, true))}<br><span class="ta-sub">${esc(fmtPP(a.edge_hit_rate))}</span></td></tr>`;
     }).join("");
     return card(title, `<p class="ta-small" style="margin:0 0 6px">${esc(t("sig_h", sg.primary_horizon))}</p>
-      <div class="ta-tablewrap"><table class="ta-table"><thead><tr><th>${esc(t("th_signal"))}</th>
+      <div class="ta-tablewrap"><table class="ta-table ta-sig"><thead><tr><th>${esc(t("th_signal"))}</th>
       <th>${esc(t("th_n"))}</th><th>${esc(t("th_hit"))}</th><th>${esc(t("th_med"))}</th><th>${esc(t("th_edge"))}</th></tr></thead>
-      <tbody>${rows}</tbody></table></div><p class="ta-small">${esc(t("edge_note"))}</p>`);
+      <tbody>${rows}</tbody></table></div><p class="ta-small">${esc(t("edge_note"))}</p>`, "signals");
   }
 
   function levelsHtml(d) {
@@ -164,14 +171,14 @@
       const zone = x.zone_high - x.zone_low > 1e-9 ? `${fmtPx(x.zone_low)}–${fmtPx(x.zone_high)}` : "";
       return `<tr><td class="${cls}"><b>${tag}</b></td><td>${esc(fmtPx(x.price))}${zone ? `<br><span class="ta-sub">${esc(zone)}</span>` : ""}</td>
         <td>${esc(fmtPct(x.distance_pct, 1, true))}<br><span class="ta-sub">${esc(fmtSigned(x.distance_atr, 1))} ATR</span></td>
-        <td class="l wrap" title="${esc(src.join(", "))}">${esc(src.slice(0, MAX_SRC).join(", ") + more)}</td>
-        <td>${esc(x.touches ?? "–")}</td></tr>`;
+        <td class="l wrap" title="${esc(src.join(", "))}">${esc(src.slice(0, MAX_SRC).join(", ") + more)}
+          ${isNum(x.touches) ? `<div class="ta-sub">${esc(t("touches", x.touches))}</div>` : ""}</td></tr>`;
     };
     const res = lv.resistances.map((x, i) => row("R" + (i + 1), x, "neg")).reverse().join("");
     const sup = lv.supports.map((x, i) => row("S" + (i + 1), x, "pos")).join("");
-    const price = `<tr class="price"><td>${esc(t("k_price"))}</td><td>${esc(fmtPx(d.key_numbers?.price))}</td><td></td><td></td><td></td></tr>`;
+    const price = `<tr class="price"><td>${esc(t("k_price"))}</td><td>${esc(fmtPx(d.key_numbers?.price))}</td><td></td><td></td></tr>`;
     return card(t("t_levels"), `<div class="ta-tablewrap"><table class="ta-table"><thead><tr><th></th><th>${esc(t("th_level"))}</th>
-      <th>${esc(t("th_dist"))}</th><th class="l">${esc(t("th_src"))}</th><th>${esc(t("th_touch"))}</th></tr></thead>
+      <th>${esc(t("th_dist"))}</th><th class="l">${esc(t("th_src"))}</th></tr></thead>
       <tbody>${res}${price}${sup}</tbody></table></div>`);
   }
 
@@ -188,14 +195,14 @@
     return card(t("t_notes"), h);
   }
 
-  const card = (title, body) => `<section class="ta-card"><h3>${esc(title)}</h3>${body}</section>`;
+  const card = (title, body, area = "") => `<section class="ta-card${area ? " ta-a-" + area : ""}"><h3>${esc(title)}</h3>${body}</section>`;
 
   // ------------------------------------------------------------------ legend
   function legendItems(d, prep) {
     const items = SMA_KEYS.map(k => ({ key: k, label: t("lg_" + k), color: `var(--${k})`, sw: "" }));
     for (const a of prep.avwaps) {
-      items.push({ key: a.key, label: "AVWAP·" + t("anchor_" + a.name), color: `var(--av-${a.name}, var(--muted))`, sw: "dash",
-        title: t("avwap_title", t("anchor_" + a.name), d.avwap_anchors?.[a.name] ?? "") });
+      items.push({ key: a.key, label: "AVWAP·" + tv("anchor_", a.name), color: `var(--av-${a.name}, var(--muted))`, sw: "dash",
+        title: t("avwap_title", tv("anchor_", a.name), d.avwap_anchors?.[a.name] ?? "") });
     }
     if (d.levels?.supports?.length) items.push({ key: "supports", label: t("lg_supports"), color: "var(--up)", sw: "box" });
     if (d.levels?.resistances?.length) items.push({ key: "resistances", label: t("lg_resistances"), color: "var(--down)", sw: "box" });
@@ -296,10 +303,10 @@
         const h = Math.max(3, y2 - y1);
         back += `<rect x="0" y="${(y1 + y2 - h) / 2}" width="${PW}" height="${h}" fill="var(${col}-zone)"/>` +
           `<line x1="0" x2="${PW}" y1="${Math.round(y(x.price)) + 0.5}" y2="${Math.round(y(x.price)) + 0.5}" stroke="var(${col})" stroke-width="1" opacity=".75"/>`;
-        labels.push({ y: y(x.price), text: `${x.tag} ${fmtPx(x.price)}`, cls: x.side });
+        labels.push({ y: y(x.price), at: y(x.price), text: `${x.tag} ${fmtPx(x.price)}`, cls: x.side });
       } else {
         const above = x.price > hi;
-        labels.push({ y: above ? top + 8 : top + HM - 8, text: `${x.tag} ${fmtPx(x.price)} ${above ? "↑" : "↓"}`, cls: x.side });
+        labels.push({ y: above ? top + 8 : top + HM - 8, at: null, text: `${x.tag} ${fmtPx(x.price)} ${above ? "↑" : "↓"}`, cls: x.side });
       }
     }
     labels.sort((a, b) => a.y - b.y);
@@ -308,8 +315,12 @@
     for (let i = labels.length - 1; i >= 0; i--) labels[i].y = Math.min(labels[i].y, i === labels.length - 1 ? maxY : labels[i + 1].y - LH);
     for (const l of labels) {
       const w = measure(l.text, 11, 650) + 8;
-      fore += `<rect x="2" y="${l.y - 7.5}" width="${w}" height="15" rx="3" fill="var(--card)" opacity=".88"/>` +
-        `<text class="lvl ${l.cls}" x="6" y="${l.y + 4}">${esc(l.text)}</text>`;
+      fore += `<rect x="0" y="${l.y - 7.5}" width="${w}" height="15" rx="3" fill="var(--card)" opacity=".88"/>` +
+        `<text class="lvl ${l.cls}" x="4" y="${l.y + 4}">${esc(l.text)}</text>`;
+      // a label pushed off its line by its neighbours gets a leader tick back to the line
+      if (l.at != null && Math.abs(l.y - l.at) > 2) {
+        fore += `<path d="M${w},${l.y.toFixed(1)}h4L${w + 12},${l.at.toFixed(1)}" fill="none" stroke="var(${l.cls === "s" ? "--up" : "--down"})" stroke-width="1"/>`;
+      }
     }
 
     // earnings: dotted lines in the price panel and E badges on a lane under it (time axis)
@@ -373,13 +384,13 @@
     let sub = "";
 
     const pv = addPanel("volume");
-    const vmax = Math.max(...bars.map(b => b.v || 0)) || 1;
+    const vmax = Math.max(0, ...bars.map(b => b.v || 0));
     bars.forEach((b, i) => {
       if (!b.v) return;
       const vh = Math.max(1, b.v / vmax * pv.h);
       sub += `<rect x="${bx(i)}" y="${(pv.y0 + pv.h - vh).toFixed(1)}" width="${bw}" height="${vh.toFixed(1)}" fill="var(${b.c >= b.o ? "--up" : "--down"})" opacity=".55"/>`;
     });
-    sub += `<text x="${XA}" y="${pv.y0 + 9}">${esc(fmtVol(vmax))}</text>`;
+    if (vmax > 0) sub += `<text x="${XA}" y="${pv.y0 + 9}">${esc(fmtVol(vmax))}</text>`;
 
     const pr = addPanel("rsi");
     const yR = v => pr.y0 + (100 - v) / 100 * pr.h;
@@ -414,22 +425,27 @@
     }
     const bottom = cur - 8;
 
-    // time axis: month labels (with the year on the first label and in January)
+    // time axis: month starts every `mstep` months (1, 2, 3, 6 or 12, whatever fits), so January
+    // (labelled with the year) is always a tick; without a January tick the first label carries the year.
     let axis = "", lastRight = -1e9;
     const zh = I18N.lang() === "zh", MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    bars.forEach((b, i) => {
-      const prev = i ? bars[i - 1] : null;
-      if (prev && prev.d.slice(0, 7) === b.d.slice(0, 7)) return;
-      if (!prev && n > 1 && bars[1].d.slice(0, 7) !== b.d.slice(0, 7)) return;
-      const yv = b.d.slice(0, 4), m = +b.d.slice(5, 7);
-      const label = m === 1 ? yv : lastRight < 0 ? (zh ? `${yv}年${m}月` : `${MON[m - 1]} ${yv}`) : (zh ? `${m}月` : MON[m - 1]);
+    const starts = [];
+    for (let i = 1; i < n; i++) if (bars[i].d.slice(0, 7) !== bars[i - 1].d.slice(0, 7)) starts.push(i);
+    const perMonth = starts.length > 1 ? (cx(starts[starts.length - 1]) - cx(starts[0])) / (starts.length - 1) : PW;
+    const mstep = [1, 2, 3, 6, 12].find(s => s * perMonth >= measure(zh ? "12月" : "May", 11) + 16) ?? 12;
+    const yearTick = starts.some(i => bars[i].d.slice(5, 7) === "01");
+    for (const i of starts) {
+      const yv = bars[i].d.slice(0, 4), m = +bars[i].d.slice(5, 7);
+      if ((m - 1) % mstep) continue;
+      const withYear = !yearTick && lastRight < 0;
+      const label = m === 1 ? yv : withYear ? (zh ? `${yv}年${m}月` : `${MON[m - 1]} ${yv}`) : (zh ? `${m}月` : MON[m - 1]);
       const x = cx(i), w = measure(label, 11), lx = Math.max(x, w / 2);
-      if (lx - w / 2 < lastRight + 12 || lx + w / 2 > PW) return;
+      if (lx - w / 2 < lastRight + 8 || lx + w / 2 > PW) continue;
       lastRight = lx + w / 2;
       const xx = Math.round(x) + 0.5;
       back += `<line x1="${xx}" x2="${xx}" y1="${top}" y2="${bottom}" stroke="var(--grid)"/>`;
       axis += `<text x="${lx}" y="${bottom + 15}" text-anchor="middle">${esc(label)}</text>`;
-    });
+    }
     const H = bottom + 22;
 
     box.innerHTML = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" tabindex="0" aria-label="${esc(t("chart_aria"))}">

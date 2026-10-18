@@ -129,6 +129,8 @@ def test_summary_panels_follow_the_module_outputs():
     assert d["regime"]["label"] == "Strong uptrend / normal vol" and d["regime"]["alignment"] == "confirms"
     assert [p["name"] for p in d["scorecard"]["pillars"]] == list(C.PILLARS)
     assert d["scorecard"]["bias"] == "Moderately bullish"
+    (c,) = d["scorecard"]["conflicts"]
+    assert (c["description"], c["typical_meaning"]) == ("Trend up but extended", "...")
     row = d["signals"]["active"][0]
     assert (row["n"], row["hit_rate"], row["edge_median"], row["confidence"]) == (41, 0.61, 0.006, "normal")
     assert d["levels"]["supports"][0]["sources"] == ["pivot_low", "poc"]
@@ -152,6 +154,44 @@ def test_short_history_and_position_mode():
     json.dumps(d, allow_nan=False)
     assert len(d["candles"]) == 150 and d["sma200"] == []
     assert d["default_timeframe"] == "weekly"
+
+
+def test_chart_data_from_the_real_module_builders():
+    """The panels read the keys the real builders emit (skipped while a builder is missing)."""
+    try:
+        import levels
+        import modules
+        import regime
+        import scorecard
+        import signal_stats
+    except ImportError as exc:
+        pytest.skip(f"module builders not available: {exc}")
+    ctx = _ctx(n=700)
+    m = {"market_context": regime.build_market_context(ctx), "regime": regime.build_regime(ctx),
+         "trend_momentum": modules.build_trend_momentum(ctx), "relative_strength": modules.build_relative_strength(ctx),
+         "mean_reversion": modules.build_mean_reversion(ctx), "volume_flow": modules.build_volume_flow(ctx),
+         "volatility": modules.build_volatility(ctx), "levels": levels.build_levels(ctx),
+         "multi_timeframe": regime.build_multi_timeframe(ctx), "event_risk": modules.build_event_risk(ctx),
+         "signals": signal_stats.build_signal_stats(ctx)}
+    m["scorecard"] = scorecard.build_scorecard(ctx, m)
+    m["scenarios"] = scorecard.build_scenarios(ctx, m, m["scorecard"])
+    d = chart.build_chart_data(ctx, m)
+    json.dumps(d, allow_nan=False)
+    assert d["regime"]["available"] and d["regime"]["label"] == m["regime"]["label"]
+    assert d["regime"]["vol_label"] == m["regime"]["volatility"]["label"]
+    assert d["regime"]["alignment"] == m["multi_timeframe"]["alignment"]
+    assert [p["name"] for p in d["scorecard"]["pillars"]] == list(C.PILLARS)
+    assert all(p["weight"] is not None for p in d["scorecard"]["pillars"])
+    assert d["volume_profile"]["available"] and d["volume_profile"]["bins"]
+    assert d["levels"]["supports"] or d["levels"]["resistances"]
+    assert set(d["avwaps"]) == {a["anchor"] for a in m["volume_flow"]["anchored_vwaps"]}
+    assert d["avwaps"]["ytd_start"][-1][1] == pytest.approx(
+        next(a["vwap"] for a in m["volume_flow"]["anchored_vwaps"] if a["anchor"] == "ytd_start"), abs=1e-4)
+    nxt = [e for e in d["earnings_dates"] if e["kind"] == "next"]
+    assert nxt and nxt[0]["date"] == m["event_risk"]["next_earnings"]["date"]
+    assert d["signals"]["primary_horizon"] == C.HORIZONS["swing"]["primary"]
+    for row in d["signals"]["active"]:
+        assert row["n"] is not None and row["confidence"] in ("normal", "low", "insufficient")
 
 
 def test_bars_after_as_of_are_not_charted():
@@ -208,6 +248,8 @@ def server(monkeypatch):
             raise RuntimeError(f"upstream failed for https://x/?apikey={key}&symbol=BOOM")
         if ticker == "NODATA":
             raise ValueError("no price data for NODATA")
+        if ticker == "NOCHART":
+            return {"ticker": ticker, "meta": {"errors": ["chart: KeyError: 'candles'"]}}, None
         return {"ticker": ticker, "horizon": horizon, "x": float("nan")}, {"meta": {"ticker": ticker}}
 
     key = "SECRETKEY123456"
@@ -247,6 +289,11 @@ def test_server_analyze_returns_metrics_and_chart(server):
     assert server.calls[-1] == ("BRK.B", "position", {})
     _get(server.port, "/api/analyze?symbol=%5EVIX&refresh=1")
     assert server.calls[-1] == ("^VIX", "swing", {"refresh": True})
+
+
+def test_server_reports_a_missing_chart_as_an_error(server):
+    code, _, body = _get(server.port, "/api/analyze?symbol=NOCHART")
+    assert code == 500 and "chart could not be built" in json.loads(body)["error"]
 
 
 @pytest.mark.parametrize("query", ["symbol=", "symbol=AAPL;rm", "symbol=TOOLONGSYMBOL", "symbol=A%20B",

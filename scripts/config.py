@@ -11,6 +11,9 @@ HISTORY_START = "1990-01-01"      # earliest date requested for the analysed sym
 EOD_ROW_CAP = 5000                # FMP returns at most this many rows per EOD request (newest first)
 CHUNK_YEARS = 18                  # calendar years per EOD request (~4,540 sessions, below the cap)
 MAX_CHUNKS = 3                    # safety stop for the chunked history fetch
+CHUNK_FIT_SHARE = 0.97            # take the whole remaining span in one request when its estimated sessions
+                                  # fit within this share of EOD_ROW_CAP (AAPL from 1990: 2 requests, not 3)
+HISTORY_EXHAUSTED_DAYS = 10       # short chunk starting > this many days after its `from` -> no older history
 BENCHMARK_YEARS = 5               # history requested for SPY, the sector ETF and ^VIX (one call each)
 CACHE_SUBDIR = "fmp-technical"    # ~/.cache/<this> unless FMP_CACHE_DIR is set
 
@@ -21,6 +24,7 @@ GAP_CALENDAR_DAYS = 4             # consecutive bars further apart than this are
 
 ILLIQUID_MIN_AVG_SHARES = 200_000       # average daily shares below this -> illiquid warning
 ILLIQUID_MIN_AVG_DOLLARS = 5_000_000    # average daily dollar volume below this -> illiquid warning
+LIQUIDITY_BARS = 50                     # bars averaged for the illiquidity check
 
 SPY = "SPY"
 VIX = "^VIX"                      # the caret matters: "VIX" is a different instrument on FMP
@@ -78,7 +82,7 @@ UPDOWN_VOLUME_PERIOD = 50
 DIVERGENCE_LOOKBACK = 20          # bars compared for OBV / A-D divergence checks
 
 # ---------------------------------------------------------------------------- momentum / RS
-MOMENTUM_LONG = 252               # 12-1 momentum: close[t-21] / close[t-252] - 1
+MOMENTUM_LONG = 252               # 12-1 momentum: P[t-21] / P[t-252] - 1 on the total-return index
 MOMENTUM_SKIP = 21
 RETURN_WINDOWS = {"1m": 21, "3m": 63, "6m": 126, "12m": 252}
 RS_WINDOWS = {"3m": 63, "6m": 126}
@@ -87,22 +91,35 @@ BETA_WINDOW = 252
 HIGH_52W_BARS = 252
 
 # ---------------------------------------------------------------------------- regime
-ADX_TREND = 25.0                  # ADX above this -> trending
+ADX_TREND = 25.0                  # ADX at or above this -> trending
 ADX_RANGE = 20.0                  # ADX below this -> range; in between -> transitional
 VOL_LOW_PCTL = 20.0               # realized vol / ATR% percentile below this -> low vol
 VOL_HIGH_PCTL = 80.0              # above this -> high vol
 VOL_EXTREME_PCTL = 95.0           # above this -> volatility extreme (regime type "vol_extreme")
 COMPRESSION_BW_PCTL = 10.0        # Bollinger bandwidth percentile below this -> "compression"
 
+# ---------------------------------------------------------------------------- mean-reversion states
+# shared by modules.py (state labels) and scorecard.py (mean-reversion pillar); strict inequalities
+MR_RSI14_OVERBOUGHT = 70.0        # RSI(14) above this -> "overbought"
+MR_RSI14_OVERSOLD = 30.0          # RSI(14) below this -> "oversold"
+MR_RSI2_OVERBOUGHT = 90.0         # RSI(2) above this -> "overbought"
+MR_RSI2_OVERSOLD = 10.0           # RSI(2) below this -> "oversold"
+MR_Z_EXTENDED = 2.0               # z20 beyond +-this -> stretched (= %B outside 0..1 with 2-sigma bands)
+MR_DIST_SMA50_ATR = 2.0           # |close - SMA50| / ATR beyond this -> stretched (scorecard)
+
 # ---------------------------------------------------------------------------- levels
-FRACTAL_K = 2                     # pivot high: highest high of the k bars on each side
+FRACTAL_K = 2                     # pivot high: high strictly above the highs of the k bars on each side
 PROFILE_BINS = 60                 # volume-profile price bins over the lookback range
 VALUE_AREA_SHARE = 0.70
 HVN_FACTOR = 1.5                  # bin volume > 1.5 x mean bin volume and a local peak -> HVN
 LVN_FACTOR = 0.5                  # bin volume < 0.5 x mean bin volume and a local trough -> LVN
 LEVEL_MERGE_ATR = 0.5             # merge level candidates closer than this many ATRs
-TOUCH_ATR = 0.25                  # a bar "touches" a level if its high-low range comes this close
+TOUCH_ATR = 0.25                  # a bar "touches" a level if its high or low is within this many ATRs of the zone
 LEVELS_PER_SIDE = 3
+LEVEL_SOURCE_BONUS = 0.5          # level score bonus per extra distinct source type in a merged cluster
+LEVEL_MIN_SCORE = 0.25            # a cluster scoring below this is too weak to be S1-S3 / R1-R3 (52-week extremes exempt)
+LEVEL_AVWAP_MIN_BARS = 10         # an anchored VWAP is a level candidate only once its anchor is this many bars old
+GAP_ZONE_MAX_ATR = 1.0            # an unfilled gap at most this many ATRs wide is one level zone; wider: two edges
 LARGEST_GAP_LOOKBACK = 126        # bars searched for the largest gap (anchored VWAP anchor)
 
 # ---------------------------------------------------------------------------- multi-timeframe
@@ -132,6 +149,8 @@ CONFIDENCE_N_NORMAL = 30          # n >= 30 -> "normal"
 CONFIDENCE_N_LOW = 15             # 15..29 -> "low"; below 15 -> "insufficient" (not scored)
 SIGNAL_EDGE_MIN = 0.005           # median edge vs. same-regime baseline needed to nudge a pillar (0.5%)
 SIGNAL_HIT_EDGE_MIN = 0.05        # and hit-rate edge (5 percentage points)
+SIGNAL_MACD_WARMUP_BARS = MACD_SLOW + MACD_SIGNAL   # MACD crosses before this bar index are ignored (EMA warm-up)
+SIGNAL_DATES_SAMPLE = 10          # most recent de-clustered event dates listed per statistic
 
 # ---------------------------------------------------------------------------- scorecard
 PILLARS = ("trend", "momentum", "relative_strength", "volume_flow", "volatility_setup", "mean_reversion")
@@ -147,13 +166,21 @@ REGIME_WEIGHTS = {
 }
 # position mode: weekly emphasis shifts weight from mean reversion to trend
 POSITION_WEIGHT_SHIFT = {"mean_reversion": -0.05, "trend": +0.05}
-BIAS_STEPS = [            # (upper bound of weighted score, label), checked in order
+BIAS_STEPS = [            # (bound, label) in ascending order; a score exactly on a bound takes the label
+                          # nearer Neutral, so +-0.4 is Neutral and +-1.2 is Moderately bullish/bearish
     (-1.2, "Bearish"),
     (-0.4, "Moderately bearish"),
     (0.4, "Neutral"),
     (1.2, "Moderately bullish"),
     (float("inf"), "Bullish"),
 ]
+FLOW_UPDOWN_HIGH = 1.2            # 50-day up/down volume ratio above this -> +1 flow vote
+FLOW_UPDOWN_LOW = 0.8             # below this -> -1 flow vote
+FLOW_AVWAP_MAJORITY = 0.5         # close above (below) more than this share of the anchored VWAPs -> +1 (-1)
+SQUEEZE_RELEASE_RECENT_BARS = SIGNAL_ACTIVE_BARS   # a squeeze release with bars_ago < this is "just released"
+SIGNAL_NUDGE_MAX = 1              # cap on the net signal nudge per pillar
+CONF_AGREEMENT_HIGH = 0.7         # pillar agreement (weight share) needed for "high" confidence
+CONF_AGREEMENT_LOW = 0.5          # below this -> "low" confidence
 
 # ---------------------------------------------------------------------------- scenarios / risk
 TARGET_ZONE_ATR = 0.25            # target zones = level +/- this many ATRs
@@ -162,5 +189,21 @@ STOP_ATR_MULT = 2.0               # volatility stop distance
 STRUCTURE_STOP_BUFFER_ATR = 0.5   # structural stop = nearest support - this many ATRs
 ACCOUNT_SIZE = 100_000
 RISK_PER_TRADE = 0.01
+NO_LEVEL_TRIGGER_ATR = 1.0        # trigger = close +- this many ATRs when no level or 52-week extreme lies beyond it
+SCENARIO_PROJECTION_ATR = (1.0, 2.0)   # target projections (ATRs from the trigger) when no level lies beyond it
+INVALIDATION_MIN_ATR = 0.5        # invalidation sits at least this many ATRs back through the trigger
+
+# ---------------------------------------------------------------------------- chart (chart.html)
+CHART_PRICE_DECIMALS = 4          # decimals kept for prices (candles, SMAs, AVWAPs, levels)
+CHART_VALUE_SIG_DIGITS = 6        # significant digits kept for other floats (at least CHART_PRICE_DECIMALS decimals)
+
+# ---------------------------------------------------------------------------- output (analyze.py)
+METRICS_SIG_DIGITS = 6            # metrics.json floats are rounded to this many significant digits
+
+# ---------------------------------------------------------------------------- cross-check (crosscheck.py, optional)
+CROSSCHECK_WINDOW = 250           # compare the last N dates both series have
+CROSSCHECK_RSI_WARMUP = 250       # bars skipped at the start of each RSI series before comparing
+CROSSCHECK_SMA_TOL = 0.0001       # SMA(50) tolerance as a share of the close (0.01%)
+CROSSCHECK_RSI_TOL = 0.5          # RSI(14) tolerance in points
 
 DISCLAIMER = "This is technical analysis for information only, not investment advice."

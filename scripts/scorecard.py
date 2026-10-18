@@ -14,24 +14,6 @@ import math
 
 import config as C
 
-# Thresholds; values in config.py take precedence (the MR_* names are shared with modules.py).
-MR_RSI14_OVERBOUGHT = getattr(C, "MR_RSI14_OVERBOUGHT", 70.0)
-MR_RSI14_OVERSOLD = getattr(C, "MR_RSI14_OVERSOLD", 30.0)
-MR_RSI2_OVERBOUGHT = getattr(C, "MR_RSI2_OVERBOUGHT", 90.0)
-MR_RSI2_OVERSOLD = getattr(C, "MR_RSI2_OVERSOLD", 10.0)
-MR_Z_EXTENDED = getattr(C, "MR_Z_EXTENDED", 2.0)
-MR_DIST_SMA50_ATR = getattr(C, "MR_DIST_SMA50_ATR", 2.0)
-FLOW_UPDOWN_HIGH = getattr(C, "FLOW_UPDOWN_HIGH", 1.2)
-FLOW_UPDOWN_LOW = getattr(C, "FLOW_UPDOWN_LOW", 0.8)
-FLOW_AVWAP_MAJORITY = getattr(C, "FLOW_AVWAP_MAJORITY", 0.5)
-SQUEEZE_RELEASE_RECENT_BARS = getattr(C, "SQUEEZE_RELEASE_RECENT_BARS", C.SIGNAL_ACTIVE_BARS)
-SIGNAL_NUDGE_MAX = getattr(C, "SIGNAL_NUDGE_MAX", 1)
-CONF_AGREEMENT_HIGH = getattr(C, "CONF_AGREEMENT_HIGH", 0.7)
-CONF_AGREEMENT_LOW = getattr(C, "CONF_AGREEMENT_LOW", 0.5)
-NO_LEVEL_TRIGGER_ATR = getattr(C, "NO_LEVEL_TRIGGER_ATR", 1.0)
-SCENARIO_PROJECTION_ATR = getattr(C, "SCENARIO_PROJECTION_ATR", (1.0, 2.0))
-INVALIDATION_MIN_ATR = getattr(C, "INVALIDATION_MIN_ATR", 0.5)
-
 PILLARS = tuple(C.PILLARS)
 SCORE_MIN, SCORE_MAX = -2, 2
 _PILLAR_ALIASES = {"volatility": "volatility_setup", "volume": "volume_flow", "flow": "volume_flow",
@@ -151,7 +133,8 @@ class _Tally:
 
     def result(self) -> dict:
         used = [v for v in self.votes.values() if v is not None]
-        out = {"inputs": self.inputs, "votes": dict(self.votes), "nudges": []}
+        out = {"inputs": self.inputs, "votes": dict(self.votes), "nudges": [], "mode": self.mode,
+               "missing": list(self.missing), "not_applicable": list(self.not_applicable)}
         if not used:
             if self.not_applicable and not self.missing:
                 reason = f"not applicable ({'; '.join(self.not_applicable)})"
@@ -303,7 +286,7 @@ def _volume_flow(modules) -> dict:
     if ratio is None:
         t.miss("updown_volume", "up/down volume ratio")
     else:
-        v = 1 if ratio > FLOW_UPDOWN_HIGH else -1 if ratio < FLOW_UPDOWN_LOW else 0
+        v = 1 if ratio > C.FLOW_UPDOWN_HIGH else -1 if ratio < C.FLOW_UPDOWN_LOW else 0
         t.add("updown_volume", v, f"up/down volume {ratio:.2f}")
 
     div = {name: _get(vf, key, "divergence") for name, key in (("OBV", "obv"), ("A/D", "ad"))}
@@ -338,7 +321,7 @@ def _volume_flow(modules) -> dict:
     if not rel:
         t.miss("avwap", "anchored VWAPs")
     else:
-        v = 1 if above / len(rel) > FLOW_AVWAP_MAJORITY else -1 if below / len(rel) > FLOW_AVWAP_MAJORITY else 0
+        v = 1 if above / len(rel) > C.FLOW_AVWAP_MAJORITY else -1 if below / len(rel) > C.FLOW_AVWAP_MAJORITY else 0
         t.add("avwap", v, f"close above {above} of {len(rel)} anchored VWAPs")
     return t.result()
 
@@ -384,13 +367,21 @@ def _volatility_setup(modules, direction: int | None) -> dict:
         where = {1: "uptrend (+1)", -1: "downtrend (-1)"}.get(v, "no prevailing direction: break direction unknown")
         t.add("stored_energy", v, f"{' + '.join(bits)}, {where}")
     else:
-        t.add("stored_energy", 0, "no squeeze or compression")
+        text = "no " + " or ".join(w for w, flag in (("squeeze", on), ("compression", compression)) if flag is False)
+        if compression is None:
+            text += (f" (compression unknown: the BB-width percentile needs {C.PERCENTILE_WINDOW} bars "
+                     "of bandwidth history)")
+            t.missing.append("compression (BB-width percentile)")
+        elif on is None:
+            text += " (squeeze state unknown)"
+            t.missing.append("squeeze state")
+        t.add("stored_energy", 0, text)
 
     if on is None:
         t.miss("release", "squeeze state")
     else:
         d = {"up": 1, "down": -1}.get(rel_dir, 0)
-        if ago is not None and ago < SQUEEZE_RELEASE_RECENT_BARS and d:
+        if ago is not None and ago < C.SQUEEZE_RELEASE_RECENT_BARS and d:
             t.add("release", d, f"squeeze released {int(ago)} bar(s) ago, {rel_dir} ({d:+d})")
         else:
             t.add("release", 0, "no recent squeeze release")
@@ -429,14 +420,14 @@ def _mean_reversion(modules) -> dict:
         else:
             t.add(name, 0, f"{label} {fmt(x)}")
 
-    band("rsi14", "RSI14", rsi14, MR_RSI14_OVERSOLD, MR_RSI14_OVERBOUGHT, lambda x: f"{x:.1f}")
-    band("rsi2", "RSI2", rsi2, MR_RSI2_OVERSOLD, MR_RSI2_OVERBOUGHT, lambda x: f"{x:.1f}")
+    band("rsi14", "RSI14", rsi14, C.MR_RSI14_OVERSOLD, C.MR_RSI14_OVERBOUGHT, lambda x: f"{x:.1f}")
+    band("rsi2", "RSI2", rsi2, C.MR_RSI2_OVERSOLD, C.MR_RSI2_OVERBOUGHT, lambda x: f"{x:.1f}")
     # z20 beyond +-2 and %B outside 0..1 are the same condition with the default bands: one vote.
     if z20 is not None:
-        band("band", "z20", z20, -MR_Z_EXTENDED, MR_Z_EXTENDED, lambda x: f"{x:+.2f}")
+        band("band", "z20", z20, -C.MR_Z_EXTENDED, C.MR_Z_EXTENDED, lambda x: f"{x:+.2f}")
     else:
         band("band", "%B", pct_b, 0.0, 1.0, lambda x: f"{x:.2f}")
-    band("dist_sma50", "dist SMA50", dist, -MR_DIST_SMA50_ATR, MR_DIST_SMA50_ATR, lambda x: f"{x:+.1f} ATR")
+    band("dist_sma50", "dist SMA50", dist, -C.MR_DIST_SMA50_ATR, C.MR_DIST_SMA50_ATR, lambda x: f"{x:+.1f} ATR")
     return t.result()
 
 
@@ -467,7 +458,7 @@ def _active_signals(modules, primary: int) -> list[dict]:
 
 def _apply_nudges(pillars: dict, views: list[dict], notes: list) -> list[dict]:
     """Confirmed signals (normal/low sample, edge beyond both thresholds in the bias direction)
-    move their pillar by +-1 each; the net move per pillar is capped at SIGNAL_NUDGE_MAX."""
+    move their pillar by +-1 each; the net move per pillar is capped at C.SIGNAL_NUDGE_MAX."""
     applied = []
     for v in views:
         if not v["confirmed"]:
@@ -482,7 +473,7 @@ def _apply_nudges(pillars: dict, views: list[dict], notes: list) -> list[dict]:
         if not p["nudges"]:
             continue
         net = sum(n["bias"] for n in p["nudges"])
-        step = max(-SIGNAL_NUDGE_MAX, min(SIGNAL_NUDGE_MAX, net))
+        step = max(-C.SIGNAL_NUDGE_MAX, min(C.SIGNAL_NUDGE_MAX, net))
         p["score"] = _clip(p["raw_score"] + step)
         desc = ", ".join(f"{n['id']} (n={int(n['n'] or 0)}, edge {_pct(n['edge_median'])}, "
                          f"hit {n['edge_hit_rate'] * 100:+.0f}pp)" for n in p["nudges"])
@@ -561,35 +552,49 @@ def _confidence(pillars: dict, weights: dict, bias_sign: int, modules, views: li
     reasons = [f"pillar agreement {agreement:.2f} (weight share of pillars "
                f"{'scoring 0' if bias_sign == 0 else 'on the bias side'}: {', '.join(agree) or 'none'})",
                mtf_text]
+    # factors: the same reasons as codes and numbers, for rendering in other languages (ui/i18n.js)
+    w = _num(_get(modules, "multi_timeframe", "weekly", "sign"))
+    factors = [{"code": "agreement", "value": agreement, "pillars": agree, "neutral": bias_sign == 0},
+               {"code": "mtf", "state": mtf_state, "weekly_sign": None if w is None else _sign(w),
+                "daily_weekly": _get(modules, "multi_timeframe", "alignment")}]
     if views:
         reasons.append(f"active signals: {len(support)} sample-backed in favour, {len(against)} against, "
                        f"{len(insufficient)} with an insufficient sample")
+        factors.append({"code": "signals", "supporting": len(support), "opposing": len(against),
+                        "insufficient": len(insufficient)})
     else:
         reasons.append("no active signals")
+        factors.append({"code": "no_signals"})
 
-    if agreement < CONF_AGREEMENT_LOW or mtf_state == "contradicts":
+    if agreement < C.CONF_AGREEMENT_LOW or mtf_state == "contradicts":
         level = "low"
-        reasons.append(f"low: agreement < {CONF_AGREEMENT_LOW:.2f}" if agreement < CONF_AGREEMENT_LOW
+        why = ["agreement_low"] if agreement < C.CONF_AGREEMENT_LOW else ["weekly_contradicts"]
+        reasons.append(f"low: agreement < {C.CONF_AGREEMENT_LOW:.2f}" if agreement < C.CONF_AGREEMENT_LOW
                        else "low: the weekly picture contradicts the bias")
-    elif agreement >= CONF_AGREEMENT_HIGH and mtf_state == "confirms" and not insufficient_only and not against:
-        level = "high"
-        reasons.append(f"high: agreement >= {CONF_AGREEMENT_HIGH:.2f}, weekly confirms, no opposing or "
+    elif agreement >= C.CONF_AGREEMENT_HIGH and mtf_state == "confirms" and not insufficient_only and not against:
+        level, why = "high", []
+        reasons.append(f"high: agreement >= {C.CONF_AGREEMENT_HIGH:.2f}, weekly confirms, no opposing or "
                        "insufficient-only signal evidence")
     else:
-        level = "medium"
-        why = []
-        if agreement < CONF_AGREEMENT_HIGH:
-            why.append(f"agreement < {CONF_AGREEMENT_HIGH:.2f}")
+        level, why, text = "medium", [], []
+        if agreement < C.CONF_AGREEMENT_HIGH:
+            why.append("agreement_below_high")
+            text.append(f"agreement < {C.CONF_AGREEMENT_HIGH:.2f}")
         if mtf_state != "confirms":
-            why.append(f"weekly {mtf_state or 'unavailable'}")
+            why.append(f"weekly_{mtf_state or 'unavailable'}")
+            text.append(f"weekly {mtf_state or 'unavailable'}")
         if insufficient_only:
-            why.append("active signals all have insufficient samples")
+            why.append("insufficient_only")
+            text.append("active signals all have insufficient samples")
         if against:
-            why.append(f"sample-backed signals against the bias ({', '.join(against)})")
-        reasons.append("medium: " + "; ".join(why))
+            why.append("opposing")
+            text.append(f"sample-backed signals against the bias ({', '.join(against)})")
+        reasons.append("medium: " + "; ".join(text))
+    factors.append({"code": "level", "level": level, "why": why, "opposing": against,
+                    "low": C.CONF_AGREEMENT_LOW, "high": C.CONF_AGREEMENT_HIGH})
     return {"level": level, "agreement": agreement, "mtf_alignment": mtf_state,
             "daily_weekly": _get(modules, "multi_timeframe", "alignment"),
-            "signal_support": signal_support, "reasons": reasons}
+            "signal_support": signal_support, "reasons": reasons, "factors": factors}
 
 
 # ---------------------------------------------------------------------------- conflicts
@@ -621,8 +626,12 @@ _GENERIC_PAIR = ("The two pillars measure different things over different window
                  "conviction, and the regime weights decide the net read.")
 
 
-def _conflict(kind: str, involved: list[str], description: str, meaning: str, **extra) -> dict:
-    return {"type": kind, "involved": involved, **extra, "description": description, "typical_meaning": meaning}
+def _conflict(kind: str, involved: list[str], description: str, meaning: str, key: str | None = None,
+              params: dict | None = None, **extra) -> dict:
+    """One conflict; `key` names its typical meaning and `params` holds the numbers in the description,
+    so the UI can render both in another language."""
+    return {"type": kind, "involved": involved, **extra, "description": description, "typical_meaning": meaning,
+            "key": key or kind, "params": params or {}}
 
 
 def _conflicts(ctx, modules, pillars: dict, views: list[dict]) -> list[dict]:
@@ -632,9 +641,13 @@ def _conflicts(ctx, modules, pillars: dict, views: list[dict]) -> list[dict]:
         for b in names[i + 1:]:
             sa, sb = _sign(pillars[a]["score"]), _sign(pillars[b]["score"])
             if sa and sb and sa == -sb:
-                meaning = _PAIR_MEANINGS.get((a, b), {}).get(sa, _GENERIC_PAIR)
+                known = sa in _PAIR_MEANINGS.get((a, b), {})
+                meaning = _PAIR_MEANINGS[(a, b)][sa] if known else _GENERIC_PAIR
                 out.append(_conflict("pillar_pair", [a, b], f"{a} {pillars[a]['score']:+d} vs {b} "
-                                     f"{pillars[b]['score']:+d}", meaning, pillars=[a, b]))
+                                     f"{pillars[b]['score']:+d}", meaning,
+                                     key=f"{a}|{b}|{sa:+d}" if known else "pillar_pair",
+                                     params={"a": a, "b": b, "score_a": pillars[a]["score"],
+                                             "score_b": pillars[b]["score"]}, pillars=[a, b]))
 
     vf = _usable(modules, "volume_flow")
     for kind in ("bearish", "bullish"):
@@ -651,13 +664,16 @@ def _conflicts(ctx, modules, pillars: dict, views: list[dict]) -> list[dict]:
             meaning = ("Selling pressure is not confirming the new low: often a sign of waning downside momentum, "
                        "but not a reversal signal by itself.")
         out.append(_conflict("price_flow_divergence", ["price"] + lines,
-                             f"{desc}" + (f" ({detail})" if detail else ""), meaning))
+                             f"{desc}" + (f" ({detail})" if detail else ""), meaning, key=f"divergence_{kind}",
+                             params={"kind": kind, "lines": lines, "lookback": C.DIVERGENCE_LOOKBACK}))
 
     mtf = _usable(modules, "multi_timeframe")
     if _get(mtf, "alignment") == "contradicts":
         out.append(_conflict("daily_vs_weekly", ["daily", "weekly"], _get(mtf, "note") or "daily and weekly "
                              "directions are opposite", "A counter-trend move within the larger trend: the daily "
-                             "move can run for a swing, but the weekly trend usually dominates over longer horizons."))
+                             "move can run for a swing, but the weekly trend usually dominates over longer horizons.",
+                             params={"daily_sign": _num(_get(mtf, "daily_sign")),
+                                     "weekly_sign": _num(_get(mtf, "weekly", "sign"))}))
 
     rs_score = pillars.get("relative_strength", {}).get("score", 0)
     spy = _block(_usable(modules, "market_context"), "spy")
@@ -667,7 +683,8 @@ def _conflicts(ctx, modules, pillars: dict, views: list[dict]) -> list[dict]:
                              f"relative strength {rs_score:+d} while SPY is below its 200-day SMA"
                              + (f" ({_pct(rel)})" if rel is not None else ""),
                              "Leadership against a risk-off tape: relative strength in a weak market can mark "
-                             "future leaders, but in broad selloffs strong names are often sold late."))
+                             "future leaders, but in broad selloffs strong names are often sold late.",
+                             params={"rs_score": rs_score, "spy_pct_vs_sma200": rel}))
 
     sq_on = _get(_usable(modules, "volatility"), "squeeze", "on")
     direction = _num(_get(_usable(modules, "regime"), "direction_sign"))
@@ -676,7 +693,8 @@ def _conflicts(ctx, modules, pillars: dict, views: list[dict]) -> list[dict]:
         out.append(_conflict("squeeze_no_direction", ["volatility_setup", "regime"],
                              f"squeeze on{f' for {int(bars)} bars' if bars else ''} with no prevailing direction",
                              "Break direction unknown: a squeeze stores energy but says nothing about direction; "
-                             "the first decisive close outside the range on volume usually settles it."))
+                             "the first decisive close outside the range on volume usually settles it.",
+                             params={"bars": bars}))
 
     ev = _usable(modules, "event_risk")
     if _get(ev, "within_horizon"):
@@ -689,28 +707,32 @@ def _conflicts(ctx, modules, pillars: dict, views: list[dict]) -> list[dict]:
                              f"earnings on {nxt.get('date') or 'an upcoming date'}{when} fall inside the "
                              f"{_horizon(ctx)[1].get('primary')}-day horizon{move}",
                              "The event can override the technicals: earnings reactions often exceed the "
-                             "1-sigma technical range, gap through levels and stops, and can reset the trend."))
+                             "1-sigma technical range, gap through levels and stops, and can reset the trend.",
+                             params={"date": nxt.get("date"), "trading_days": td, "horizon": _horizon(ctx)[1].get("primary"),
+                                     "median_abs_move": med, "n": n}))
 
     regime_sign = _sign(direction) if direction is not None else 0
     for bias, word, regime_word, meaning in (
-            (1, "bullish", "downtrend",
+            (1, "bullish", "a downtrend",
              "Counter-trend setups: bullish signals in a downtrend have mostly worked as short-lived bounces; "
              "judge them on the same-regime statistics, not the unconditional ones."),
-            (-1, "bearish", "uptrend",
+            (-1, "bearish", "an uptrend",
              "Counter-trend setups: bearish signals in an uptrend have mostly marked pauses rather than "
              "reversals; judge them on the same-regime statistics, not the unconditional ones.")):
         ids = [v["id"] for v in views if v["bias"] == bias]
         if ids and regime_sign == -bias:
             out.append(_conflict("signals_vs_regime", ids + ["regime"],
-                                 f"{word} signal(s) {', '.join(ids)} active in a {regime_word} regime",
-                                 meaning, signals=ids))
+                                 f"{word} signal(s) {', '.join(ids)} active in {regime_word} regime",
+                                 meaning, key=f"signals_vs_regime_{word}", params={"bias": bias, "ids": ids},
+                                 signals=ids))
     bull_ids = [v["id"] for v in views if v["bias"] > 0]
     bear_ids = [v["id"] for v in views if v["bias"] < 0]
     if bull_ids and bear_ids:
         out.append(_conflict("signals_both_ways", bull_ids + bear_ids,
                              f"bullish {', '.join(bull_ids)} and bearish {', '.join(bear_ids)} are active together",
                              "Opposing setups at the same time usually mean a turning point or noise; weigh them "
-                             "by sample size and same-regime edge.", signals=bull_ids + bear_ids))
+                             "by sample size and same-regime edge.", params={"bull": bull_ids, "bear": bear_ids},
+                             signals=bull_ids + bear_ids))
     return out
 
 
@@ -830,17 +852,17 @@ def _directional(d: int, mk: dict, ticker: str) -> dict:
         basis = (f"all-time {ext_name} (available history)" if ext_all_time else f"52-week {ext_name}") + \
                 f": no {kind} zone {'above' if d > 0 else 'below'} the last close"
     else:
-        level = near_edge = close + d * NO_LEVEL_TRIGGER_ATR * atr
+        level = near_edge = close + d * C.NO_LEVEL_TRIGGER_ATR * atr
         if ext is None:
             why = f"no {kind} level and no 52-week {ext_name} available"
         else:
             why = f"price at its {'all-time' if ext_all_time else '52-week'} {ext_name}, no {kind} level"
-        basis = f"last close {'+' if d > 0 else '-'} {NO_LEVEL_TRIGGER_ATR:g} ATR: {why}"
+        basis = f"last close {'+' if d > 0 else '-'} {C.NO_LEVEL_TRIGGER_ATR:g} ATR: {why}"
 
-    inv = min(near_edge, level - INVALIDATION_MIN_ATR * atr) if d > 0 else max(near_edge, level + INVALIDATION_MIN_ATR * atr)
+    inv = min(near_edge, level - C.INVALIDATION_MIN_ATR * atr) if d > 0 else max(near_edge, level + C.INVALIDATION_MIN_ATR * atr)
     targets = [_zone(lv, close, atr, kind) for lv in side_levels if d * (float(lv["price"]) - level) > 0]
     if not targets:
-        targets = [_projection(level + d * m * atr, m, d, close, atr) for m in SCENARIO_PROJECTION_ATR
+        targets = [_projection(level + d * m * atr, m, d, close, atr) for m in C.SCENARIO_PROJECTION_ATR
                    if level + d * m * atr > 0]
 
     volume = f"RVOL >= {C.TRIGGER_RVOL:g}"
@@ -853,7 +875,7 @@ def _directional(d: int, mk: dict, ticker: str) -> dict:
                     "distance_pct": level / close - 1, "distance_atr": (level - close) / atr},
         "targets": targets,
         "invalidation": {"level": inv, "condition": f"close {back}",
-                         "basis": f"the trigger zone's far edge or {INVALIDATION_MIN_ATR:g} ATR beyond the trigger, "
+                         "basis": f"the trigger zone's far edge or {C.INVALIDATION_MIN_ATR:g} ATR beyond the trigger, "
                                   f"whichever is further"},
         "text": text,
     }
@@ -916,17 +938,22 @@ def build_scenarios(ctx, modules, scorecard) -> dict:
 
 # ---------------------------------------------------------------------------- risk
 def _size(entry: float, stop: float | None, d: int) -> dict | None:
-    """Shares that risk C.RISK_PER_TRADE of C.ACCOUNT_SIZE between entry and stop."""
+    """Whole shares that risk C.RISK_PER_TRADE of C.ACCOUNT_SIZE between entry and stop."""
     if stop is None or d * (entry - stop) <= 0:
         return None
     risk_dollars = C.ACCOUNT_SIZE * C.RISK_PER_TRADE
     per_share = d * (entry - stop)
-    shares = math.floor(risk_dollars / per_share + 1e-9)   # guard float noise at exact multiples
+    exact = risk_dollars / per_share
+    shares = math.floor(exact + 1e-9)   # guard float noise at exact multiples
     notional = shares * entry
     pct = notional / C.ACCOUNT_SIZE
-    return {"stop": stop, "risk_per_share": per_share, "shares": shares, "notional": notional,
-            "notional_pct_account": pct, "exceeds_account": pct > 1.0,
-            "flag": "illustrative only; would exceed the account" if pct > 1.0 else None}
+    if shares == 0:
+        flag = (f"risk per share {_px(per_share)} exceeds the ${risk_dollars:,.0f} risk budget: no whole-share "
+                f"position fits ({exact:.2f} shares)")
+    else:
+        flag = "illustrative only; would exceed the account" if pct > 1.0 else None
+    return {"stop": stop, "risk_per_share": per_share, "shares": shares, "fractional_shares": exact,
+            "notional": notional, "notional_pct_account": pct, "exceeds_account": pct > 1.0, "flag": flag}
 
 
 def _risk_side(d: int, mk: dict, scen_side: dict | None) -> dict:
@@ -965,6 +992,8 @@ def _risk_side(d: int, mk: dict, scen_side: dict | None) -> dict:
     example = {"account": C.ACCOUNT_SIZE, "risk_pct": C.RISK_PER_TRADE,
                "risk_dollars": C.ACCOUNT_SIZE * C.RISK_PER_TRADE, "stop_basis": primary,
                **(sizes[primary] or {"stop": None, "shares": None, "notional": None}), "by_stop": sizes}
+    if example["shares"] == 0:
+        notes.append(f"position-size example: {example['flag']}")
 
     return {
         "entry_ref": entry,

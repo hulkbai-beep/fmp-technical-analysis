@@ -4,9 +4,9 @@ historical forward-return statistics for each signal, against unconditional and 
 baselines.
 
 Signals are evaluated at the close of day t from bars and indicators at bars <= t (split-adjusted
-prices). Forward returns and the maximum adverse excursion are, by design, the only forward-looking
-quantities; they use dividend-adjusted prices, falling back to split-adjusted ones where the
-adjusted series is missing. The library is documented rule by rule in references/signals.md; do
+prices). Forward returns and the maximum adverse excursion (MAE: the worst move against the
+signal's bias) are, by design, the only forward-looking quantities; they use dividend-adjusted
+prices, falling back to split-adjusted ones where the adjusted series is missing. The library is documented rule by rule in references/signals.md; do
 not add or tune rules per ticker.
 """
 from __future__ import annotations
@@ -18,10 +18,6 @@ import config as C
 
 P = C.SIGNAL_PARAMS
 SMA_LONG = C.SMA_PERIODS[2]
-# EMAs are seeded at the first bar, so MACD crosses before this bar index are ignored as warm-up.
-MACD_WARMUP_BARS = getattr(C, "SIGNAL_MACD_WARMUP_BARS", C.MACD_SLOW + C.MACD_SIGNAL)
-DATES_SAMPLE = getattr(C, "SIGNAL_DATES_SAMPLE", 10)   # most recent event dates listed per statistic
-
 _SLOPE = P["pullback50_slope_bars"]
 
 SIGNALS = [
@@ -69,19 +65,21 @@ SIGNALS = [
     {"id": "macd_bull_cross_below_zero", "family": 10, "name": "MACD bullish cross below zero", "bias": +1,
      "regime": "current_side", "pillar": "momentum",
      "rule": f"macd[t-1] <= macd_signal[t-1] and macd[t] > macd_signal[t] and macd[t] < 0 "
-             f"(bar index >= {MACD_WARMUP_BARS})"},
+             f"(bar index >= {C.SIGNAL_MACD_WARMUP_BARS})"},
     {"id": "macd_bear_cross_above_zero", "family": 10, "name": "MACD bearish cross above zero", "bias": -1,
      "regime": "current_side", "pillar": "momentum",
      "rule": f"macd[t-1] >= macd_signal[t-1] and macd[t] < macd_signal[t] and macd[t] > 0 "
-             f"(bar index >= {MACD_WARMUP_BARS})"},
+             f"(bar index >= {C.SIGNAL_MACD_WARMUP_BARS})"},
 ]
 SIGNAL_IDS = [s["id"] for s in SIGNALS]
 _BY_ID = {s["id"]: s for s in SIGNALS}
 
 DEFINITIONS = {
     "forward_return": "adj_close[t+h] / adj_close[t] - 1 (close where the adjusted pair is missing)",
-    "mae": "min(adj_low[t+1..t+h]) / adj_close[t] - 1 (low/close where adjusted data is missing); "
-           "long-side view, positive if no low in the window trades below the entry close",
+    "mae": "worst move against the signal's bias: bullish signals min(adj_low[t+1..t+h]) / adj_close[t] - 1 "
+           "(positive if no low trades below the entry close), bearish signals max(adj_high[t+1..t+h]) / "
+           "adj_close[t] - 1 (negative if no high trades above it); low/high/close where adjusted data is "
+           "missing; baselines use the same side as the signal",
     "hit_rate": "share of forward returns > 0, for every signal (bearish signals included)",
     "edge": "signal minus same-regime baseline (median and hit rate); vs_unconditional_median = "
             "signal median minus unconditional median",
@@ -113,7 +111,7 @@ def events(bars: pd.DataFrame, ind: pd.DataFrame) -> pd.DataFrame:
                 & (ind["squeeze_bars"].shift(1) >= P["squeeze_min_bars"]))
 
     macd, sig = ind["macd"], ind["macd_signal"]
-    warm = pd.Series(np.arange(len(bars)) >= MACD_WARMUP_BARS, index=bars.index)
+    warm = pd.Series(np.arange(len(bars)) >= C.SIGNAL_MACD_WARMUP_BARS, index=bars.index)
     macd_up = (macd.shift(1) <= sig.shift(1)) & (macd > sig)
     macd_dn = (macd.shift(1) >= sig.shift(1)) & (macd < sig)
 
@@ -156,23 +154,27 @@ def side_at(bars: pd.DataFrame, ind: pd.DataFrame, pos: int) -> str | None:
 
 
 # ---------------------------------------------------------------------------- outcomes
-def _outcome_pair(close: pd.Series, low: pd.Series, h: int) -> tuple[pd.Series, pd.Series]:
+def _outcome_pair(close: pd.Series, low: pd.Series, high: pd.Series, h: int,
+                  bias: int) -> tuple[pd.Series, pd.Series]:
     fwd = close.shift(-h) / close - 1.0
-    # rolling(h).min() at t+h covers t+1..t+h
-    mae = low.rolling(h, min_periods=h).min().shift(-h) / close - 1.0
-    return fwd, mae
+    # rolling(h) at t+h covers t+1..t+h
+    worst = high.rolling(h, min_periods=h).max() if bias < 0 else low.rolling(h, min_periods=h).min()
+    return fwd, worst.shift(-h) / close - 1.0
 
 
-def forward_outcomes(bars: pd.DataFrame, h: int) -> tuple[np.ndarray, np.ndarray]:
+def forward_outcomes(bars: pd.DataFrame, h: int, bias: int = 1) -> tuple[np.ndarray, np.ndarray]:
     """Forward return and MAE for every bar (NaN where t+h is outside the data).
 
-    Each measure uses dividend-adjusted prices where they are complete for that window and
-    split-adjusted prices otherwise, so both legs of a ratio always share one price basis.
+    MAE is the worst move against `bias`: the lowest low after entry for bullish (and neutral)
+    signals, the highest high for bearish ones. Each measure uses dividend-adjusted prices where
+    they are complete for that window and split-adjusted prices otherwise, so both legs of a
+    ratio always share one price basis.
     """
-    fwd, mae = _outcome_pair(bars["close"], bars["low"], h)
+    fwd, mae = _outcome_pair(bars["close"], bars["low"], bars["high"], h, bias)
     if "adj_close" in bars.columns:
-        adj_low = bars["adj_low"] if "adj_low" in bars.columns else pd.Series(np.nan, index=bars.index)
-        a_fwd, a_mae = _outcome_pair(bars["adj_close"], adj_low, h)
+        missing = pd.Series(np.nan, index=bars.index)
+        a_fwd, a_mae = _outcome_pair(bars["adj_close"], bars.get("adj_low", missing),
+                                     bars.get("adj_high", missing), h, bias)
         fwd = a_fwd.where(a_fwd.notna(), fwd)
         mae = a_mae.where(a_mae.notna(), mae)
     return fwd.to_numpy(dtype=float, na_value=np.nan), mae.to_numpy(dtype=float, na_value=np.nan)
@@ -228,25 +230,25 @@ def stats(bars: pd.DataFrame, ind: pd.DataFrame, signal_id: str, horizon: int, r
     """De-clustered forward-return statistics of one signal at one horizon.
 
     regime_mask (bool Series/array on bars.index) restricts the events; ev / outcomes accept
-    precomputed events(bars, ind) and forward_outcomes(bars, horizon).
+    precomputed events(bars, ind) and forward_outcomes(bars, horizon, signal bias).
     """
     if ev is None:
         ev = events(bars, ind)
-    fwd, mae = outcomes if outcomes is not None else forward_outcomes(bars, horizon)
+    fwd, mae = outcomes if outcomes is not None else forward_outcomes(bars, horizon, _BY_ID[signal_id]["bias"])
     fired = ev[signal_id].to_numpy(dtype=bool)
     if regime_mask is not None:
         fired = fired & _bool_array(regime_mask, bars.index)
     kept = decluster(np.flatnonzero(fired & ~np.isnan(fwd)), horizon)
     out = summarize(fwd[kept], mae[kept])
     out["confidence"] = confidence(out["n"])
-    out["dates_sample"] = [_iso(d) for d in bars.index[kept[-DATES_SAMPLE:]]]
+    out["dates_sample"] = [_iso(d) for d in bars.index[kept[-C.SIGNAL_DATES_SAMPLE:]]]
     return out
 
 
-def baseline(bars: pd.DataFrame, horizon: int, mask=None, outcomes: tuple | None = None) -> dict:
-    """Baseline over every day with a valid t+h outcome (optionally only mask days).
-    Overlapping windows, no de-clustering."""
-    fwd, mae = outcomes if outcomes is not None else forward_outcomes(bars, horizon)
+def baseline(bars: pd.DataFrame, horizon: int, mask=None, outcomes: tuple | None = None, bias: int = 1) -> dict:
+    """Baseline over every day with a valid t+h outcome (optionally only mask days), MAE on the
+    side of `bias`. Overlapping windows, no de-clustering."""
+    fwd, mae = outcomes if outcomes is not None else forward_outcomes(bars, horizon, bias)
     ok = ~np.isnan(fwd)
     if mask is not None:
         ok &= _bool_array(mask, bars.index)
@@ -292,6 +294,8 @@ def _caveats(ticker: str, history: dict) -> list[str]:
         f"to {history['last_date']}.",
         "Signals are evaluated on split-adjusted prices; forward returns and MAE are measured on "
         "dividend-adjusted closes (split-adjusted where the adjusted series is missing).",
+        "MAE is the worst move against the signal's bias: the lowest low after entry for bullish signals, "
+        "the highest high for bearish ones (a rise is adverse to a bearish read).",
         "Hit rate is the share of positive forward returns for every signal: a bearish signal supports "
         "its hypothesis when its median and hit rate sit below the baseline.",
         "Only events with t+h inside the data count, so fires in the last h bars (including a current "
@@ -327,13 +331,19 @@ def build_signal_stats(ctx) -> dict:
 
     ev = events(bars, ind)
     fires = last_fires(ev)
-    outcomes = {h: forward_outcomes(bars, h) for h in horizons}
+    outcomes: dict[tuple, tuple] = {}
     baselines: dict[tuple, dict] = {}
 
-    def cached_baseline(h: int, regime: str | None) -> dict:
-        if (h, regime) not in baselines:
-            baselines[(h, regime)] = baseline(bars, h, regime_mask(bars, ind, regime), outcomes[h])
-        return baselines[(h, regime)]
+    def cached_outcomes(h: int, side: int) -> tuple:
+        if (h, side) not in outcomes:
+            outcomes[(h, side)] = forward_outcomes(bars, h, side)
+        return outcomes[(h, side)]
+
+    def cached_baseline(h: int, regime: str | None, side: int) -> dict:
+        if (h, regime, side) not in baselines:
+            baselines[(h, regime, side)] = baseline(bars, h, regime_mask(bars, ind, regime),
+                                                    cached_outcomes(h, side))
+        return baselines[(h, regime, side)]
 
     library = [{"id": s["id"], "name": s["name"],
                 "last_fired": _iso(bars.index[fires[s["id"]]]) if fires[s["id"]] is not None else None,
@@ -347,10 +357,11 @@ def build_signal_stats(ctx) -> dict:
         if regime is None:
             notes.append(f"{sid}: SMA200 side undefined on the fire date; stats use all days.")
         mask = regime_mask(bars, ind, regime)
+        side = -1 if spec["bias"] < 0 else 1
         per_h = {}
         for h in horizons:
-            sig = stats(bars, ind, sid, h, regime_mask=mask, ev=ev, outcomes=outcomes[h])
-            uncond, same = cached_baseline(h, None), cached_baseline(h, regime)
+            sig = stats(bars, ind, sid, h, regime_mask=mask, ev=ev, outcomes=cached_outcomes(h, side))
+            uncond, same = cached_baseline(h, None, side), cached_baseline(h, regime, side)
             per_h[h] = {**sig, "unconditional": uncond, "same_regime": same, "edge": edge(sig, same, uncond)}
         conf = per_h[primary]["confidence"]
         active.append({
@@ -358,6 +369,7 @@ def build_signal_stats(ctx) -> dict:
             "pillar": spec["pillar"], "rule": spec["rule"],
             "fired_date": _iso(bars.index[pos]), "bars_ago": n_bars - 1 - pos,
             "regime_used": regime or "all_days", "horizons": per_h,
+            "mae_basis": "highest high after entry" if side < 0 else "lowest low after entry",
             "confidence": conf, "scorable": conf != "insufficient",
         })
 

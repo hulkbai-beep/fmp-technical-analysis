@@ -24,11 +24,6 @@ import fetch
 import fmp_client
 import indicators
 
-WINDOW = getattr(C, "CROSSCHECK_WINDOW", 250)
-RSI_WARMUP = getattr(C, "CROSSCHECK_RSI_WARMUP", 250)
-SMA_TOL = getattr(C, "CROSSCHECK_SMA_TOL", 0.0001)   # share of the close
-RSI_TOL = getattr(C, "CROSSCHECK_RSI_TOL", 0.5)      # RSI points
-
 # key, endpoint, request params, FMP value field, compute_all column, label
 CHECKS = (
     ("sma50", "technical-indicators/sma", {"periodLength": 50, "timeframe": "1day"}, "sma", "sma50", "SMA(50)"),
@@ -57,7 +52,7 @@ def _fmp_series(data, field) -> pd.Series:
 
 
 def compare(ours: pd.Series, theirs: pd.Series, tol, skip_ours=0, skip_theirs=0,
-            window=WINDOW, rel_to: pd.Series | None = None) -> dict:
+            window=C.CROSSCHECK_WINDOW, rel_to: pd.Series | None = None) -> dict:
     """Summarise |ours - theirs| over the last `window` dates both series have, after dropping
     the first skip_ours / skip_theirs bars of each (warm-up). `tol` is an absolute tolerance,
     scalar or Series by date; with `rel_to`, the largest difference is also given as % of it."""
@@ -90,7 +85,7 @@ def crosscheck(client, ticker, now=None) -> dict:
     now = fetch.to_ny(now)
     symbol = ticker.strip().upper()
     calls_before = client.stats["network_calls"]
-    result = {"ticker": symbol, "status": "unavailable", "as_of": None, "window": WINDOW,
+    result = {"ticker": symbol, "status": "unavailable", "as_of": None, "window": C.CROSSCHECK_WINDOW,
               "indicators": {}, "notes": list(NOTES), "calls": 0}
 
     fmp, reasons = {}, []
@@ -126,11 +121,12 @@ def crosscheck(client, ticker, now=None) -> dict:
         if key not in fmp:
             continue
         if key == "sma50":
-            stats = compare(ours[column], fmp[key], SMA_TOL * bars["close"], rel_to=bars["close"])
-            tolerance = f"{SMA_TOL:.2%} of close"
+            stats = compare(ours[column], fmp[key], C.CROSSCHECK_SMA_TOL * bars["close"], rel_to=bars["close"])
+            tolerance = f"{C.CROSSCHECK_SMA_TOL:.2%} of close"
         else:
-            stats = compare(ours[column], fmp[key], RSI_TOL, skip_ours=RSI_WARMUP, skip_theirs=RSI_WARMUP)
-            tolerance = f"{RSI_TOL:g} points after a {RSI_WARMUP}-bar warm-up"
+            warmup = C.CROSSCHECK_RSI_WARMUP
+            stats = compare(ours[column], fmp[key], C.CROSSCHECK_RSI_TOL, skip_ours=warmup, skip_theirs=warmup)
+            tolerance = f"{C.CROSSCHECK_RSI_TOL:g} points after a {C.CROSSCHECK_RSI_WARMUP}-bar warm-up"
         result["indicators"][key] = {
             "label": label, "available": stats["n"] > 0, "tolerance": tolerance, **stats,
             "fmp_rows": int(len(fmp[key])), "fmp_first_date": fmp[key].index[0].strftime("%Y-%m-%d"),

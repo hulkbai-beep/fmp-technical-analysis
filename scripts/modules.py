@@ -17,13 +17,6 @@ import indicators as I
 import regime as R
 from regime import iso, last, num, pct
 
-# Mean-reversion state thresholds; values in config.py take precedence.
-MR_RSI14_OVERBOUGHT = getattr(C, "MR_RSI14_OVERBOUGHT", 70.0)
-MR_RSI14_OVERSOLD = getattr(C, "MR_RSI14_OVERSOLD", 30.0)
-MR_RSI2_OVERBOUGHT = getattr(C, "MR_RSI2_OVERBOUGHT", 90.0)
-MR_RSI2_OVERSOLD = getattr(C, "MR_RSI2_OVERSOLD", 10.0)
-MR_Z_EXTENDED = getattr(C, "MR_Z_EXTENDED", 2.0)
-
 VWAP_METHOD = "daily-bar approximation: typical price x volume"
 EARNINGS_METHOD = ("two-day move: adj close of the last bar before the report date -> adj close of the "
                    "first bar after it (FMP earnings has no before-open/after-close flag, so the window "
@@ -197,9 +190,9 @@ def build_mean_reversion(ctx) -> dict:
         bb_state = "above upper band" if pct_b > 1 else "below lower band" if pct_b < 0 else "inside bands"
     return {
         "available": True,
-        "rsi14": rsi14, "rsi14_state": _band_state(rsi14, MR_RSI14_OVERBOUGHT, MR_RSI14_OVERSOLD),
-        "rsi2": rsi2, "rsi2_state": _band_state(rsi2, MR_RSI2_OVERBOUGHT, MR_RSI2_OVERSOLD),
-        "z20": z20, "z20_state": _band_state(z20, MR_Z_EXTENDED, -MR_Z_EXTENDED),
+        "rsi14": rsi14, "rsi14_state": _band_state(rsi14, C.MR_RSI14_OVERBOUGHT, C.MR_RSI14_OVERSOLD),
+        "rsi2": rsi2, "rsi2_state": _band_state(rsi2, C.MR_RSI2_OVERBOUGHT, C.MR_RSI2_OVERSOLD),
+        "z20": z20, "z20_state": _band_state(z20, C.MR_Z_EXTENDED, -C.MR_Z_EXTENDED),
         "bb_pct_b": pct_b, "bb_state": bb_state,
         "dist_sma50_atr": _atr_units(close, sma50, atr),
         "notes": notes,

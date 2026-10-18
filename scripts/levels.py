@@ -1,7 +1,8 @@
 """
 Key levels (module H): fractal swing pivots, a volume profile, the 52-week range and unfilled
 gaps, plus the current SMA50/SMA200 and anchored VWAPs, merged into ranked support and resistance
-zones around the last close.
+zones around the last close. Candidates below and above the close are merged separately, so a
+support zone lies wholly below the close and a resistance zone wholly above it.
 
 Everything uses split-adjusted OHLC (the prices that actually traded, continuous across splits)
 over the last ctx["hz"]["levels_lookback"] bars, as of the last complete bar. Definitions are
@@ -16,8 +17,6 @@ import pandas as pd
 from numpy.lib.stride_tricks import sliding_window_view
 
 import config as C
-
-LEVEL_SOURCE_BONUS = getattr(C, "LEVEL_SOURCE_BONUS", 0.5)  # score per extra distinct source type
 
 PROFILE_NOTE = "approximation: each bar's volume spread evenly across its high-low range"
 PIVOT_NOTE = ("a pivot needs {k} bars on each side inside the data, so the last {k} bars cannot be "
@@ -229,7 +228,8 @@ def merge_levels(candidates: list[dict], atr: float, merge_atr: float = C.LEVEL_
 
     A candidate joins the current cluster when it is within merge_atr x atr of the cluster's
     running mean price (simple mean of members), otherwise it starts a new cluster. Cluster
-    price = mean of member prices; zone_low/zone_high = lowest/highest member price.
+    price = mean of member prices; zone_low/zone_high = lowest/highest member price, or a
+    member's own zone_low/zone_high when it carries one (a gap zone).
     """
     pts = sorted((c for c in candidates if _num(c.get("price")) is not None), key=lambda c: c["price"])
     tol = merge_atr * atr
@@ -247,9 +247,10 @@ def _mean_price(members: list[dict]) -> float:
 
 
 def _cluster(members: list[dict]) -> dict:
-    prices = [float(m["price"]) for m in members]
+    lows = [float(m.get("zone_low", m["price"])) for m in members]
+    highs = [float(m.get("zone_high", m["price"])) for m in members]
     sources = list(dict.fromkeys(m["source"] for m in members))
-    return {"price": _mean_price(members), "zone_low": min(prices), "zone_high": max(prices),
+    return {"price": _mean_price(members), "zone_low": min(lows), "zone_high": max(highs),
             "sources": sources, "source_types": list(dict.fromkeys(map(source_type, sources))),
             "n_candidates": len(members)}
 
@@ -261,7 +262,7 @@ def score_levels(clusters: list[dict], df: pd.DataFrame, profile: dict, atr: flo
     whose high or low lies in the band (a bar that only crosses it with its body does not
     count); volume_share = profile volume inside the band / total profile volume.
     score = touches / max touches + volume_share / max volume_share (over all clusters)
-            + LEVEL_SOURCE_BONUS x (distinct source types - 1).
+            + C.LEVEL_SOURCE_BONUS x (distinct source types - 1).
     """
     if not clusters:
         return []
@@ -280,19 +281,31 @@ def score_levels(clusters: list[dict], df: pd.DataFrame, profile: dict, atr: flo
     t_norm = touches / touches.max() if touches.max() > 0 else np.zeros(len(clusters))
     v_norm = share / share.max() if share.max() > 0 else np.zeros(len(clusters))
     return [{**c, "touches": int(t), "volume_share": float(v),
-             "score": float(tn + vn + LEVEL_SOURCE_BONUS * (len(c["source_types"]) - 1))}
+             "score": float(tn + vn + C.LEVEL_SOURCE_BONUS * (len(c["source_types"]) - 1))}
             for c, t, v, tn, vn in zip(clusters, touches, share, t_norm, v_norm)]
 
 
-def select_levels(clusters: list[dict], close: float, atr: float,
-                  per_side: int = C.LEVELS_PER_SIDE) -> tuple[list[dict], list[dict]]:
-    """(supports, resistances): the per_side clusters nearest the close below / above it, nearest
-    first, with signed distances (price / close - 1 and (price - close) / atr; negative below)."""
+def qualifies(cluster: dict, min_score: float = C.LEVEL_MIN_SCORE) -> bool:
+    """Strong enough to be a key level: score >= min_score, or the cluster holds the 52-week high
+    or low (structural extremes, which price has rarely revisited by construction)."""
+    extreme = {"high_52w", "low_52w"} & set(cluster.get("sources") or ())
+    return bool(extreme) or float(cluster.get("score") or 0.0) >= min_score
+
+
+def select_levels(clusters: list[dict], close: float, atr: float, per_side: int = C.LEVELS_PER_SIDE,
+                  min_score: float = C.LEVEL_MIN_SCORE) -> tuple[list[dict], list[dict]]:
+    """(supports, resistances): per side, the per_side qualifying clusters nearest the close,
+    nearest first, with signed distances (price / close - 1 and (price - close) / atr; negative below).
+
+    Supports lie wholly below the close (zone_high < close), resistances wholly above it
+    (zone_low > close); a zone containing the close belongs to neither side.
+    """
     def with_distance(c: dict) -> dict:
         return {**c, "distance_pct": c["price"] / close - 1.0, "distance_atr": (c["price"] - close) / atr}
 
-    below = sorted((c for c in clusters if c["price"] < close), key=lambda c: close - c["price"])
-    above = sorted((c for c in clusters if c["price"] > close), key=lambda c: c["price"] - close)
+    strong = [c for c in clusters if qualifies(c, min_score)]
+    below = sorted((c for c in strong if c.get("zone_high", c["price"]) < close), key=lambda c: close - c["price"])
+    above = sorted((c for c in strong if c.get("zone_low", c["price"]) > close), key=lambda c: c["price"] - close)
     return [with_distance(c) for c in below[:per_side]], [with_distance(c) for c in above[:per_side]]
 
 
@@ -307,18 +320,40 @@ def _range_52w(bars: pd.DataFrame, notes: list) -> dict:
 
 
 def _avwap_candidates(ctx, last_date: pd.Timestamp, notes: list) -> list[dict]:
-    """Anchored-VWAP values at the last bar from modules.anchored_vwap_series; none if it fails."""
+    """Anchored-VWAP values at the last bar from modules.anchored_vwap_series, for anchors at least
+    C.LEVEL_AVWAP_MIN_BARS bars old (a younger VWAP only averages the last few bars); none if it fails."""
     try:
         from modules import anchored_vwap_series
-        values = {name: _num(s.get(last_date)) for name, s in anchored_vwap_series(ctx).items()}
+        series = anchored_vwap_series(ctx)
     except Exception as exc:  # the levels stand without AVWAPs; record why they are missing
         notes.append(f"anchored VWAPs not used as level candidates ({type(exc).__name__}: {exc})")
         return []
-    return [{"price": v, "source": f"avwap_{name}"} for name, v in values.items() if v is not None]
+    out = []
+    for name, s in series.items():
+        s = s.loc[s.index <= last_date]
+        value, first = _num(s.get(last_date)), s.first_valid_index()
+        if value is None or first is None:
+            continue
+        age = int((s.index > first).sum())
+        if age < C.LEVEL_AVWAP_MIN_BARS:
+            notes.append(f"anchored VWAP {name} not used as a level: anchored {age} bar(s) ago "
+                         f"(needs {C.LEVEL_AVWAP_MIN_BARS})")
+            continue
+        out.append({"price": value, "source": f"avwap_{name}"})
+    return out
+
+
+def _gap_candidates(g: dict, atr: float) -> list[dict]:
+    """One zone candidate for a gap at most C.GAP_ZONE_MAX_ATR ATRs wide, else its two edges."""
+    if g["top"] - g["bottom"] <= C.GAP_ZONE_MAX_ATR * atr:
+        return [{"price": (g["top"] + g["bottom"]) / 2.0, "zone_low": g["bottom"], "zone_high": g["top"],
+                 "source": f"gap_{g['direction']}", "date": g["date"]}]
+    return [{"price": g["top"], "source": f"gap_{g['direction']}_top", "date": g["date"]},
+            {"price": g["bottom"], "source": f"gap_{g['direction']}_bottom", "date": g["date"]}]
 
 
 def _candidates(pivots: dict, profile: dict, r52: dict, gaps: list, ind_row: pd.Series,
-                avwaps: list, notes: list) -> list[dict]:
+                avwaps: list, atr: float, notes: list) -> list[dict]:
     cands = [{"price": p["price"], "source": "pivot_high", "date": p["date"]} for p in pivots["highs"]]
     cands += [{"price": p["price"], "source": "pivot_low", "date": p["date"]} for p in pivots["lows"]]
     if profile["available"]:
@@ -329,8 +364,7 @@ def _candidates(pivots: dict, profile: dict, r52: dict, gaps: list, ind_row: pd.
     cands += [{"price": r52["high_52w"], "source": "high_52w", "date": r52["high_52w_date"]},
               {"price": r52["low_52w"], "source": "low_52w", "date": r52["low_52w_date"]}]
     for g in gaps:
-        cands += [{"price": g["top"], "source": f"gap_{g['direction']}_top", "date": g["date"]},
-                  {"price": g["bottom"], "source": f"gap_{g['direction']}_bottom", "date": g["date"]}]
+        cands += _gap_candidates(g, atr)
     for name in ("sma50", "sma200"):
         v = _num(ind_row.get(name))
         if v is None:
@@ -350,11 +384,13 @@ def _extremes(bars: pd.DataFrame, r52: dict, close: float, near: float) -> dict:
             "at_all_time_low": at_low and bool(r52["low_52w"] <= bars["low"].min())}
 
 
-def _shortfall_note(side: str, n: int, extremes: dict) -> str:
+def _shortfall_note(side: str, n: int, weak: int, extremes: dict) -> str:
     """Note for a side with fewer than C.LEVELS_PER_SIDE levels, naming the extreme price is at."""
     word, where = ("high", "above") if side == "resistance" else ("low", "below")
     msg = (f"no {side} levels {where} the last close in the window" if n == 0
            else f"only {n} {side} level(s) {where} the last close in the window")
+    if weak:
+        msg += f" ({weak} weaker cluster(s) with score < {C.LEVEL_MIN_SCORE:g} not used)"
     if extremes[f"at_all_time_{word}"]:
         return f"price at an all-time {word} (available history): {msg}"
     if extremes[f"at_{word}_52w"]:
@@ -363,8 +399,9 @@ def _shortfall_note(side: str, n: int, extremes: dict) -> str:
 
 
 def build_levels(ctx) -> dict:
-    """H: pivots, volume profile, 52-week range and gaps merged into the nearest supports and
-    resistances (C.LEVELS_PER_SIDE each) around the last close."""
+    """H: pivots, volume profile, 52-week range, gaps, SMAs and anchored VWAPs merged into zones,
+    scored by touches and volume, and the nearest qualifying C.LEVELS_PER_SIDE supports and
+    resistances around the last close."""
     notes: list[str] = []
     bars = ctx.get("bars")
     if bars is not None and ctx.get("as_of"):
@@ -396,14 +433,20 @@ def build_levels(ctx) -> dict:
     r52 = _range_52w(bars, notes)
 
     avwaps = _avwap_candidates({**ctx, "bars": bars, "ind": ind}, last_date, notes)
-    candidates = _candidates(pivots, profile, r52, gaps, ind_row, avwaps, notes)
-    clusters = score_levels(merge_levels(candidates, atr, C.LEVEL_MERGE_ATR), window, profile, atr)
-    supports, resistances = select_levels(clusters, close, atr, C.LEVELS_PER_SIDE)
+    candidates = _candidates(pivots, profile, r52, gaps, ind_row, avwaps, atr, notes)
+    # each side is merged on its own, so no zone straddles the close; a candidate exactly at the
+    # close is on neither side
+    below = merge_levels([c for c in candidates if c["price"] < close], atr, C.LEVEL_MERGE_ATR)
+    above = merge_levels([c for c in candidates if c["price"] > close], atr, C.LEVEL_MERGE_ATR)
+    clusters = score_levels(below + above, window, profile, atr)
+    supports, resistances = select_levels(clusters, close, atr, C.LEVELS_PER_SIDE, C.LEVEL_MIN_SCORE)
 
     extremes = _extremes(bars, r52, close, C.LEVEL_MERGE_ATR * atr)
+    weak = {"support": sum(not qualifies(c, C.LEVEL_MIN_SCORE) for c in clusters[:len(below)]),
+            "resistance": sum(not qualifies(c, C.LEVEL_MIN_SCORE) for c in clusters[len(below):])}
     for side, levels in (("support", supports), ("resistance", resistances)):
         if len(levels) < C.LEVELS_PER_SIDE:
-            notes.append(_shortfall_note(side, len(levels), extremes))
+            notes.append(_shortfall_note(side, len(levels), weak[side], extremes))
 
     return {
         "available": True,
@@ -420,6 +463,9 @@ def build_levels(ctx) -> dict:
         "gaps": gaps,
         "candidates": candidates,
         "n_clusters": len(clusters),
+        "selection": {"min_score": C.LEVEL_MIN_SCORE, "weak_clusters": weak,
+                      "rule": f"nearest {C.LEVELS_PER_SIDE} per side among clusters with score >= "
+                              f"{C.LEVEL_MIN_SCORE:g} or holding the 52-week high/low"},
         "supports": supports,
         "resistances": resistances,
         "notes": notes,

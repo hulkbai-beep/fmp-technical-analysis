@@ -26,9 +26,6 @@ import indicators as I
 
 UI_DIR = Path(__file__).resolve().parents[1] / "ui"
 
-PRICE_DECIMALS = getattr(C, "CHART_PRICE_DECIMALS", 4)
-VALUE_SIG_DIGITS = getattr(C, "CHART_VALUE_SIG_DIGITS", 6)  # other floats: significant digits kept
-
 VWAP_NOTE = ("Anchored VWAPs are a daily-bar approximation: typical price (H+L+C)/3 x daily volume, "
              "cumulated from the anchor bar; not intraday VWAP.")
 PROFILE_NOTE = ("Volume profile is a daily-bar approximation: each bar's volume is spread evenly across "
@@ -54,7 +51,7 @@ def _num(x) -> float | None:
 
 def _px(x) -> float | None:
     v = _num(x)
-    return None if v is None else round(v, PRICE_DECIMALS)
+    return None if v is None else round(v, C.CHART_PRICE_DECIMALS)
 
 
 def _round(x, digits: int) -> float | None:
@@ -67,10 +64,11 @@ def _iso(ts) -> str:
 
 
 def _compact(v: float) -> float:
-    """v with VALUE_SIG_DIGITS significant digits but at least PRICE_DECIMALS decimals."""
+    """v with C.CHART_VALUE_SIG_DIGITS significant digits but at least C.CHART_PRICE_DECIMALS decimals."""
     if v == 0.0:
         return 0.0
-    return round(v, max(PRICE_DECIMALS, VALUE_SIG_DIGITS - 1 - math.floor(math.log10(abs(v)))))
+    digits = C.CHART_VALUE_SIG_DIGITS - 1 - math.floor(math.log10(abs(v)))
+    return round(v, max(C.CHART_PRICE_DECIMALS, digits))
 
 
 def json_safe(obj, compact: bool = True):
@@ -125,7 +123,8 @@ def _window(ctx) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
 
 
 def _candles(win: pd.DataFrame) -> list[list]:
-    o, h, l, c = (np.round(win[k].to_numpy(dtype=float), PRICE_DECIMALS) for k in ("open", "high", "low", "close"))
+    o, h, l, c = (np.round(win[k].to_numpy(dtype=float), C.CHART_PRICE_DECIMALS)
+                  for k in ("open", "high", "low", "close"))
     v = np.nan_to_num(win["volume"].to_numpy(dtype=float), nan=0.0)
     return [[_iso(d), float(o[i]), float(h[i]), float(l[i]), float(c[i]), int(round(v[i]))]
             for i, d in enumerate(win.index)]
@@ -163,7 +162,7 @@ def _avwap_series(ctx, modules: dict, bars: pd.DataFrame, ind: pd.DataFrame,
     for name, s in raw.items():
         s = s.loc[s.index >= start]
         if s.notna().any():
-            series[name] = _pairs(s, PRICE_DECIMALS)
+            series[name] = _pairs(s, C.CHART_PRICE_DECIMALS)
             first = s.first_valid_index()
             dates[name] = anchors.get(name) or (_iso(first) if first is not None else None)
     return series, dates
@@ -252,7 +251,8 @@ def _regime(modules: dict) -> dict:
             "strength": _get(rg, "strength", "label"), "adx": _get(rg, "strength", "adx"),
             "vol_label": _get(rg, "volatility", "label"), "vol_pctl": _get(rg, "volatility", "vol_pctl"),
             "rv20": _get(rg, "volatility", "rv20"), "compression": _get(rg, "volatility", "compression"),
-            "weekly_direction": _get(mtf, "weekly", "direction"), "alignment": mtf.get("alignment"),
+            "weekly_direction": _get(mtf, "weekly", "direction"), "weekly_sign": _get(mtf, "weekly", "sign"),
+            "alignment": mtf.get("alignment"),
             "mtf_note": mtf.get("note")}
 
 
@@ -264,13 +264,22 @@ def _scorecard(modules: dict) -> dict:
     weights = sc.get("weights") or {}
     order = [p for p in C.PILLARS if p in pillars] + [p for p in pillars if p not in C.PILLARS]
     conf = sc.get("confidence") or {}
+    # reasons stay in English; the structured fields (votes, inputs, factors, key/params) let
+    # ui/i18n.js write them in Chinese
+    pillar_keys = ("score", "raw_score", "reason", "available", "mode", "votes", "inputs", "missing",
+                   "not_applicable", "nudges")
     return {
         "available": True,
-        "pillars": [{"name": p, "score": _get(pillars, p, "score"), "reason": _get(pillars, p, "reason"),
-                     "weight": weights.get(p)} for p in order],
+        "pillars": [{"name": p, **{k: _get(pillars, p, k) for k in pillar_keys}, "weight": weights.get(p)}
+                    for p in order],
         "weighted_score": sc.get("weighted_score"), "bias": sc.get("bias"),
-        "confidence": {"level": conf.get("level"), "reasons": conf.get("reasons") or []},
-        "conflicts": [c.get("description") if isinstance(c, dict) else str(c) for c in sc.get("conflicts") or []],
+        "confidence": {"level": conf.get("level"), "reasons": conf.get("reasons") or [],
+                       "factors": conf.get("factors") or []},
+        "conflicts": [{k: c.get(k) for k in ("type", "key", "params", "description", "typical_meaning")}
+                      if isinstance(c, dict) else {"description": str(c), "typical_meaning": None}
+                      for c in sc.get("conflicts") or []],
+        "consts": {"slope_bars": C.SLOPE_BARS, "percentile_window": C.PERCENTILE_WINDOW,
+                   "divergence_lookback": C.DIVERGENCE_LOOKBACK},
     }
 
 
@@ -377,9 +386,9 @@ def build_chart_data(ctx, modules: dict) -> dict:
         "default_timeframe": hz.get("chart_timeframe", "daily"),
         "candles": _candles(win),
         "weekly": _weekly(bars, start),
-        "sma20": _pairs(iw["sma20"], PRICE_DECIMALS),
-        "sma50": _pairs(iw["sma50"], PRICE_DECIMALS),
-        "sma200": _pairs(iw["sma200"], PRICE_DECIMALS),
+        "sma20": _pairs(iw["sma20"], C.CHART_PRICE_DECIMALS),
+        "sma50": _pairs(iw["sma50"], C.CHART_PRICE_DECIMALS),
+        "sma200": _pairs(iw["sma200"], C.CHART_PRICE_DECIMALS),
         "avwaps": avwaps,
         "avwap_anchors": avwap_anchors,
         "levels": levels,

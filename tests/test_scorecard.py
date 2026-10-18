@@ -615,3 +615,36 @@ def test_pipeline_on_synthetic_bars():
     assert sc["available"] and risk["available"]
     assert sc["bull"]["trigger"]["level"] > bars["close"].iloc[-1] > sc["bear"]["trigger"]["level"]
     json.dumps([card, sc, risk])                               # plain Python types only
+
+
+def test_risk_flags_a_stop_wider_than_the_risk_budget():
+    m = modules_for(1)
+    big = 50_000.0
+    m["levels"].update(supports=[{"price": big * 0.95, "zone_low": big * 0.95, "zone_high": big * 0.95,
+                                  "sources": ["pivot_low"]}], resistances=[], last_close=big)
+    m["volatility"]["atr14"] = 1_000.0
+    m["trend_momentum"]["close"] = m["regime"]["direction"]["close"] = big
+    lg = S.build_risk(ctx_for(), m, None)["long_side"]
+    ex = lg["position_size_example"]
+    # stop = 47,500 - 500 = 47,000 -> 3,000 per share > the $1,000 budget
+    assert ex["shares"] == 0 and ex["fractional_shares"] == pytest.approx(1 / 3)
+    assert "exceeds the $1,000 risk budget" in ex["flag"] and "0.33 shares" in ex["flag"]
+    assert any("no whole-share position fits" in n for n in lg["notes"])
+
+
+@pytest.mark.parametrize("on, compression, phrase, missing", [
+    (False, None, "no squeeze (compression unknown", "compression (BB-width percentile)"),
+    (None, False, "no compression (squeeze state unknown)", "squeeze state"),
+    (False, False, "no squeeze or compression", None),
+])
+def test_volatility_setup_says_when_squeeze_or_compression_is_unknown(on, compression, phrase, missing):
+    m = modules_for(1)
+    m["volatility"]["squeeze"] = {"on": on, "bars": 0, "last_release": None}
+    m["volatility"]["bb_width_pctl"] = None
+    m["regime"]["volatility"].update(compression=compression, bb_width_pctl=None)
+    pil = S.build_scorecard(ctx_for(), m)["pillars"]["volatility_setup"]
+    assert pil["score"] == 0 and phrase in pil["reason"]
+    if missing:
+        assert f"unavailable: {missing}" in pil["reason"]
+    else:
+        assert "unavailable" not in pil["reason"]

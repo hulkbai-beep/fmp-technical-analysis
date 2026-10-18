@@ -240,6 +240,18 @@ def test_forward_return_and_mae_arithmetic():
     assert np.isnan(fwd[7:]).all() and np.isnan(mae[7:]).all()
 
 
+def test_bearish_mae_is_the_highest_high_after_entry():
+    b = hand_bars()
+    b["adj_high"] = b["adj_close"] + 1.0
+    fwd, mae = S.forward_outcomes(b, 3, bias=-1)
+    assert fwd[0] == pytest.approx(105 / 100 - 1)            # forward return does not depend on the side
+    assert mae[0] == pytest.approx(106 / 100 - 1)            # max(adj_high[1..3]) = 105 + 1
+    assert mae[5] == pytest.approx(121 / 108 - 1)
+    b.loc[b.index[2], "adj_high"] = np.nan
+    _, mae2 = S.forward_outcomes(b, 3, bias=-1)
+    assert mae2[0] == pytest.approx(51 / 50 - 1)             # adj window incomplete -> high / close
+
+
 def test_forward_return_falls_back_to_close():
     b = hand_bars()
     put(b, 3, adj_close=np.nan, close=55.0)
@@ -264,7 +276,8 @@ def test_stats_declusters_and_drops_events_without_outcome():
     assert st["mean"] == pytest.approx(np.mean(fwd))
     assert st["hit_rate"] == 1.0
     assert st["p25"] == pytest.approx(np.percentile(fwd, 25))
-    assert st["median_mae"] == pytest.approx(np.median([97 / 100 - 1, 106 / 110 - 1]))
+    # extension_2sigma is bearish: its adverse excursion is the highest high after entry
+    assert st["median_mae"] == pytest.approx(np.median([105 / 100 - 1, 115 / 110 - 1]))
     assert st["dates_sample"] == [S._iso(b.index[0]), S._iso(b.index[4])]
     assert st["confidence"] == "insufficient"
 
@@ -408,6 +421,22 @@ def test_build_on_synthetic_history():
         assert hz["n"] <= hz["same_regime"]["n"] <= hz["unconditional"]["n"]
     assert a["confidence"] == a["horizons"][60]["confidence"]
     json.dumps(out, allow_nan=False)
+
+
+def test_bearish_signal_and_its_baselines_measure_mae_on_highs():
+    pytest.importorskip("indicators", reason="indicators.py not available yet")
+    import indicators as I
+    full = synthetic_bars(1500, seed=5)
+    ind_full = I.compute_all(full)
+    t = int(np.flatnonzero(S.events(full, ind_full)["extension_2sigma"].to_numpy())[-1])
+    bars, ind = full.iloc[:t + 1], ind_full.iloc[:t + 1]
+    a = next(x for x in S.build_signal_stats(dict(ticker="SYN", bars=bars, ind=ind, hz=C.HORIZONS["swing"]))["active"]
+             if x["id"] == "extension_2sigma")
+    assert a["mae_basis"] == "highest high after entry"
+    hz = a["horizons"][10]
+    _, high_side = S.forward_outcomes(bars, 10, bias=-1)
+    assert hz["unconditional"]["median_mae"] == pytest.approx(np.nanmedian(high_side))
+    assert hz["median_mae"] > 0 and hz["unconditional"]["median_mae"] > 0   # a rise is adverse here
 
 
 def test_empty_history_is_unavailable():

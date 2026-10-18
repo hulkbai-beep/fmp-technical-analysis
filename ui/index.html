@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>技术分析</title>
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="chart.css">
 </head>
 <body>
@@ -81,6 +82,7 @@ $("#f").addEventListener("submit", async e => {
     const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
     if (!res.ok || data.error) throw new Error(data.error || res.statusText);
     result = data;
+    setTitle();
     show();
     history.replaceState(null, "", `?symbol=${encodeURIComponent(sym)}&horizon=${horizon}`);
   } catch (err) {
@@ -93,8 +95,9 @@ $("#f").addEventListener("submit", async e => {
 
 I.bindToggle($("#ta-lang"));
 I.applyStatic(document);
-I.onChange(() => { document.title = t("app_title"); show(); });
-document.title = t("app_title");
+const setTitle = () => { document.title = (result ? result.chart.meta.ticker + " · " : "") + t("app_title"); };
+I.onChange(() => { setTitle(); show(); });
+setTitle();
 const params = new URLSearchParams(location.search);
 if (params.get("horizon") === "swing" || params.get("horizon") === "position") horizon = params.get("horizon");
 paintHorizon();

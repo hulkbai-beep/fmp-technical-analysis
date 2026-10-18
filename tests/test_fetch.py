@@ -2,7 +2,6 @@
 import json
 import os
 from datetime import datetime
-from functools import lru_cache
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -13,136 +12,7 @@ import config as C
 import fetch
 import fmp_client
 from conftest import synthetic_bars
-
-NY = "America/New_York"
-NOW = pd.Timestamp("2026-10-16 18:00", tz=NY)          # Friday, after the close buffer
-FMP_ROW_CAP = 5000                                      # what the real endpoint returns at most
-FULL, ADJ = fetch.FULL, fetch.ADJUSTED
-
-
-# ---------------------------------------------------------------------------- synthetic FMP
-@lru_cache(maxsize=None)
-def series(start, end="2026-10-16", seed=1, volume=None):
-    """Synthetic daily bars on business days start..end (adj_* = 0.98 x split-adjusted)."""
-    n = len(pd.bdate_range(start, end))
-    df = synthetic_bars(n=n, seed=seed, start=start)
-    return df if volume is None else df.assign(volume=float(volume))
-
-
-def profile_row(symbol, sector="Technology", ipo="1980-12-12", etf=False):
-    return {
-        "symbol": symbol, "price": 100.0, "marketCap": 1e11, "beta": 1.1, "lastDividend": 1.0,
-        "range": "80-120", "change": 0.5, "changePercentage": 0.5, "volume": 1_000_000,
-        "averageVolume": 1_000_000, "companyName": f"{symbol} Inc.", "currency": "USD",
-        "cik": "0000000001", "isin": "US0000000001", "cusip": "000000001",
-        "exchangeFullName": "NASDAQ Global Select", "exchange": "NASDAQ", "industry": "Software",
-        "website": "https://example.com", "description": "Synthetic.", "ceo": "A. Person",
-        "sector": sector, "country": "US", "fullTimeEmployees": "1000", "phone": "000",
-        "address": "1 Main St", "city": "Town", "state": "CA", "zip": "00000", "image": "",
-        "ipoDate": ipo, "defaultImage": False, "isEtf": etf, "isActivelyTrading": True,
-        "isAdr": False, "isFund": False,
-    }
-
-
-def quote_row(symbol):
-    return {"symbol": symbol, "name": symbol, "price": 100.0, "changePercentage": 0.5, "change": 0.5,
-            "volume": 1_000_000, "dayLow": 99.0, "dayHigh": 101.0, "yearHigh": 120.0, "yearLow": 80.0,
-            "marketCap": 1e11, "priceAvg50": 98.0, "priceAvg200": 95.0, "exchange": "NASDAQ",
-            "open": 99.5, "previousClose": 99.5, "timestamp": 1792180800}
-
-
-def earnings_rows(symbol):
-    """Newest first, with an upcoming report (epsActual null)."""
-    return [
-        {"symbol": symbol, "date": "2026-11-02", "epsActual": None, "epsEstimated": 1.6,
-         "revenueActual": None, "revenueEstimated": 1.0e11, "lastUpdated": "2026-10-16"},
-        {"symbol": symbol, "date": "2026-07-30", "epsActual": 1.5, "epsEstimated": 1.4,
-         "revenueActual": 9.5e10, "revenueEstimated": 9.4e10, "lastUpdated": "2026-07-31"},
-        {"symbol": symbol, "date": "2026-05-01", "epsActual": 1.3, "epsEstimated": 1.35,
-         "revenueActual": 9.0e10, "revenueEstimated": 9.1e10, "lastUpdated": "2026-05-02"},
-    ]
-
-
-class FakeClient:
-    """Stands in for fmp_client.FMPClient: serves FMP-shaped JSON (EOD rows newest first, the
-    newest FMP_ROW_CAP rows within from..to) and counts every request as a network call."""
-
-    def __init__(self, prices, profiles=None, quotes=None, earnings=None, adjusted=None,
-                 blocked=(), indicator_rows=None):
-        self.prices, self.adjusted = prices, adjusted or {}
-        self.profiles, self.quotes, self.earnings = profiles or {}, quotes or {}, earnings or {}
-        self.blocked = set(blocked)            # endpoint or (endpoint, symbol) -> 403-style restriction
-        self.indicator_rows = indicator_rows or {}
-        self.stats = {"network_calls": 0, "cache_hits": 0}
-        self.restricted, self.errors, self.requests = [], [], []
-
-    def get(self, endpoint, ttl=None, **params):
-        self.stats["network_calls"] += 1
-        self.requests.append((endpoint, dict(params)))
-        sym = params.get("symbol")
-        if endpoint in self.blocked or (endpoint, sym) in self.blocked:
-            raise fmp_client.RestrictedEndpoint(f"{endpoint}: not included in your plan (Premium endpoint)")
-        if endpoint == "profile":
-            return [self.profiles[sym]] if sym in self.profiles else []
-        if endpoint == "quote":
-            return [self.quotes[sym]] if sym in self.quotes else []
-        if endpoint == "earnings":
-            return self.earnings.get(sym, [])
-        if endpoint.startswith("technical-indicators/"):
-            return self.indicator_rows.get((endpoint, sym), [])
-        if endpoint in (FULL, ADJ):
-            return self._eod(endpoint, sym, params)
-        raise fmp_client.FMPError(f"HTTP 404 on {endpoint}")
-
-    def try_get(self, endpoint, **params):
-        return fmp_client.get_with_reason(self, endpoint, **params)[0]
-
-    def record_failure(self, endpoint, exc, params):
-        (self.restricted if isinstance(exc, fmp_client.RestrictedEndpoint) else self.errors).append(endpoint)
-
-    def describe(self):
-        return {"route": "fake", "base": "fake://", "prefix": "stable", "auth_style": "header",
-                "source": "test", "tls_verify": True}
-
-    def _eod(self, endpoint, sym, params):
-        df = (self.adjusted.get(sym) if endpoint == ADJ else None)
-        df = self.prices.get(sym) if df is None else df
-        if df is None:
-            return []
-        lo, hi = pd.Timestamp(params["from"]), pd.Timestamp(params["to"])
-        win = df[(df.index >= lo) & (df.index <= hi)].iloc[::-1].head(FMP_ROW_CAP)
-        dates = win.index.strftime("%Y-%m-%d")
-        if endpoint == FULL:
-            change = (win["close"] - win["open"]).to_numpy()
-            vwap = win[["open", "high", "low", "close"]].mean(axis=1).to_numpy()
-            return [{"symbol": sym, "date": d, "open": o, "high": h, "low": l, "close": c, "volume": v,
-                     "change": ch, "changePercent": ch / o * 100, "vwap": vw}
-                    for d, o, h, l, c, v, ch, vw in zip(dates, win["open"], win["high"], win["low"],
-                                                        win["close"], win["volume"], change, vwap)]
-        return [{"symbol": sym, "date": d, "adjOpen": o, "adjHigh": h, "adjLow": l, "adjClose": c, "volume": v}
-                for d, o, h, l, c, v in zip(dates, win["adj_open"], win["adj_high"], win["adj_low"],
-                                            win["adj_close"], win["volume"])]
-
-    def calls_to(self, endpoint, symbol):
-        return [p for e, p in self.requests if e == endpoint and p.get("symbol") == symbol]
-
-
-def market(stock="ACME", stock_start="1996-10-01", end="2026-10-16", profile=None, **kw):
-    """A fake FMP with one stock (30 years by default), SPY, XLK and ^VIX."""
-    prices = {
-        stock: series(stock_start, end, seed=3),
-        "SPY": series("1993-01-29", end, seed=5),
-        "XLK": series("1998-12-22", end, seed=7),
-        C.VIX: series("2000-01-03", end, seed=9, volume=0),
-    }
-    prices.update(kw.pop("prices", {}))
-    profiles = {stock: profile or profile_row(stock), "SPY": profile_row("SPY", "Financial Services", "1993-01-22", etf=True)}
-    return FakeClient(prices, profiles=profiles, quotes={stock: quote_row(stock), "SPY": quote_row("SPY")},
-                      earnings={stock: earnings_rows(stock)}, **kw)
-
-
-def day(ts):
-    return pd.Timestamp(ts).strftime("%Y-%m-%d")
+from fakes import ADJ, FMP_ROW_CAP, FULL, NOW, NY, FakeClient, day, market, profile_row, series
 
 
 # ---------------------------------------------------------------------------- chunked history
@@ -167,7 +37,7 @@ def test_normal_stock_uses_ten_calls():
     assert [e for e, _ in fake.requests] == ["profile", "quote", "earnings", FULL, FULL, ADJ, ADJ, ADJ, ADJ, FULL]
     assert out["sector_etf"] == "XLK" and out["sector"] is not None and out["spy"] is not None
     assert out["skipped"] == {}
-    assert out["connection"]["route"] == "fake"
+    assert out["connection"] == fake.describe() and out["connection"]["route"] == "official FMP API"
 
 
 def test_ipo_date_short_circuits_the_older_chunk():
@@ -226,7 +96,19 @@ def test_shorter_adjusted_history_leaves_nan_and_is_reported():
     assert bars.loc[:"2009-12-31", "adj_close"].isna().all()
     assert bars.loc["2010-01-04":, "adj_close"].notna().all()
     assert 0 < out["data_quality"]["adj_coverage"] < 1
-    assert any("cover" in n and "2010-01-04" in n for n in out["notes"])
+    missing = out["data_quality"]["adj_missing"]
+    assert missing["count"] == len(bars.loc[:"2010-01-03"]) and missing["latest"] == "2010-01-01"
+    assert any("dividend-adjusted prices start 2010-01-04" in n for n in out["notes"])
+
+
+def test_missing_latest_adjusted_bars_are_counted_not_rounded_away():
+    adj = series("1996-10-01", seed=3).iloc[:-3]                 # /dividend-adjusted lags /full by 3 days
+    out = fetch.load_all(market(adjusted={"ACME": adj}), "ACME", now=NOW)
+    dq = out["data_quality"]
+    assert dq["adj_missing"]["count"] == 3 and dq["adj_missing"]["latest"] == "2026-10-16"
+    assert any(f"3 of {dq['rows']} bars have no dividend-adjusted prices (latest 2026-10-16)" in n
+               for n in out["notes"])
+    assert not any("100.0%" in n for n in out["notes"])
 
 
 def test_restricted_adjusted_endpoint_falls_back_to_price_returns():
@@ -258,8 +140,9 @@ def test_spy_as_ticker_reuses_its_own_bars_as_benchmark():
     bench_from = day(NOW.tz_localize(None).normalize() - pd.DateOffset(years=C.BENCHMARK_YEARS))
     assert not [p for p in fake.calls_to(ADJ, "SPY") if p["from"] == bench_from]
     assert out["calls"] == 7      # profile, quote, 2 x /full, 2 x /dividend-adjusted, ^VIX
-    np.testing.assert_allclose(out["spy"]["close"].to_numpy(), out["bars"]["adj_close"].to_numpy())
-    np.testing.assert_allclose(out["spy"]["adj_close"].to_numpy(), out["spy"]["close"].to_numpy())
+    # the very bars the regime uses (split-adjusted close; adj_close for returns)
+    pd.testing.assert_frame_equal(out["spy"], out["bars"])
+    assert out["data_quality"]["benchmark_basis"]["SPY"].startswith("split-adjusted")
 
 
 def test_vix_uses_caret_symbol_on_full_and_skips_volume_checks():
@@ -273,14 +156,37 @@ def test_vix_uses_caret_symbol_on_full_and_skips_volume_checks():
     assert out["vix"].index[0] >= pd.Timestamp("2021-10-16")
 
 
-def test_restricted_sector_etf_is_recorded_not_fabricated():
+def test_restricted_sector_etf_falls_back_to_split_adjusted_prices():
     fake = market(blocked={(ADJ, "XLK")})
+    out = fetch.load_all(fake, "ACME", now=NOW)
+    assert out["sector_etf"] == "XLK" and "sector" not in out["skipped"]
+    np.testing.assert_allclose(out["sector"]["close"].to_numpy(), out["sector"]["adj_close"].to_numpy())
+    xlk = series("1998-12-22", seed=7)
+    assert out["sector"]["close"].iloc[-1] == pytest.approx(xlk["close"].iloc[-1])   # /full, not adjClose
+    assert out["data_quality"]["benchmark_basis"] == {"SPY": "dividend-adjusted", "XLK": "split-adjusted"}
+    assert any(n.startswith("XLK: no dividend-adjusted prices (restricted:") and "price-only" in n
+               and "overstated" in n for n in out["notes"])
+    assert fake.restricted == [ADJ] and len(fake.calls_to(FULL, "XLK")) == 1
+
+
+def test_sector_etf_missing_on_both_endpoints_is_recorded_not_fabricated():
+    fake = market(blocked={(ADJ, "XLK"), (FULL, "XLK")})
     out = fetch.load_all(fake, "ACME", now=NOW)
     assert out["sector"] is None and out["sector_etf"] is None
     assert out["skipped"]["sector"].startswith("XLK data unavailable (restricted:")
     assert any(n.startswith("sector: XLK data unavailable") for n in out["notes"])
-    assert fake.restricted == [ADJ]
     assert out["spy"] is not None and out["vix"] is not None
+
+
+def test_plan_without_dividend_adjusted_keeps_every_benchmark_on_full_prices():
+    fake = market(blocked={ADJ})
+    out = fetch.load_all(fake, "ACME", now=NOW)
+    assert out["spy"] is not None and out["sector"] is not None and out["sector_etf"] == "XLK"
+    assert set(out["skipped"]) == set()
+    assert out["data_quality"]["benchmark_basis"] == {"SPY": "split-adjusted", "XLK": "split-adjusted"}
+    assert not fake.calls_to(ADJ, "SPY") and not fake.calls_to(ADJ, "XLK")   # known restricted: not retried
+    assert out["calls"] == 9         # profile, quote, earnings, 2 x /full, 1 x /dividend-adjusted, SPY, XLK, ^VIX
+    assert not any("overstated" in n for n in out["notes"])                 # stock is price-only too
 
 
 def test_unmapped_sector_and_empty_earnings_are_skipped():
@@ -399,7 +305,7 @@ def test_volume_check_can_be_disabled():
 def test_illiquid_names_are_flagged():
     _, dq = fetch.validate(_bars(volume=20_000.0, price=5.0), now_ny=NOW, symbol="TINY")
     liq = dq["liquidity"]
-    assert liq["illiquid"] is True and liq["bars"] == fetch.LIQUIDITY_BARS
+    assert liq["illiquid"] is True and liq["bars"] == C.LIQUIDITY_BARS
     assert liq["avg_volume"] == pytest.approx(20_000.0)
     assert "shares" in liq["reason"] and "dollar volume" in liq["reason"]
     assert any(w.startswith("TINY: illiquid") for w in dq["warnings"])
@@ -467,10 +373,10 @@ def test_technical_indicators_follow_the_session_rule(client):
     assert _get_at(client, "2026-10-16T10:00", "2026-10-16T17:00", "technical-indicators/sma", **params) == 2
 
 
-def test_quote_uses_a_five_minute_ttl(client):
+def test_quote_follows_the_session_rule(client):
     params = {"symbol": "ACME"}
-    assert _get_at(client, "2026-10-16T10:00", "2026-10-16T10:04", "quote", **params) == 1
-    client._now_ny = lambda: _ny("2026-10-16T10:06")
+    assert _get_at(client, "2026-10-16T10:00", "2026-10-16T14:00", "quote", **params) == 1   # same session
+    client._now_ny = lambda: _ny("2026-10-16T16:30")                                       # close has passed
     client.get("quote", **params)
     assert client.stats["network_calls"] == 2
 
@@ -514,6 +420,62 @@ def test_restricted_and_retry_behaviour(client):
         fmp_client.get_with_reason(client, "quote", symbol="ACME")
 
 
+def test_earnings_follow_the_session_rule(client):
+    params = {"symbol": "ACME"}
+    assert _get_at(client, "2026-10-16T03:00", "2026-10-16T15:30", "earnings", **params) == 1   # same day
+    client._now_ny = lambda: _ny("2026-10-16T16:30")             # after the close: actuals may be new
+    client.get("earnings", **params)
+    assert client.stats["network_calls"] == 2
+
+
+def test_unreachable_host_fails_fast_for_the_rest_of_the_run(client, monkeypatch, capsys):
+    import urllib.error
+    slept, attempts = [], []
+    monkeypatch.setattr(fmp_client.time, "sleep", slept.append)
+
+    def down(url, style=None):
+        attempts.append(url)
+        raise urllib.error.URLError(TimeoutError("timed out"))
+
+    client._http_get = down
+    with pytest.raises(fmp_client.Unreachable, match="cannot reach .*tried twice"):
+        fmp_client.get_with_reason(client, "profile", symbol="ACME")      # optional data still raises
+    assert len(attempts) == fmp_client.NETWORK_ATTEMPTS and sum(slept) <= 1
+    assert "retrying once" in capsys.readouterr().err
+    with pytest.raises(fmp_client.Unreachable):
+        client.get("quote", symbol="ACME")
+    assert len(attempts) == fmp_client.NETWORK_ATTEMPTS                    # no further request was sent
+    with pytest.raises(fmp_client.Unreachable):
+        fetch.load_all(client, "ACME", now=NOW)
+
+
+def test_a_single_dropped_connection_is_retried(client, monkeypatch):
+    import urllib.error
+    replies = [urllib.error.URLError(ConnectionResetError("reset")), (200, "[]")]
+
+    def flaky(url, style=None):
+        r = replies.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    client._http_get = flaky
+    assert client.get("profile", symbol="ACME") == [] and client.unreachable is None
+
+
+def test_tls_verification_cannot_be_turned_off_for_the_official_host(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("FMP_TLS_VERIFY", "0")
+    monkeypatch.delenv("FMP_BASE_URL", raising=False)
+    official = fmp_client.FMPClient(api_key=KEY, cache_dir=tmp_path)
+    assert official.tls_verify is True and official._ssl_ctx is None
+    assert "ignored" in capsys.readouterr().err
+    monkeypatch.setenv("FMP_BASE_URL", "https://54.236.92.205")
+    monkeypatch.setenv("FMP_PATH_PREFIX", "stable")
+    monkeypatch.setenv("FMP_AUTH_STYLE", "header")
+    proxy = fmp_client.FMPClient(api_key=KEY, cache_dir=tmp_path)
+    assert proxy.tls_verify is False and proxy._ssl_ctx is not None
+
+
 # ---------------------------------------------------------------------------- crosscheck
 def _indicator_rows(df, field, values):
     """FMP technical-indicator shape: newest first, date with a time part."""
@@ -549,7 +511,7 @@ def test_crosscheck_matches_fmp_shaped_indicators():
     res = crosscheck.crosscheck(market(indicator_rows=rows), "ACME", now=NOW)
     assert res["status"] == "ok" and res["as_of"] == "2026-10-16"
     sma, rsi = res["indicators"]["sma50"], res["indicators"]["rsi14"]
-    assert sma["n"] == rsi["n"] == crosscheck.WINDOW
+    assert sma["n"] == rsi["n"] == C.CROSSCHECK_WINDOW
     assert sma["share_within_tol"] == 1.0 and sma["max_abs_diff"] < 1e-9
     assert rsi["share_within_tol"] == 1.0 and rsi["max_abs_diff"] < 0.01
     assert "path-dependent" in " ".join(res["notes"])

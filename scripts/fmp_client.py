@@ -6,11 +6,15 @@ technical-analysis skill (a trimmed copy of the fundamental skill's client).
 - Standard library only; works on Windows, macOS and Linux.
 - The API key is read from the FMP_API_KEY environment variable. It never appears
   in cache files, file names or printed output.
-- Responses are cached on disk. Daily price data is reused for the rest of the New York
-  day, except that a response cached before the close buffer (config.MARKET_CLOSE_BUFFER)
-  is refetched once the close has passed, so an intraday run cannot freeze a partial bar.
+- Responses are cached on disk. Daily price data, the quote and the earnings calendar are
+  reused for the rest of the New York day (a same-day re-run makes no requests), except that
+  a response cached before the close buffer (config.MARKET_CLOSE_BUFFER) is refetched once
+  the close has passed, so an intraday run cannot freeze a partial bar.
 - Endpoints that your plan does not include raise RestrictedEndpoint
   (or return None via try_get) instead of crashing an analysis.
+- A host that sends no HTTP response (timeout, refused, DNS) is tried twice; after that the
+  client raises Unreachable at once for every later request, so a down proxy fails a run in
+  about one timeout instead of retrying each endpoint.
 
 Connection settings (environment variables):
   FMP_API_KEY       required. Official FMP key, or the token a proxy service gave you.
@@ -20,7 +24,8 @@ Connection settings (environment variables):
   FMP_AUTH_STYLE    how the key is sent: header | bearer | x-api-key | query
                     (default "header" = FMP's apikey header; auto-detected for proxies)
   FMP_TLS_VERIFY    "0" turns off HTTPS certificate verification (needed for many
-                    bare-IP proxies; less secure). Default "1".
+                    bare-IP proxies; less secure). Default "1". Ignored for the official
+                    FMP host, whose certificate is always verified.
   FMP_MAX_PER_MIN   request rate cap shared by all threads (default 280).
   FMP_TIMEOUT       seconds to wait for each response (default 30).
   FMP_CACHE_DIR     cache folder (default ~/.cache/fmp-technical).
@@ -57,14 +62,14 @@ PREFIX_CANDIDATES = ("stable", "")
 USER_AGENT = "technical-analysis-skill/1.0"
 
 DAY = 86400
-TTL_BY_ENDPOINT = {
-    "quote": 300,
-    "profile": DAY,
-    "earnings": DAY // 2,
-}
+TTL_BY_ENDPOINT = {"profile": DAY}
 DEFAULT_TTL = DAY
-# Daily-bar endpoints: cached until the New York session they belong to is over (see _same_session).
-SESSION_ENDPOINTS = ("historical-price-eod/", "technical-indicators/")
+# Daily-bar endpoints, the quote and earnings: cached until the New York session they belong to
+# is over (see _same_session). The quote carries its own timestamp, which the snapshot reports;
+# earnings actuals posted after the close are picked up by the post-close refetch.
+SESSION_ENDPOINTS = ("historical-price-eod/", "technical-indicators/", "quote", "earnings")
+NETWORK_ATTEMPTS = 2   # tries per request when no HTTP response arrives (timeout, refused, DNS)
+HTTP_ATTEMPTS = 4      # tries per request on HTTP 429 / 5xx
 
 # Phrases FMP uses when a plan does not cover an endpoint, symbol or parameter.
 RESTRICTED_MARKERS = (
@@ -87,6 +92,10 @@ class RestrictedEndpoint(FMPError):
 
 class InvalidKey(FMPError):
     """Missing or rejected API key."""
+
+
+class Unreachable(FMPError):
+    """The host sent no HTTP response; nothing else in this run can work either."""
 
 
 def default_cache_dir() -> Path:
@@ -167,6 +176,7 @@ class FMPClient:
         self.stats = {"network_calls": 0, "cache_hits": 0}
         self.restricted = []  # endpoints skipped because the plan lacks them
         self.errors = []      # optional endpoints that failed for other reasons
+        self.unreachable = None  # message once a request got no HTTP response; later requests fail fast
 
         base = (os.environ.get("FMP_BASE_URL") or OFFICIAL_BASE).strip().rstrip("/")
         if "://" not in base:
@@ -175,6 +185,10 @@ class FMPClient:
         self.host = urllib.parse.urlparse(base).hostname or base
         self.is_official = self.host.lower() in OFFICIAL_HOSTS
         self.tls_verify = _env_flag("FMP_TLS_VERIFY", True)
+        if not self.tls_verify and self.is_official:
+            print(f"[fmp] FMP_TLS_VERIFY=0 ignored for {self.host}: certificate verification stays on "
+                  f"for the official API.", file=sys.stderr)
+            self.tls_verify = True
         self._ssl_ctx = None if self.tls_verify else ssl._create_unverified_context()
         if not self.tls_verify:
             print(f"[fmp] WARNING: HTTPS certificate verification is OFF for {self.host} "
@@ -265,7 +279,7 @@ class FMPClient:
                             raise FMPError(self._cert_hint())
                         if attempt == 0 and _is_timeout(e):
                             continue
-                        raise FMPError(self._unreachable_hint(e))
+                        raise Unreachable(self._unreachable_hint(e))
                 self._count("network_calls")
                 ok = status == 402 or (status == 200 and _error_message(body) is None
                                        and body.strip()[:1] in ("[", "{"))
@@ -287,6 +301,8 @@ class FMPClient:
         if _is_timeout(exc):
             msg += (f" The server sent no response within {self.timeout:g}s (tried twice). It may be "
                     f"down or overloaded: try again in a few minutes, or set FMP_TIMEOUT=60.")
+        else:
+            msg += " Check FMP_BASE_URL and the network connection."
         return msg
 
     def _cert_hint(self):
@@ -329,7 +345,7 @@ class FMPClient:
 
     def _is_fresh(self, endpoint, path, ttl):
         """Freshness policy: an explicit ttl or the endpoint's TTL (seconds since written),
-        except daily-bar endpoints, which follow the New York session rule."""
+        except daily-bar endpoints and the quote, which follow the New York session rule."""
         now = self._now_ny()
         mtime = path.stat().st_mtime
         if ttl is None and endpoint.startswith(SESSION_ENDPOINTS):
@@ -355,18 +371,24 @@ class FMPClient:
             time.sleep(wait)
 
     def _fetch(self, endpoint, params):
+        if self.unreachable:
+            raise Unreachable(self.unreachable)
         url = self._url(endpoint, params)
-        last_err = None
-        for attempt in range(4):
+        last_err, no_response = None, 0
+        for attempt in range(HTTP_ATTEMPTS):
             self._throttle()
             try:
                 status, body = self._http_get(url)
             except (urllib.error.URLError, TimeoutError, OSError) as e:
                 if _is_cert_error(e):
                     raise FMPError(self._cert_hint())
-                last_err = FMPError(f"network error on {endpoint}: {getattr(e, 'reason', e)}"
-                                    + (f" (no response within {self.timeout:g}s)" if _is_timeout(e) else ""))
-                time.sleep(2 ** attempt)
+                no_response += 1
+                if no_response >= NETWORK_ATTEMPTS:
+                    self.unreachable = self._redact(self._unreachable_hint(e))
+                    raise Unreachable(self.unreachable)
+                print(f"[fmp] no response from {self.host} on {endpoint} ({getattr(e, 'reason', e)}); "
+                      f"retrying once ...", file=sys.stderr, flush=True)
+                time.sleep(1)
                 continue
             self._count("network_calls")
             if status == 429 or status >= 500:
@@ -438,7 +460,7 @@ class FMPClient:
         """Like get(), but returns None (and records why) for optional data."""
         try:
             return self.get(endpoint, **params)
-        except InvalidKey:
+        except (InvalidKey, Unreachable):
             raise
         except FMPError as e:
             self.record_failure(endpoint, e, params)
@@ -448,10 +470,11 @@ class FMPClient:
 def get_with_reason(client, endpoint, **params):
     """client.get() for optional data: (data, None) on success (data may be empty), or
     (None, "restricted: ..." | "error: ...") after recording the failure on the client.
-    A rejected key still raises InvalidKey, since nothing else can work either."""
+    A rejected key (InvalidKey) or a host that does not answer (Unreachable) still raises,
+    since nothing else can work either."""
     try:
         return client.get(endpoint, **params), None
-    except InvalidKey:
+    except (InvalidKey, Unreachable):
         raise
     except FMPError as e:
         client.record_failure(endpoint, e, params)

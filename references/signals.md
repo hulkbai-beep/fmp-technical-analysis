@@ -92,10 +92,11 @@ and is the one the scorecard uses.
 4. **Forward return**: `adj_close[t+h] / adj_close[t] - 1`. Where the dividend-adjusted pair is
    missing, `close[t+h] / close[t] - 1` (split-adjusted, price return only). Both prices of a ratio are
    always on the same basis.
-5. **MAE (maximum adverse excursion)**: `min(adj_low[t+1..t+h]) / adj_close[t] - 1`, falling back to
-   `min(low[t+1..t+h]) / close[t] - 1` where the adjusted window is incomplete. It is a long-side
-   measure for every signal (the worst low after entry at the close of t); it is positive when no low in
-   the window trades below the entry close.
+5. **MAE (maximum adverse excursion)**: the worst move against the signal's bias within t+1..t+h.
+   Bullish (and neutral) signals: `min(adj_low[t+1..t+h]) / adj_close[t] - 1` (the lowest low after entry;
+   negative = adverse). Bearish signals: `max(adj_high[t+1..t+h]) / adj_close[t] - 1` (the highest high
+   after entry; positive = adverse). Split-adjusted lows/highs/closes are used where the adjusted window
+   is incomplete. The baselines use the same side as the signal, so the two are comparable.
 6. Reported: `n` (de-clustered events), `hit_rate` (share of forward returns > 0), `median`, `mean`,
    `p25`, `p75` (linear interpolation between order statistics), `median_mae`, `confidence`, and
    `dates_sample` (the most recent 10 event dates used).
