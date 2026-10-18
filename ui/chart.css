@@ -4,7 +4,8 @@
   color-scheme: light;
   --bg: #f6f7f9; --card: #ffffff; --text: #1b1f24; --muted: #5a6573; --faint: #8a94a2;
   --border: #dde2e8; --grid: #edf0f4; --row: #f2f4f7; --accent: #2563eb; --on-accent: #ffffff;
-  --up: #15803d; --down: #c62828; --up-zone: rgba(21, 128, 61, .10); --down-zone: rgba(198, 40, 40, .09);
+  --up: #15803d; --down: #c62828; --up-zone: rgba(34, 197, 94, .2); --down-zone: rgba(239, 68, 68, .16);
+  --up-edge: rgba(21, 128, 61, .35); --down-edge: rgba(198, 40, 40, .3);
   --warn-bg: #fff7e6; --warn-text: #7a4f00;
   --sma20: #2a78d6; --sma50: #eb6834; --sma200: #6250d6;
   --av-last_earnings: #c0397a; --av-high_52w: #b07800; --av-low_52w: #13866a;
@@ -17,7 +18,8 @@
     color-scheme: dark;
     --bg: #0f1216; --card: #171b21; --text: #e6e9ee; --muted: #a0a9b6; --faint: #7d8794;
     --border: #2a313a; --grid: #20262e; --row: #1e242c; --accent: #6ea0ff; --on-accent: #0f1216;
-    --up: #34c77b; --down: #f06262; --up-zone: rgba(52, 199, 123, .12); --down-zone: rgba(240, 98, 98, .11);
+    --up: #34c77b; --down: #f06262; --up-zone: rgba(52, 199, 123, .18); --down-zone: rgba(240, 98, 98, .17);
+    --up-edge: rgba(52, 199, 123, .4); --down-edge: rgba(240, 98, 98, .4);
     --warn-bg: #2b2210; --warn-text: #f5c56b;
     --sma20: #3987e5; --sma50: #d95926; --sma200: #9085e9;
     --av-last_earnings: #d55181; --av-high_52w: #c98500; --av-low_52w: #199e70;
@@ -30,7 +32,8 @@
   color-scheme: dark;
   --bg: #0f1216; --card: #171b21; --text: #e6e9ee; --muted: #a0a9b6; --faint: #7d8794;
   --border: #2a313a; --grid: #20262e; --row: #1e242c; --accent: #6ea0ff; --on-accent: #0f1216;
-  --up: #34c77b; --down: #f06262; --up-zone: rgba(52, 199, 123, .12); --down-zone: rgba(240, 98, 98, .11);
+  --up: #34c77b; --down: #f06262; --up-zone: rgba(52, 199, 123, .18); --down-zone: rgba(240, 98, 98, .17);
+  --up-edge: rgba(52, 199, 123, .4); --down-edge: rgba(240, 98, 98, .4);
   --warn-bg: #2b2210; --warn-text: #f5c56b;
   --sma20: #3987e5; --sma50: #d95926; --sma200: #9085e9;
   --av-last_earnings: #d55181; --av-high_52w: #c98500; --av-low_52w: #199e70;
@@ -43,7 +46,7 @@
 html { -webkit-text-size-adjust: 100%; }
 body { margin: 0; background: var(--bg); color: var(--text);
   font: 14px/1.5 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
-.ta-wrap { max-width: 1440px; margin: 0 auto; padding: 16px 16px 48px; }
+.ta-wrap { max-width: 1760px; margin: 0 auto; padding: 16px 16px 48px; }
 .ta-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 0 0 12px; }
 .ta-app { font-size: 13px; color: var(--muted); font-weight: 600; letter-spacing: .02em; }
 button { font: inherit; }
@@ -66,17 +69,18 @@ button { font: inherit; }
 .ta-stat .s { font-size: 12px; color: var(--muted); }
 .pos { color: var(--up); } .neg { color: var(--down); }
 
-/* layout: chart column + side panels; panels stack under the chart on narrow screens */
-.ta-grid { display: grid; grid-template-columns: minmax(0, 1fr) 360px; grid-template-rows: auto 1fr;
-  grid-template-areas: "main side" "below side"; gap: 14px; margin-top: 14px; align-items: start; }
+/* layout: the chart spans the full width; key levels and notes below it, side panels on their right;
+   everything stacks on narrow screens */
+.ta-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); grid-template-rows: auto 1fr;
+  grid-template-areas: "main main" "below side"; gap: 14px; margin-top: 14px; align-items: start; }
 .ta-main { grid-area: main; } .ta-side { grid-area: side; } .ta-below { grid-area: below; }
 .ta-side, .ta-below { display: grid; gap: 14px; min-width: 0; align-items: start; }
 .ta-below { grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); }
 @media (max-width: 1080px) {
   .ta-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; grid-template-areas: "main" "side" "below"; }
 }
-/* tablets: the tall scorecard on the right, regime and signal statistics stacked on its left */
-@media (min-width: 720px) and (max-width: 1080px) {
+/* tablets and up: the tall scorecard on the right, regime and signal statistics stacked on its left */
+@media (min-width: 720px) {
   .ta-side { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto 1fr;
     grid-template-areas: "regime score" "signals score"; }
   .ta-a-regime { grid-area: regime; } .ta-a-score { grid-area: score; } .ta-a-signals { grid-area: signals; }
@@ -100,6 +104,14 @@ button { font: inherit; }
 .ta-seg button + button { border-left: 1px solid var(--border); }
 .ta-seg button.on { background: var(--row); color: var(--text); font-weight: 650; }
 .ta-tfnote { font-size: 12px; color: var(--muted); }
+.ta-nav { gap: 8px; }
+.ta-fs { background: transparent; color: var(--muted); border: 1px solid var(--border); border-radius: 7px;
+  padding: 3px 11px; font-size: 12px; cursor: pointer; }
+.ta-fs:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ta-zoom button { min-width: 30px; font-size: 14px; line-height: 16px; }
+.ta-main:fullscreen { overflow: auto; border-radius: 0; border: 0; padding: 16px 20px; }
+.ta-main::backdrop { background: var(--bg); }
+.ta-chartbox { cursor: grab; } .ta-chartbox.dragging { cursor: grabbing; }
 .ta-readout { display: flex; flex-wrap: wrap; gap: 0 12px; min-height: 40px; align-content: flex-start;
   font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; margin: 2px 0 4px; }
 .ta-readout b { color: var(--text); font-weight: 600; }
