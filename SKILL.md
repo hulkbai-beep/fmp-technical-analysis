@@ -18,12 +18,24 @@ does the explaining. The output describes conditions and historical base rates. 
    - Windows: `setx FMP_API_KEY "<key>"`, then open a **new** terminal.
    - macOS / Linux: `export FMP_API_KEY=<key>` in the shell profile.
    - Never print, echo or log the key, and never paste it into a reply. The scripts redact it.
-3. Third-party proxy: when `FMP_BASE_URL` is `https://54.236.92.205` (self-signed certificate), set
-   `FMP_TLS_VERIFY=0` **for that one process only**. Never `setx` it or put it in a profile.
-   - PowerShell: `$env:FMP_TLS_VERIFY="0"; python scripts/analyze.py AAPL`
-   - cmd: `set FMP_TLS_VERIFY=0&& python scripts\analyze.py AAPL`
-   - bash: `FMP_TLS_VERIFY=0 python scripts/analyze.py AAPL`
-   - `ui/server.py` applies this rule to itself automatically.
+3. Route. With an official FMP key, leave `FMP_BASE_URL` and `FMP_TLS_VERIFY` unset: requests go to
+   `https://financialmodelingprep.com/stable` with certificate verification on. The client ignores
+   `FMP_TLS_VERIFY=0` for the official host.
+   - If `check` or a run names a host other than `financialmodelingprep.com` (for example
+     `Detecting request format for 54.236.92.205`, `HTTPS certificate verification failed for
+     54.236.92.205`, `cannot reach ...` or `route : third-party proxy at ...`) although the user has
+     an official key, `FMP_BASE_URL` is still set. Ask the user to remove it (PowerShell:
+     `[Environment]::SetEnvironmentVariable("FMP_BASE_URL", $null, "User")`), then to restart Claude
+     (quit and reopen the app, or start Claude Code in a new terminal) and any running
+     `ui/server.py`; processes already running keep the old value. Never turn certificate
+     verification off to get past an error.
+   - Only with a third-party proxy that has a self-signed certificate (`FMP_BASE_URL` set to it), set
+     `FMP_TLS_VERIFY=0` **for that one process only**. Never `setx` it or put it in a profile.
+     - PowerShell: `$env:FMP_TLS_VERIFY="0"; python scripts/analyze.py AAPL`
+     - cmd: `set FMP_TLS_VERIFY=0&& python scripts\analyze.py AAPL`
+     - bash: `FMP_TLS_VERIFY=0 python scripts/analyze.py AAPL`
+     - `ui/server.py` does this by itself only when `FMP_BASE_URL` is the old proxy host
+       `54.236.92.205`.
 4. Check the connection: `python scripts/fmp_client.py check` shows the route and which endpoints
    your plan includes, without the key.
 
@@ -94,8 +106,8 @@ does the explaining. The output describes conditions and historical base rates. 
 | `--out` | folder | `./ta-output/<TICKER>_<as_of>/` | where `metrics.json` and `chart.html` go |
 | `--refresh` | flag | off | ignore the cache and fetch everything again |
 | `--history-start` | `YYYY-MM-DD` | IPO date | ignore the symbol's history before this date (e.g. a pre-merger SPAC shell) |
-| `FMP_BASE_URL` | URL | official FMP | proxy base, e.g. `https://54.236.92.205` |
-| `FMP_TLS_VERIFY` | `0` / `1` | `1` | `0` only per process, only for the proxy |
+| `FMP_BASE_URL` | URL | unset (official FMP) | only for a third-party proxy |
+| `FMP_TLS_VERIFY` | `0` / `1` | `1` | `0` only per process, only for a proxy; ignored for the official host |
 | `FMP_CACHE_DIR` | folder | `~/.cache/fmp-technical` | response cache (never contains the key) |
 | `FMP_MAX_PER_MIN`, `FMP_TIMEOUT` | numbers | 280, 30 s | rate cap, per-request timeout |
 
@@ -126,7 +138,9 @@ All analysis thresholds live in `scripts/config.py`, and each run records them i
 - `python scripts/fmp_client.py check [SYMBOL]` shows the connection route, the auth style and
   which endpoints work on this plan. Run it first for any FMP error.
 - Exit code 2 or HTTP 401 means the key is wrong or missing. After `setx`, open a new terminal.
-- "certificate verify failed" with the proxy: set `FMP_TLS_VERIFY=0` for that process (Setup 3).
+- "certificate verify failed" on the official API: something on the network (a corporate proxy or
+  antivirus HTTPS scanning) is intercepting the connection. Do not turn verification off; the client
+  keeps it on for the official host anyway. With a third-party proxy, see Setup 3.
 - `python scripts/crosscheck.py TICKER` compares the skill's SMA(50) and RSI(14) with FMP's own
   indicator endpoints. Use it when a number looks off.
 - `python scripts/fmp_client.py clear-cache` deletes cached responses and the saved proxy detection.

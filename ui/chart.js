@@ -12,6 +12,9 @@
   const VIS_KEY = "ta-vis";
   const SMA_KEYS = ["sma20", "sma50", "sma200"];
   const MIN_PX_PER_DAY = 3;   // below this the chart switches to weekly candles by itself
+  const MIN_VIEW = 10;        // fewest daily bars a zoom can show
+  const WEEKLY_MIN_DAYS = 140; // a weekly-default chart shows daily candles for views up to ~6 months
+  const RANGES = [["1m", 1], ["3m", 3], ["6m", 6], ["ytd", 0], ["1y", 12]];
   let uid = 0;
 
   // ------------------------------------------------------------------ formatting
@@ -65,7 +68,9 @@
     const series = { rvol: align(data.rvol), rsi: align(data.rsi14), rs: data.rs_spy ? align(data.rs_spy) : null };
     SMA_KEYS.forEach(k => { series[k] = align(data[k]); });
     const avwaps = Object.entries(data.avwaps || {}).map(([name, pairs]) => ({ name, key: "avwap_" + name, vals: align(pairs) }));
-    return { daily, weekly, series, avwaps };
+    // a panned view can put any close on the last-close chip, so the chip is sized for the longest one
+    const widestClose = daily.reduce((w, b) => { const s = fmtPx(b.c); return s.length > w.length ? s : w; }, "");
+    return { daily, weekly, series, avwaps, widestClose };
   }
 
   function loadVis() {
@@ -204,11 +209,36 @@
       items.push({ key: a.key, label: "AVWAP·" + tv("anchor_", a.name), color: `var(--av-${a.name}, var(--muted))`, sw: "dash",
         title: t("avwap_title", tv("anchor_", a.name), d.avwap_anchors?.[a.name] ?? "") });
     }
-    if (d.levels?.supports?.length) items.push({ key: "supports", label: t("lg_supports"), color: "var(--up)", sw: "box" });
-    if (d.levels?.resistances?.length) items.push({ key: "resistances", label: t("lg_resistances"), color: "var(--down)", sw: "box" });
+    if (d.levels?.supports?.length) items.push({ key: "supports", label: t("lg_supports"), color: "var(--up)", fill: "var(--up-zone)", sw: "box" });
+    if (d.levels?.resistances?.length) items.push({ key: "resistances", label: t("lg_resistances"), color: "var(--down)", fill: "var(--down-zone)", sw: "box" });
     if (d.volume_profile?.available) items.push({ key: "vp", label: t("lg_vp"), color: "var(--va)", sw: "box" });
     if ((d.earnings_dates || []).length) items.push({ key: "earnings", label: t("lg_earnings"), color: "var(--text)", sw: "box" });
     return items;
+  }
+
+  // ------------------------------------------------------------------ zoom window
+  // The visible window is a range of daily bar indices i0..i1 (weekly candles follow its dates).
+  function currentView(st) {
+    const N = st.prep.daily.length, v = st.view;
+    return v && v.i1 < N ? v : { i0: 0, i1: N - 1 };
+  }
+  // A range button's window ends at the last bar: 1M/3M/6M/1Y back from it (calendar months), or YTD.
+  function rangeView(daily, key) {
+    const N = daily.length, last = daily[N - 1].d;
+    let from;
+    if (key === "all") return { i0: 0, i1: N - 1 };
+    if (key === "ytd") from = last.slice(0, 4) + "-01-01";
+    else {
+      const months = (RANGES.find(r => r[0] === key) || [0, 12])[1];
+      let y = +last.slice(0, 4), m = +last.slice(5, 7) - months;
+      while (m < 1) { m += 12; y -= 1; }
+      const dim = new Date(Date.UTC(y, m, 0)).getUTCDate(), dd = Math.min(+last.slice(8, 10), dim);
+      from = `${y}-${String(m).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+      from = from.slice(0, 8) + String(+from.slice(8) + 1).padStart(2, "0");   // the day after: "1M" = 21-23 bars
+    }
+    let i0 = daily.findIndex(b => b.d >= from);
+    if (i0 < 0) i0 = N - 1;
+    return { i0: Math.max(0, Math.min(i0, N - Math.min(N, MIN_VIEW))), i1: N - 1 };
   }
 
   // ------------------------------------------------------------------ chart drawing
@@ -218,20 +248,38 @@
     if (!prep.daily.length) { box.innerHTML = `<p class="ta-small">${esc(t("no_data"))}</p>`; return; }
     const vp = d.volume_profile || {};
     const vpOn = on("vp") && vp.available && (vp.bins || []).length > 0;
-    const AX = W < 420 ? 48 : 58, VPW = vpOn ? (W >= 900 ? 96 : W >= 560 ? 68 : 40) : 0, GAP = vpOn ? 4 : 0;
+    const levels = [];
+    (d.levels?.resistances || []).forEach((x, i) => levels.push({ ...x, tag: "R" + (i + 1), side: "r" }));
+    (d.levels?.supports || []).forEach((x, i) => levels.push({ ...x, tag: "S" + (i + 1), side: "s" }));
+    const shown = levels.filter(x => on(x.side === "s" ? "supports" : "resistances"));
+    const tagText = x => W < 560 ? x.tag : `${x.tag} ${fmtPx(x.price)}`;
+    // axis text uses tabular figures; the canvas measures proportional ones, so measure every digit as 0
+    const tabW = s => measure(String(s).replace(/\d/g, "0"), 11, 650);
+    const tagW = Math.max(0, ...shown.map(x => tabW(tagText(x) + " ↑") + 12));
+    const chipW = tabW(prep.widestClose) + 12;   // last-close chip
+    const AX = Math.max(W < 420 ? 48 : 58, Math.ceil(tagW), Math.ceil(chipW)), VPW = vpOn ? (W >= 900 ? 96 : W >= 560 ? 68 : 40) : 0, GAP = vpOn ? 4 : 8;
     const PW = Math.max(80, W - AX - VPW - GAP), XV = PW + GAP, XA = XV + VPW + 6;
 
-    const tooNarrow = PW / prep.daily.length < MIN_PX_PER_DAY;
-    const tf = prep.weekly.length && (st.userTf || (d.default_timeframe === "weekly" || tooNarrow ? "weekly" : "daily")) === "weekly" ? "weekly" : "daily";
+    const view = currentView(st), vDays = view.i1 - view.i0 + 1;
+    const tooNarrow = PW / vDays < MIN_PX_PER_DAY;
+    const weeklyDefault = d.default_timeframe === "weekly" && vDays > WEEKLY_MIN_DAYS;
+    const tf = prep.weekly.length && (st.userTf || (weeklyDefault || tooNarrow ? "weekly" : "daily")) === "weekly" ? "weekly" : "daily";
     st.tf = tf;
     st.auto = !st.userTf && tf === "weekly" && d.default_timeframe !== "weekly";
-    st.root.querySelectorAll(".ta-seg button").forEach(b => b.classList.toggle("on", b.dataset.tf === tf));
+    st.root.querySelectorAll(".ta-tf button").forEach(b => b.classList.toggle("on", b.dataset.tf === tf));
+    st.root.querySelectorAll(".ta-range button").forEach(b => {
+      const r = rangeView(prep.daily, b.dataset.r);
+      b.classList.toggle("on", r.i0 === view.i0 && r.i1 === view.i1);
+    });
     const tfNote = st.root.querySelector(".ta-tfnote");
     tfNote.textContent = st.auto ? `(${t("auto")})` : "";
     tfNote.title = st.auto ? t("auto_weekly") : "";
     st.root.querySelector(".ta-wknote").hidden = tf !== "weekly";
 
-    const bars = tf === "weekly" ? prep.weekly : prep.daily, n = bars.length, slot = PW / n;
+    const d0 = prep.daily[view.i0].d, d1 = prep.daily[view.i1].d;
+    const bars = tf === "weekly" ? prep.weekly.filter(w => w.d >= d0 && (w.start || w.d) <= d1) : prep.daily.slice(view.i0, view.i1 + 1);
+    const n = bars.length, slot = PW / n;
+    st.geom = { PW, vDays };
     const cx = i => slot * (i + 0.5);
     const bw = Math.max(1, Math.min(13, Math.round(slot * 0.7)));
     const bx = i => Math.round(cx(i) - bw / 2), wx = i => bx(i) + Math.floor(bw / 2) + 0.5;
@@ -242,34 +290,47 @@
     ];
 
     // ---- main price scale: candles, plus visible lines / levels that sit reasonably close
-    const top = 8, HM = Math.round(Math.min(440, Math.max(230, W * 0.42)));
+    const viewH = global.innerHeight || 900, HT = 18, HS = W < 560 ? 54 : 68, LANE = 18;
+    const fsEl = global.document.fullscreenElement, fs = fsEl?.contains(box);
+    // full screen: the price panel takes the screen height (the sub-panels scroll into view below it);
+    // the box's offset is taken inside the scrolled full-screen card, so scrolling does not change it
+    const boxTop = fs ? box.getBoundingClientRect().top - fsEl.getBoundingClientRect().top + fsEl.scrollTop : 0;
+    const top = 8, HM = fs ? Math.round(Math.max(280, Math.min(W * 0.7, viewH - boxTop - top - 120)))
+      : Math.round(Math.max(280, Math.min(W * 0.5, viewH * 0.66, 760)));
     let lo0 = Infinity, hi0 = -Infinity;
     for (const b of bars) { if (b.l < lo0) lo0 = b.l; if (b.h > hi0) hi0 = b.h; }
     const span0 = hi0 - lo0 || Math.abs(hi0) * 0.02 || 1;
     let lo = lo0, hi = hi0;
     const take = (v, lim) => { if (isNum(v) && v > lo0 - lim * span0 && v < hi0 + lim * span0) { lo = Math.min(lo, v); hi = Math.max(hi, v); } };
     for (const ln of lines) for (const b of bars) take(ln.vals[b.di], 0.5);
-    const levels = [];
-    (d.levels?.resistances || []).forEach((x, i) => levels.push({ ...x, tag: "R" + (i + 1), side: "r" }));
-    (d.levels?.supports || []).forEach((x, i) => levels.push({ ...x, tag: "S" + (i + 1), side: "s" }));
-    const shown = levels.filter(x => on(x.side === "s" ? "supports" : "resistances"));
     shown.forEach(x => take(x.price, 0.25));
     const pad = (hi - lo) * 0.05 || 1;
     lo -= pad; hi += pad;
+    // headroom: the levels above the last close stack upward from its chip, those below it downward,
+    // so each side needs room for its tags between the chip and the panel edge
+    const last = bars[n - 1], LH = 17, CH = 18, EDGE = 8;
+    const isAbove = x => x.price > last.c || (x.price === last.c && x.side === "r");
+    const nUp = shown.filter(isAbove).length, room = k => Math.min(0.4, (k ? EDGE + CH + (k - 1) * LH : 10) / HM);
+    {
+      const a = room(nUp), b = room(shown.length - nUp), u = hi - last.c, v = last.c - lo;
+      hi = last.c + Math.max(u, a * v / (1 - a));
+      lo = last.c - Math.max(v, b * u / (1 - b));
+    }
     const y = v => top + (hi - v) / (hi - lo) * HM;
     const inMain = v => v >= lo && v <= hi;
 
     const id = st.id, clip = `url(#${id}-clip)`;
-    let back = "", g = "", fore = "";
+    let back = "", zones = "", g = "", fore = "";
 
     // grid and price axis
-    const last = bars[n - 1], lastY = y(last.c);
-    const ticks = niceTicks(lo, hi, HM > 320 ? 7 : 5), step = ticks.length > 1 ? ticks[1] - ticks[0] : 1;
+    const lastY = y(last.c);
+    const ticks = niceTicks(lo, hi, HM > 480 ? 9 : HM > 320 ? 7 : 5), step = ticks.length > 1 ? ticks[1] - ticks[0] : 1;
+    const tickYs = [];
     for (const v of ticks) {
       const yy = Math.round(y(v)) + 0.5;
       if (yy < top || yy > top + HM) continue;
       back += `<line x1="0" x2="${XV + VPW}" y1="${yy}" y2="${yy}" stroke="var(--grid)"/>`;
-      if (Math.abs(yy - lastY) > 12) back += `<text x="${XA}" y="${yy + 4}">${tickLabel(v, step)}</text>`;
+      tickYs.push([yy, tickLabel(v, step)]);
     }
 
     // volume profile sidebar (shares the price scale): value-area shading, bins, POC
@@ -294,38 +355,50 @@
       }
     }
 
-    // support / resistance zones and lines (behind the candles); labels on top, de-overlapped
-    const labels = [];
+    // support / resistance zones: light green / light red bands with a line at the level price, drawn
+    // under the moving averages and the candles. Their tags sit on the price axis, never over a candle.
+    const tags = [];
     for (const x of shown) {
       const col = x.side === "s" ? "--up" : "--down";
       if (inMain(x.price)) {
         const y1 = y(Math.max(x.zone_high, x.price)), y2 = y(Math.min(x.zone_low, x.price));
-        const h = Math.max(3, y2 - y1);
-        back += `<rect x="0" y="${(y1 + y2 - h) / 2}" width="${PW}" height="${h}" fill="var(${col}-zone)"/>` +
-          `<line x1="0" x2="${PW}" y1="${Math.round(y(x.price)) + 0.5}" y2="${Math.round(y(x.price)) + 0.5}" stroke="var(${col})" stroke-width="1" opacity=".75"/>`;
-        labels.push({ y: y(x.price), at: y(x.price), text: `${x.tag} ${fmtPx(x.price)}`, cls: x.side });
+        const h = Math.max(4, y2 - y1), yt = (y1 + y2 - h) / 2, yl = Math.round(y(x.price)) + 0.5;
+        zones += `<rect x="0" y="${yt.toFixed(1)}" width="${PW}" height="${h.toFixed(1)}" fill="var(${col}-zone)"/>` +
+          (h > 6 ? `<rect x="0.5" y="${(yt + 0.5).toFixed(1)}" width="${PW - 1}" height="${(h - 1).toFixed(1)}" fill="none" stroke="var(${col}-edge)"/>` : "") +
+          `<line x1="0" x2="${PW}" y1="${yl}" y2="${yl}" stroke="var(${col})" stroke-width="1" opacity=".7"/>`;
+        tags.push({ y: y(x.price), at: y(x.price), up: isAbove(x), price: x.price, text: tagText(x), cls: x.side, title: `${x.tag} ${fmtPx(x.price)}` });
       } else {
         const above = x.price > hi;
-        labels.push({ y: above ? top + 8 : top + HM - 8, at: null, text: `${x.tag} ${fmtPx(x.price)} ${above ? "↑" : "↓"}`, cls: x.side });
+        tags.push({ y: above ? top + EDGE : top + HM - EDGE, at: null, up: above, price: x.price, text: `${tagText(x)} ${above ? "↑" : "↓"}`, cls: x.side, title: `${x.tag} ${fmtPx(x.price)}` });
       }
     }
-    labels.sort((a, b) => a.y - b.y);
-    const LH = 15, minY = top + 8, maxY = top + HM - 8;
-    labels.forEach((l, i) => { l.y = Math.max(minY, i ? Math.max(l.y, labels[i - 1].y + LH) : l.y); });
-    for (let i = labels.length - 1; i >= 0; i--) labels[i].y = Math.min(labels[i].y, i === labels.length - 1 ? maxY : labels[i + 1].y - LH);
-    for (const l of labels) {
-      const w = measure(l.text, 11, 650) + 8;
-      fore += `<rect x="0" y="${l.y - 7.5}" width="${w}" height="15" rx="3" fill="var(--card)" opacity=".88"/>` +
-        `<text class="lvl ${l.cls}" x="4" y="${l.y + 4}">${esc(l.text)}</text>`;
-      // a label pushed off its line by its neighbours gets a leader tick back to the line
-      if (l.at != null && Math.abs(l.y - l.at) > 2) {
-        fore += `<path d="M${w},${l.y.toFixed(1)}h4L${w + 12},${l.at.toFixed(1)}" fill="none" stroke="var(${l.cls === "s" ? "--up" : "--down"})" stroke-width="1"/>`;
+    // spread the tags on each side of the last-close chip (which stays put): at least CH from the chip,
+    // LH apart, and inside the panel; the headroom above makes the room
+    const spread = (list, dir, edge) => {
+      const far = (edge - lastY) * dir, s = list.length > 1 ? Math.min(LH, Math.max(0, far - CH) / (list.length - 1)) : LH;
+      list.forEach(l => { l.dist = (l.y - lastY) * dir; });
+      list.sort((p, q) => Math.abs(p.price - last.c) - Math.abs(q.price - last.c));   // nearest the close first
+      list.forEach((l, i) => { l.dist = Math.max(l.dist, i ? list[i - 1].dist + s : CH); });
+      for (let i = list.length - 1; i >= 0; i--) list[i].dist = Math.min(list[i].dist, i === list.length - 1 ? far : list[i + 1].dist - s);
+      list.forEach(l => { l.y = lastY + dir * l.dist; });
+    };
+    spread(tags.filter(l => l.up), -1, top + EDGE);
+    spread(tags.filter(l => !l.up), 1, top + HM - EDGE);
+    for (const l of tags) {
+      const c = l.cls === "s" ? "--up" : "--down";
+      // a thin line carries the level across the volume-profile sidebar to its tag
+      if (l.at != null) {
+        fore += `<path d="M${PW},${l.at.toFixed(1)}H${XA - 10}L${XA - 4},${l.y.toFixed(1)}" fill="none" stroke="var(${c})" stroke-width="1" opacity=".55"/>`;
       }
+      fore += `<g><title>${esc(l.title)}</title><rect x="${XA - 4}" y="${(l.y - 8).toFixed(1)}" width="${AX - 4}" height="16" rx="3" fill="var(--card)" stroke="var(${c})"/>` +
+        `<text class="lvl ${l.cls}" x="${XA}" y="${(l.y + 4).toFixed(1)}">${esc(l.text)}</text></g>`;
     }
+    const busy = [lastY, ...tags.map(l => l.y)];
+    for (const [yy, label] of tickYs) if (busy.every(b => Math.abs(yy - b) > 12)) back += `<text x="${XA}" y="${yy + 4}">${label}</text>`;
 
     // earnings: dotted lines in the price panel and E badges on a lane under it (time axis)
-    const LANE = 18, laneY = top + HM + LANE / 2 + 2;
-    const viewIndex = date => { let a = 0, b = n - 1; if (!n || date > bars[b].d) return -1; while (a < b) { const m = (a + b) >> 1; if (bars[m].d < date) a = m + 1; else b = m; } return a; };
+    const laneY = top + HM + LANE / 2 + 2;
+    const viewIndex = date => { let a = 0, b = n - 1; if (!n || date > bars[b].d || date < (bars[0].start || bars[0].d)) return -1; while (a < b) { const m = (a + b) >> 1; if (bars[m].d < date) a = m + 1; else b = m; } return a; };
     let badges = "";
     const pastX = [];
     if (on("earnings")) {
@@ -377,7 +450,6 @@
       `<text class="chip" x="${XA}" y="${lastY + 4}">${esc(fmtPx(last.c))}</text>`;
 
     // ---- sub-panels: volume, RSI(14), RS vs SPY
-    const HT = 18, HS = W < 560 ? 54 : 68;
     let cur = top + HM + LANE + 8;
     const panels = [];
     const addPanel = key => { const p = { key, ty: cur + 12, y0: cur + HT, h: HS }; cur = p.y0 + HS + 8; panels.push(p); return p; };
@@ -421,7 +493,7 @@
     }
     for (const p of panels) {
       back += `<rect x="0" y="${p.y0}" width="${PW}" height="${p.h}" fill="none" stroke="var(--grid)"/>`;
-      sub += `<text x="0" y="${p.ty}"><tspan class="pt">${esc(t("p_" + p.key))}</tspan><tspan dx="8" class="pv" data-p="${p.key}"></tspan></text>`;
+      sub += `<text x="0" y="${p.ty}"><tspan class="pt">${esc(t("p_" + p.key, d.rs_spy?.[0]?.[0] ?? ""))}</tspan><tspan dx="8" class="pv" data-p="${p.key}"></tspan></text>`;
     }
     const bottom = cur - 8;
 
@@ -429,13 +501,28 @@
     // (labelled with the year) is always a tick; without a January tick the first label carries the year.
     let axis = "", lastRight = -1e9;
     const zh = I18N.lang() === "zh", MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const short = tf === "daily" && n <= 90;
+    const dayNo = s => Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10)) / 864e5;
+    const newWeek = i => { const a = dayNo(bars[i - 1].d), b = dayNo(bars[i].d); return b - a >= 7 || (b + 3) % 7 < (a + 3) % 7; };
     const starts = [];
-    for (let i = 1; i < n; i++) if (bars[i].d.slice(0, 7) !== bars[i - 1].d.slice(0, 7)) starts.push(i);
+    for (let i = 1; i < n; i++) if (short ? newWeek(i) : bars[i].d.slice(0, 7) !== bars[i - 1].d.slice(0, 7)) starts.push(i);
     const perMonth = starts.length > 1 ? (cx(starts[starts.length - 1]) - cx(starts[0])) / (starts.length - 1) : PW;
-    const mstep = [1, 2, 3, 6, 12].find(s => s * perMonth >= measure(zh ? "12月" : "May", 11) + 16) ?? 12;
+    const mstep = short ? 1 : [1, 2, 3, 6, 12].find(s => s * perMonth >= measure(zh ? "12月" : "May", 11) + 16) ?? 12;
     const yearTick = starts.some(i => bars[i].d.slice(5, 7) === "01");
     for (const i of starts) {
       const yv = bars[i].d.slice(0, 4), m = +bars[i].d.slice(5, 7);
+      if (short) {
+        // week ticks: month/day, with the year at the first tick of a year
+        const md = zh ? `${m}/${+bars[i].d.slice(8, 10)}` : `${MON[m - 1]} ${+bars[i].d.slice(8, 10)}`;
+        const label = lastRight < 0 || bars[i].d.slice(0, 4) !== bars[i - 1].d.slice(0, 4) ? `${md} ${yv}` : md;
+        const x = cx(i), w = measure(label, 11), lx = Math.max(x, w / 2);
+        if (lx - w / 2 < lastRight + 10 || lx + w / 2 > PW) continue;
+        lastRight = lx + w / 2;
+        const xx = Math.round(x) + 0.5;
+        back += `<line x1="${xx}" x2="${xx}" y1="${top}" y2="${bottom}" stroke="var(--grid)"/>`;
+        axis += `<text x="${lx}" y="${bottom + 15}" text-anchor="middle">${esc(label)}</text>`;
+        continue;
+      }
       if ((m - 1) % mstep) continue;
       const withYear = !yearTick && lastRight < 0;
       const label = m === 1 ? yv : withYear ? (zh ? `${yv}年${m}月` : `${MON[m - 1]} ${yv}`) : (zh ? `${m}月` : MON[m - 1]);
@@ -448,10 +535,11 @@
     }
     const H = bottom + 22;
 
+    const hadFocus = box.contains(global.document.activeElement), keep = { di: st.hoverDi, y: st.hoverY };
     box.innerHTML = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" tabindex="0" aria-label="${esc(t("chart_aria"))}">
       <defs><clipPath id="${id}-clip"><rect x="0" y="${top}" width="${PW}" height="${HM}"/></clipPath></defs>
       ${back}<line x1="0" x2="${PW}" y1="${top + HM + 0.5}" y2="${top + HM + 0.5}" stroke="var(--border)"/>
-      <g clip-path="${clip}" shape-rendering="crispEdges">${candles}</g><g clip-path="${clip}">${lineSvg}</g>${g}${sub}${axis}${fore}
+      <g clip-path="${clip}">${zones}</g><g clip-path="${clip}">${lineSvg}</g><g clip-path="${clip}" shape-rendering="crispEdges">${candles}</g>${g}${sub}${axis}${fore}
       <line class="xh xv" x1="0" x2="0" y1="${top}" y2="${bottom}" visibility="hidden"/>
       <line class="xh xy" x1="0" x2="${PW}" y1="0" y2="0" visibility="hidden"/>
       <g class="xp" visibility="hidden"><rect x="${XA - 4}" y="-9" width="${AX - 4}" height="18" rx="4" fill="var(--text)"/><text x="${XA}" y="4" style="fill:var(--card)"></text></g>
@@ -479,6 +567,7 @@
     };
     const point = (i, py) => {
       st.hover = Math.max(0, Math.min(n - 1, i));
+      st.hoverDi = bars[st.hover].di; st.hoverY = py;
       const xx = wx(st.hover);
       xv.setAttribute("x1", xx); xv.setAttribute("x2", xx); xv.setAttribute("visibility", "visible");
       const inPrice = py != null && py >= top && py <= top + HM;
@@ -492,7 +581,7 @@
       show(st.hover);
     };
     const leave = () => {
-      st.hover = null;
+      st.hover = st.hoverDi = st.hoverY = null;
       [xv, xy, xp].forEach(el => el.setAttribute("visibility", "hidden"));
       show(n - 1);
     };
@@ -507,30 +596,40 @@
     svg.addEventListener("blur", leave);
     svg.addEventListener("keydown", e => {
       if (e.key === "Escape") { leave(); return; }
+      if (e.key === "+" || e.key === "=" || e.key === "-" || e.key === "_") { e.preventDefault(); st.zoom(e.key === "+" || e.key === "=" ? 1 / 1.5 : 1.5); return; }
       const step = { ArrowLeft: -1, ArrowRight: 1, PageUp: -10, PageDown: 10, Home: -n, End: n }[e.key];
       if (step == null) return;
       e.preventDefault();
       point((st.hover ?? n - 1) + step, null);
     });
-    if (st.hover != null && st.hover < n) point(st.hover, null); else show(n - 1);
+    // after a zoom, pan or toggle the crosshair stays on the same bar (and price height) if it is still in view
+    const at = keep.di != null && keep.di >= view.i0 && keep.di <= view.i1 ? bars.findIndex(b => b.di >= keep.di) : -1;
+    if (at >= 0) point(at, keep.y); else { st.hover = st.hoverDi = st.hoverY = null; show(n - 1); }
+    if (hadFocus) svg.focus({ preventScroll: true });
   }
 
   // ------------------------------------------------------------------ public
   function render(root, data) {
     const st = root._ta || (root._ta = { vis: loadVis(), userTf: null, hover: null, id: "ta" + (++uid) });
     if (st.ro) st.ro.disconnect();
-    if (st.data !== data) st.hover = null;
+    if (st.data !== data) { st.hover = st.hoverDi = st.hoverY = null; st.view = null; }
     st.root = root; st.data = data; st.prep = prepare(data);
     const legend = legendItems(data, st.prep).map(it =>
       `<button type="button" class="ta-chip" data-k="${esc(it.key)}" aria-pressed="${st.vis[it.key] !== false}"${it.title ? ` title="${esc(it.title)}"` : ""}>` +
-      `<span class="sw ${it.sw}" style="color:${it.color}"></span>${esc(it.label)}</button>`).join("");
+      `<span class="sw ${it.sw}" style="color:${it.color}${it.fill ? ";background:" + it.fill : ""}"></span>${esc(it.label)}</button>`).join("");
     const vp = data.volume_profile || {};
     root.innerHTML = `${headerHtml(data)}
       <div class="ta-grid">
         <section class="ta-card ta-main">
           <div class="ta-toolbar"><div class="ta-legend">${legend}</div>
-            <div class="ta-seg" role="group"><button type="button" data-tf="daily">${esc(t("daily"))}</button><button type="button" data-tf="weekly">${esc(t("weekly"))}</button></div>
+            <div class="ta-seg ta-tf" role="group"><button type="button" data-tf="daily">${esc(t("daily"))}</button><button type="button" data-tf="weekly">${esc(t("weekly"))}</button></div>
             <span class="ta-tfnote"></span></div>
+          <div class="ta-toolbar ta-nav">
+            <div class="ta-seg ta-range" role="group" aria-label="${esc(t("range_label"))}">${[...RANGES, ...(st.prep.daily.length > 300 ? [["all"]] : [])].map(([k]) =>
+              `<button type="button" data-r="${k}">${esc(t("r_" + k))}</button>`).join("")}</div>
+            <div class="ta-seg ta-zoom" role="group"><button type="button" data-z="out" title="${esc(t("zoom_out"))}" aria-label="${esc(t("zoom_out"))}">−</button><button type="button" data-z="in" title="${esc(t("zoom_in"))}" aria-label="${esc(t("zoom_in"))}">+</button></div>
+            <button type="button" class="ta-fs"${global.document.fullscreenEnabled ? "" : " hidden"}>${esc(t("fs_enter"))}</button>
+          </div>
           <div class="ta-readout"></div>
           <div class="ta-chartbox"></div>
           <p class="ta-note ta-wknote" hidden>${esc(t("weekly_note"))}</p>
@@ -550,10 +649,100 @@
       saveVis(st.vis);
       redraw();
     }));
-    root.querySelectorAll(".ta-seg button").forEach(b => b.addEventListener("click", () => { st.userTf = b.dataset.tf; redraw(); }));
-    let width = 0;
-    const onSize = () => { const w = Math.floor(st.box.clientWidth); if (w && w !== width) { width = w; redraw(); } };
-    if (global.ResizeObserver) { st.ro = new ResizeObserver(onSize); st.ro.observe(st.box); } else global.addEventListener("resize", onSize);
+    root.querySelectorAll(".ta-tf button").forEach(b => b.addEventListener("click", () => { st.userTf = b.dataset.tf; redraw(); }));
+
+    // zoom window: range buttons, + / − (and the + − keys), Ctrl+wheel or pinch, mouse drag to pan,
+    // double-click to show everything again
+    const N = st.prep.daily.length;
+    const setView = (i0, c) => {
+      c = Math.max(Math.min(MIN_VIEW, N), Math.min(N, c));
+      i0 = Math.max(0, Math.min(N - c, i0));
+      st.view = { i0, i1: i0 + c - 1 };
+      redraw();
+    };
+    // c bars from i0 become nc bars, keeping the bar at fraction f of the width in place
+    const zoomTo = (i0, c, nc, f) => {
+      nc = Math.max(Math.min(MIN_VIEW, N), Math.min(N, nc));
+      setView(Math.round(i0 + f * (c - nc)), nc);
+    };
+    st.zoom = (factor, frac) => {
+      if (!N) return;
+      const v = currentView(st), c = v.i1 - v.i0 + 1, nc = Math.round(c * factor);
+      if (nc !== c) zoomTo(v.i0, c, nc, frac ?? (v.i1 === N - 1 ? 1 : 0.5));
+    };
+    root.querySelectorAll(".ta-range button").forEach(b => b.addEventListener("click", () => {
+      if (!N) return;
+      const r = rangeView(st.prep.daily, b.dataset.r);
+      setView(r.i0, r.i1 - r.i0 + 1);
+    }));
+    root.querySelectorAll(".ta-zoom button").forEach(b => b.addEventListener("click", () => st.zoom(b.dataset.z === "in" ? 1 / 1.5 : 1.5)));
+    const box = st.box, frac = x => Math.max(0, Math.min(1, (x - box.getBoundingClientRect().left) / st.geom.PW));
+    // a trackpad pinch arrives as many small Ctrl+wheel steps: add them up until they move a whole bar
+    let wheelZoom = 0;
+    box.addEventListener("wheel", e => {
+      if (!(e.ctrlKey || e.metaKey) || !st.geom) return;      // a plain wheel keeps scrolling the page
+      e.preventDefault();
+      const dy = e.deltaY * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1);
+      wheelZoom += Math.max(-1, Math.min(1, dy / 100)) * 0.35;
+      const v = currentView(st), c = v.i1 - v.i0 + 1;
+      if (Math.round(c * Math.exp(wheelZoom)) === c) return;
+      st.zoom(Math.exp(wheelZoom), frac(e.clientX));
+      wheelZoom = 0;
+    }, { passive: false });
+    // the mouse or one finger drags sideways to pan (a vertical swipe still scrolls the page); two fingers pinch
+    const pts = new Map();
+    let drag = null, pinch = null, frame = 0;
+    const later = fn => { cancelAnimationFrame(frame); frame = requestAnimationFrame(fn); };
+    const gap = () => { const [a, b] = [...pts.values()]; return Math.hypot(a.x - b.x, a.y - b.y) || 1; };
+    box.addEventListener("pointerdown", e => {
+      if (!st.geom || e.button !== 0) return;
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (e.pointerType !== "mouse") box.setPointerCapture(e.pointerId);   // keeps the finger through redraws
+      const v = currentView(st), c = v.i1 - v.i0 + 1;
+      drag = null; pinch = null;
+      if (pts.size === 1) drag = { x: e.clientX, i0: v.i0, c, per: st.geom.PW / c, moved: false };
+      else if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = { d: gap(), i0: v.i0, c, f: frac((a.x + b.x) / 2) }; }
+    });
+    box.addEventListener("pointermove", e => {
+      if (!pts.has(e.pointerId)) return;
+      if (e.pointerType === "mouse" && !(e.buttons & 1)) { endDrag(e); return; }
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pinch && pts.size === 2) {
+        const nc = Math.round(pinch.c * pinch.d / gap());
+        later(() => { if (pinch) zoomTo(pinch.i0, pinch.c, nc, pinch.f); });
+        return;
+      }
+      if (!drag) return;
+      const k = Math.round((drag.x - e.clientX) / drag.per);
+      if (!drag.moved && Math.abs(drag.x - e.clientX) < 4) return;
+      if (!drag.moved) { drag.moved = true; box.setPointerCapture(e.pointerId); box.classList.add("dragging"); }
+      later(() => { if (drag && drag.i0 + k !== currentView(st).i0) setView(drag.i0 + k, drag.c); });
+    });
+    const endDrag = e => {
+      pts.delete(e.pointerId);
+      drag = null; pinch = null;
+      box.classList.remove("dragging");
+    };
+    box.addEventListener("pointerup", endDrag);
+    box.addEventListener("pointercancel", endDrag);
+    box.addEventListener("dblclick", () => { st.view = null; redraw(); });
+    const fsBtn = root.querySelector(".ta-fs"), card = root.querySelector(".ta-main");
+    fsBtn.addEventListener("click", () => {
+      if (global.document.fullscreenElement) global.document.exitFullscreen?.();
+      else card.requestFullscreen?.().catch(() => {});
+    });
+    const fsLabel = () => { fsBtn.textContent = t(global.document.fullscreenElement === card ? "fs_exit" : "fs_enter"); };
+    if (st.onFs) global.document.removeEventListener("fullscreenchange", st.onFs);
+    st.onFs = () => { fsLabel(); requestAnimationFrame(() => st.onSize && st.onSize(true)); };
+    global.document.addEventListener("fullscreenchange", st.onFs);
+    let width = 0, height = 0;
+    const onSize = force => {
+      const w = Math.floor(st.box.clientWidth), h = global.innerHeight;
+      if (w && (force === true || w !== width || h !== height)) { width = w; height = h; redraw(); }
+    };
+    if (global.ResizeObserver) { st.ro = new ResizeObserver(onSize); st.ro.observe(st.box); }
+    if (!st.onWin) { st.onWin = () => st.onSize && st.onSize(); global.addEventListener("resize", st.onWin); }
+    st.onSize = onSize;
     onSize();
   }
 
