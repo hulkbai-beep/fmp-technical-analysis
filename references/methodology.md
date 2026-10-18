@@ -619,5 +619,6 @@ slippage, financing or borrow are modelled. A gap can fill a stop well beyond it
   treat holidays as ordinary weekdays.
 - Daily data only. VWAP and the volume profile are approximations, and intraday structure is invisible.
 - Benchmarks cover the last 5 years, so RS lines, beta and the VIX percentile use at most that span.
-- A third-party proxy (`FMP_BASE_URL`) may serve data that differs from FMP's official API. The report
-  names the data source, and key figures should be verified.
+- The default route is FMP's official API with certificate verification on. A third-party proxy
+  (`FMP_BASE_URL`) may serve data that differs from it; the report names the data source, and key
+  figures from a proxy should be verified.

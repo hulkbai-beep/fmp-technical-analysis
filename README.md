@@ -15,8 +15,9 @@ python -m pytest -q                                   # offline tests
 If pytest cannot write to its default temp folder (some Windows sandboxes block
 `%LOCALAPPDATA%\Temp\pytest-of-<user>`), run `python -m pytest -q --basetemp=.pytest_tmp`.
 
-When `FMP_BASE_URL` points at the third-party proxy `https://54.236.92.205`, set `FMP_TLS_VERIFY=0`
-for that process only (see `SKILL.md` > Setup). Never store or print the API key.
+With an official FMP key, set only `FMP_API_KEY` and leave `FMP_BASE_URL` and `FMP_TLS_VERIFY` unset;
+certificate verification stays on. Only with a third-party proxy that has a self-signed certificate
+set `FMP_TLS_VERIFY=0`, for that process only (see `SKILL.md` > Setup). Never store or print the API key.
 
 | Path | Contents |
 |---|---|

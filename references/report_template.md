@@ -275,12 +275,11 @@ technical analysis for information only, not investment advice.* Chinese: *仅�
 |---|---|
 | Name / exchange | ACME Inc. · NASDAQ · Technology / Software |
 | Last close (2026-10-16) | 4475.34 (-1.4% on the day) |
-| Data source | FMP stable API via third-party proxy 54.236.92.205 |
+| Data source | FMP stable API (official) |
 | Horizon | swing: 10-day primary horizon; signal stats at 5/10/20 days |
 | History used | 7,839 bars since 1996-10-01 · 10 API calls |
 
-- Data comes from a third-party proxy, not FMP's official server; verify key figures.
-- No other data-quality warnings.
+- No data-quality warnings.
 
 ## 2. Market context
 | Benchmark | Reading | Detail |
