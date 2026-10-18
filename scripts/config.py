@@ -22,6 +22,10 @@ MARKET_CLOSE_BUFFER = "16:15"     # before this NY time, a bar dated today is tr
 STALE_BDAYS = 2                   # warn if the last bar is more than this many business days behind
 GAP_CALENDAR_DAYS = 4             # consecutive bars further apart than this are flagged as a data gap
 
+SPAC_CHECK_BARS = 63                # first bars checked for a pre-merger SPAC shell (~3 months)
+SPAC_PRICE_BAND = (9.0, 11.5)      # a SPAC shell trades near its $10 trust value
+SPAC_MAX_RANGE = 0.15              # ... within this total high/low range of closes
+
 ILLIQUID_MIN_AVG_SHARES = 200_000       # average daily shares below this -> illiquid warning
 ILLIQUID_MIN_AVG_DOLLARS = 5_000_000    # average daily dollar volume below this -> illiquid warning
 LIQUIDITY_BARS = 50                     # bars averaged for the illiquidity check

@@ -12,6 +12,9 @@ python ui/server.py                                   # local UI at http://127.0
 python -m pytest -q                                   # offline tests
 ```
 
+If pytest cannot write to its default temp folder (some Windows sandboxes block
+`%LOCALAPPDATA%\Temp\pytest-of-<user>`), run `python -m pytest -q --basetemp=.pytest_tmp`.
+
 When `FMP_BASE_URL` points at the third-party proxy `https://54.236.92.205`, set `FMP_TLS_VERIFY=0`
 for that process only (see `SKILL.md` > Setup). Never store or print the API key.
 

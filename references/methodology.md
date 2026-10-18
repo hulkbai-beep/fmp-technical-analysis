@@ -36,8 +36,8 @@ How every number in `metrics.json` is produced. Parameter names in `CODE` refer 
   Healthcare→XLV, Consumer Cyclical→XLY, Consumer Defensive→XLP, Energy→XLE, Industrials→XLI,
   Basic Materials→XLB, Real Estate→XLRE, Utilities→XLU, Communication Services→XLC.
 - ETFs and funds (`isEtf` or `isFund`) skip the earnings and sector modules; their benchmark is SPY.
-  SPY itself skips relative strength vs SPY and reuses its own adjusted bars as the benchmark (no extra
-  request). FMP labels SPY's sector "Financial Services", which means nothing for an ETF, so the snapshot
+  SPY itself skips relative strength vs SPY and reuses its own split-adjusted bars as the benchmark (no
+  extra request), so its market-context and regime readings cannot disagree. FMP labels SPY's sector "Financial Services", which means nothing for an ETF, so the snapshot
   leaves `sector` empty for ETFs.
 
 ### 1.2 Which price series drives what
@@ -62,7 +62,9 @@ dividend adjustment.
 
 ### 1.3 History fetch
 
-- **Earliest date requested:** max(`HISTORY_START` = 1990-01-01, `profile.ipoDate`).
+- **Earliest date requested:** max(`HISTORY_START` = 1990-01-01, `profile.ipoDate`, `--history-start`).
+  If the first `SPAC_CHECK_BARS` = 63 closes all sit within `SPAC_PRICE_BAND` = 9.00-11.50 and a 15% range,
+  `data_quality.spac_like_start` flags a probable pre-merger SPAC shell (kept, never dropped silently).
 - **Row cap:** each EOD request returns at most `EOD_ROW_CAP` = 5000 rows, the *newest* rows within
   from..to. Requests therefore run newest-first, in date chunks.
 - **Chunk size:** each chunk spans `CHUNK_YEARS` = 18 calendar years (about 4,540 sessions). When the
@@ -168,7 +170,10 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
 
 ### A. Market context (`market_context`)
 - **SPY:**
-  - the last close against its SMA(200) on dividend-adjusted closes;
+  - the last close against its SMA(200) on dividend-adjusted closes (when SPY itself is analysed: on its
+    split-adjusted bars). Dividend adjustment lowers past prices, so the dividend-adjusted SMA(200) sits
+    roughly half a year's dividend yield (about 0.4% for SPY) below the split-adjusted one shown on
+    SPY's own chart. The basis is in `data_quality.benchmark_basis`;
   - `pct_vs_sma200` = close / SMA200 - 1;
   - `sma200_slope_20d` = SMA200[t] / SMA200[t-20] - 1.
 - **^VIX:** the last close and `pctl_1y`, its percentile among the last 252 closes, today included.

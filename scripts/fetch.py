@@ -102,11 +102,27 @@ def _earnings(data) -> list[dict]:
     return [by_date[d] for d in sorted(by_date)]
 
 
-def history_start(profile) -> pd.Timestamp:
-    """Earliest date worth requesting: C.HISTORY_START, or the IPO date if later."""
+def history_start(profile, override=None) -> pd.Timestamp:
+    """Earliest date worth requesting: C.HISTORY_START, the IPO date or the user's override,
+    whichever is latest."""
     start = pd.Timestamp(C.HISTORY_START)
     ipo = pd.to_datetime(str((profile or {}).get("ipoDate") or "")[:10], format="%Y-%m-%d", errors="coerce")
-    return max(start, ipo) if pd.notna(ipo) else start
+    if pd.notna(ipo):
+        start = max(start, ipo)
+    return max(start, pd.Timestamp(override)) if override is not None else start
+
+
+def spac_like_start(bars: pd.DataFrame) -> dict | None:
+    """The first C.SPAC_CHECK_BARS closes all near $10 in a narrow range: the history probably begins
+    with a pre-merger SPAC shell (FMP dates such listings from the shell's first trading day)."""
+    head = bars["close"].iloc[:C.SPAC_CHECK_BARS]
+    if len(head) < C.SPAC_CHECK_BARS:
+        return None
+    lo, hi = C.SPAC_PRICE_BAND
+    if head.min() >= lo and head.max() <= hi and head.max() / head.min() - 1 <= C.SPAC_MAX_RANGE:
+        return {"first_date": _day(head.index[0]), "checked_until": _day(head.index[-1]),
+                "close_min": float(head.min()), "close_max": float(head.max())}
+    return None
 
 
 # ---------------------------------------------------------------------------- history
@@ -333,8 +349,9 @@ def _benchmark(client, symbol, endpoints, now, start):
     return None, None, problems
 
 
-def load_all(client, ticker, now=None) -> dict:
+def load_all(client, ticker, now=None, start=None) -> dict:
     """Fetch and validate everything the analysis needs for `ticker` (see CONTRACT "fetch.py").
+    `start` (a date) cuts the history requested for the symbol, e.g. to drop a pre-merger SPAC shell.
     Raises ValueError when the symbol has no usable price history."""
     now = to_ny(now)
     symbol = ticker.strip().upper()
@@ -365,7 +382,8 @@ def load_all(client, ticker, now=None) -> dict:
         if earnings is None:
             unavailable("earnings", why or "no data returned")
 
-    start = history_start(profile)
+    override = start
+    start = history_start(profile, override)
     full_rows, problem = fetch_history(client, FULL, symbol, start, today)
     if not full_rows:
         raise ValueError(f"no price data for {symbol}" + (f" ({problem})" if problem else ""))
@@ -379,6 +397,14 @@ def load_all(client, ticker, now=None) -> dict:
     if bars.empty:
         raise ValueError(f"no price data for {symbol} (no valid rows after validation)")
     notes.extend(dq["warnings"])
+    dq["history_start_override"] = _day(pd.Timestamp(override)) if override is not None else None
+    dq["spac_like_start"] = spac_like_start(bars) if override is None else None
+    if dq["spac_like_start"]:
+        sp = dq["spac_like_start"]
+        notes.append(f"history starts {sp['first_date']} with {C.SPAC_CHECK_BARS} closes between "
+                     f"{sp['close_min']:.2f} and {sp['close_max']:.2f}: this looks like a pre-merger SPAC "
+                     f"shell, which long-history statistics include; re-run with --history-start set to "
+                     f"the merger date to exclude it")
 
     # a plan without /dividend-adjusted: benchmarks go straight to /full (no wasted requests)
     adj_restricted = not adj_rows and str(adj_problem or "").startswith("restricted")

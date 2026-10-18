@@ -347,3 +347,16 @@ def test_spy_market_context_and_regime_use_one_price_basis():
     assert spy["close"] == direction["close"] and spy["sma200"] == pytest.approx(direction["sma200"])
     assert spy["above_sma200"] is False and direction["votes"]["close_vs_sma200"] == -1
     assert spy["price_basis"].startswith("split-adjusted")
+
+
+def test_cli_history_start_cuts_history(cli, tmp_path, capsys):
+    out = tmp_path / "run"
+    assert analyze.main(["ACME", "--history-start", "2015-01-01", "--out", str(out)]) == 0
+    metrics = json.loads((out / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics["data_quality"]["history_start_override"] == "2015-01-01"
+    assert metrics["data_quality"]["first_date"] >= "2015-01-01"
+
+
+def test_cli_bad_history_start_exits_1(cli, tmp_path, capsys):
+    assert analyze.main(["ACME", "--history-start", "not-a-date", "--out", str(tmp_path)]) == 1
+    assert "not a date" in capsys.readouterr().err

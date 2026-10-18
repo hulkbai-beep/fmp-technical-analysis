@@ -33,7 +33,7 @@ does the explaining. The output describes conditions and historical base rates. 
    `swing` (default) is days to weeks, with a 10-day primary horizon. `position` is months, with a
    60-day horizon and a weekly chart. 短线 / 波段 → swing; 中线 / 中长线 → position.
 2. **Run** from the skill folder:
-   `python scripts/analyze.py TICKER --horizon swing|position [--out DIR] [--refresh]`.
+   `python scripts/analyze.py TICKER --horizon swing|position [--out DIR] [--refresh] [--history-start YYYY-MM-DD]`.
    - Output goes to `./ta-output/<TICKER>_<as_of>/` by default.
    - An uncached run makes 10 API calls for a stock, 8 for an ETF and 7 for SPY. A same-day
      re-run makes 0.
@@ -93,6 +93,7 @@ does the explaining. The output describes conditions and historical base rates. 
 | `--horizon` | `swing`, `position` | `swing` | stats horizons 5/10/20 vs 20/60 days; levels window 126 vs 504 bars; daily vs weekly chart |
 | `--out` | folder | `./ta-output/<TICKER>_<as_of>/` | where `metrics.json` and `chart.html` go |
 | `--refresh` | flag | off | ignore the cache and fetch everything again |
+| `--history-start` | `YYYY-MM-DD` | IPO date | ignore the symbol's history before this date (e.g. a pre-merger SPAC shell) |
 | `FMP_BASE_URL` | URL | official FMP | proxy base, e.g. `https://54.236.92.205` |
 | `FMP_TLS_VERIFY` | `0` / `1` | `1` | `0` only per process, only for the proxy |
 | `FMP_CACHE_DIR` | folder | `~/.cache/fmp-technical` | response cache (never contains the key) |
@@ -110,6 +111,9 @@ All analysis thresholds live in `scripts/config.py`, and each run records them i
 - **Plan restrictions:** without the dividend-adjusted endpoint, returns are price-only
   (`data_quality.adj_coverage` is below 1). Without earnings, event risk is skipped. Both are
   listed in `meta.restricted`.
+- **SPAC history:** FMP dates a de-SPAC listing from the shell's first trading day (IONQ starts
+  2021-01-04 near $10). `data_quality.spac_like_start` flags it; mention it, and offer a re-run with
+  `--history-start <merger date>` so signal statistics exclude the shell.
 - **Stale or illiquid data:** report `data_quality.stale` and `data_quality.liquidity` warnings
   first.
 - **Module failure:** a failing module shows `available: false`,

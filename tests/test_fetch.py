@@ -525,3 +525,36 @@ def test_crosscheck_reports_a_restricted_plan():
     assert res["status"] == "restricted" and res["calls"] == 2
     assert all(v["reason"].startswith("restricted") for v in res["indicators"].values())
     assert "not included in this plan" in crosscheck.format_report(res)
+
+
+# ---------------------------------------------------------------------------- SPAC shell / history start
+def _spac_prices():
+    df = series("2021-01-04", seed=11).copy()
+    shell = np.linspace(10.0, 10.8, 80)
+    for c in ("open", "high", "low", "close"):
+        df.iloc[:80, df.columns.get_loc(c)] = shell * {"high": 1.004, "low": 0.996}.get(c, 1.0)
+        df["adj_" + c] = df[c] * 0.98
+    return df
+
+
+def test_spac_like_start_is_flagged_but_kept():
+    fake = market(stock="IONQ", prices={"IONQ": _spac_prices()}, profile=profile_row("IONQ", ipo="2021-01-04"))
+    out = fetch.load_all(fake, "IONQ", now=NOW)
+    sp = out["data_quality"]["spac_like_start"]
+    assert sp and sp["first_date"] == "2021-01-04"
+    assert any("pre-merger SPAC" in n for n in out["notes"])
+    assert day(out["bars"].index[0]) == "2021-01-04"          # flagged, never silently dropped
+
+
+def test_history_start_override_cuts_the_request_and_skips_the_spac_check():
+    fake = market(stock="IONQ", prices={"IONQ": _spac_prices()}, profile=profile_row("IONQ", ipo="2021-01-04"))
+    out = fetch.load_all(fake, "IONQ", now=NOW, start="2021-10-01")
+    assert all(pd.Timestamp(c["from"]) >= pd.Timestamp("2021-10-01") for c in fake.calls_to(FULL, "IONQ"))
+    assert out["bars"].index[0] >= pd.Timestamp("2021-10-01")
+    assert out["data_quality"]["history_start_override"] == "2021-10-01"
+    assert out["data_quality"]["spac_like_start"] is None
+
+
+def test_normal_history_is_not_flagged_as_spac():
+    out = fetch.load_all(market(), "ACME", now=NOW)
+    assert out["data_quality"]["spac_like_start"] is None

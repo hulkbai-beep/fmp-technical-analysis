@@ -197,11 +197,12 @@ def _unavailable(modules: dict) -> dict:
 
 # ---------------------------------------------------------------------------- analysis
 def run_analysis(ticker: str, horizon: str = C.DEFAULT_HORIZON, client=None, now=None,
-                 refresh: bool = False) -> tuple[dict, dict | None]:
+                 refresh: bool = False, history_start: str | None = None) -> tuple[dict, dict | None]:
     """Fetch, compute every module and return (metrics, chart_data).
 
     metrics is JSON-ready with the top-level keys in TOP_KEYS order; chart_data is the
     chart.build_chart_data payload (None, with an entry in meta.errors, if the chart failed).
+    history_start ("YYYY-MM-DD") cuts the symbol's history, e.g. to drop a pre-merger SPAC shell.
     Raises ValueError for an unknown horizon or a symbol without price data, and lets
     fmp_client.FMPError / InvalidKey propagate.
     """
@@ -215,7 +216,12 @@ def run_analysis(ticker: str, horizon: str = C.DEFAULT_HORIZON, client=None, now
     calls0, hits0 = client.stats["network_calls"], client.stats["cache_hits"]
     restricted0, errors0 = len(client.restricted), len(client.errors)
 
-    data = fetch.load_all(client, symbol, now=now)
+    if history_start is not None:
+        try:
+            history_start = pd.Timestamp(history_start).strftime("%Y-%m-%d")
+        except (ValueError, TypeError):
+            raise ValueError(f"history start {history_start!r} is not a date (use YYYY-MM-DD)") from None
+    data = fetch.load_all(client, symbol, now=now, start=history_start)
     bars = data["bars"]
     as_of = _iso(bars.index[-1])
     source = data_source(data["connection"])
@@ -332,10 +338,13 @@ def main(argv=None) -> int:
     ap.add_argument("--horizon", choices=tuple(C.HORIZONS), default=C.DEFAULT_HORIZON)
     ap.add_argument("--out", help="output folder (default ./ta-output/<TICKER>_<as_of>/)")
     ap.add_argument("--refresh", action="store_true", help="ignore the cache and fetch everything again")
+    ap.add_argument("--history-start", metavar="YYYY-MM-DD",
+                    help="ignore the symbol's history before this date (e.g. a pre-merger SPAC shell)")
     args = ap.parse_args(argv)
     symbol = args.ticker.strip().upper()
     try:
-        metrics, chart_data = run_analysis(symbol, args.horizon, refresh=args.refresh)
+        metrics, chart_data = run_analysis(symbol, args.horizon, refresh=args.refresh,
+                                           history_start=args.history_start)
     except fmp_client.InvalidKey as e:
         print(f"API key problem: {_redact(str(e))}", file=sys.stderr)
         return 2
