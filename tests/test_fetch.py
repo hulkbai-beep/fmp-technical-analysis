@@ -530,9 +530,10 @@ def test_crosscheck_reports_a_restricted_plan():
 # ---------------------------------------------------------------------------- SPAC shell / history start
 def _spac_prices():
     df = series("2021-01-04", seed=11).copy()
-    shell = np.linspace(10.0, 10.8, 80)
+    shell = np.linspace(10.0, 10.8, 130)
+    shell[40:60] = np.linspace(12.5, 14.6, 20)              # deal-announcement spike, as IONQ had
     for c in ("open", "high", "low", "close"):
-        df.iloc[:80, df.columns.get_loc(c)] = shell * {"high": 1.004, "low": 0.996}.get(c, 1.0)
+        df.iloc[:130, df.columns.get_loc(c)] = shell * {"high": 1.004, "low": 0.996}.get(c, 1.0)
         df["adj_" + c] = df[c] * 0.98
     return df
 
@@ -558,3 +559,11 @@ def test_history_start_override_cuts_the_request_and_skips_the_spac_check():
 def test_normal_history_is_not_flagged_as_spac():
     out = fetch.load_all(market(), "ACME", now=NOW)
     assert out["data_quality"]["spac_like_start"] is None
+
+
+def test_a_ten_dollar_stock_that_trends_is_not_flagged():
+    df = series("2021-01-04", seed=11).copy()
+    path = np.linspace(9.0, 16.0, 130)                      # passes $10 on the way up
+    for c in ("open", "high", "low", "close"):
+        df.iloc[:130, df.columns.get_loc(c)] = path
+    assert fetch.spac_like_start(df) is None

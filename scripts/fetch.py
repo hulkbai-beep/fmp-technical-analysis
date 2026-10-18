@@ -113,15 +113,19 @@ def history_start(profile, override=None) -> pd.Timestamp:
 
 
 def spac_like_start(bars: pd.DataFrame) -> dict | None:
-    """The first C.SPAC_CHECK_BARS closes all near $10 in a narrow range: the history probably begins
-    with a pre-merger SPAC shell (FMP dates such listings from the shell's first trading day)."""
+    """The first C.SPAC_CHECK_BARS closes centre on $10 with most of them near it: the history probably
+    begins with a pre-merger SPAC shell (FMP dates such listings from the shell's first trading day).
+    Median and share-in-band rather than min/max, so a deal-announcement spike does not hide it."""
     head = bars["close"].iloc[:C.SPAC_CHECK_BARS]
-    if len(head) < C.SPAC_CHECK_BARS:
+    if len(head) < C.SPAC_MIN_BARS:
         return None
+    median = float(head.median())
     lo, hi = C.SPAC_PRICE_BAND
-    if head.min() >= lo and head.max() <= hi and head.max() / head.min() - 1 <= C.SPAC_MAX_RANGE:
+    share = float(head.between(lo, hi).mean())
+    m_lo, m_hi = C.SPAC_MEDIAN_BAND
+    if m_lo <= median <= m_hi and share >= C.SPAC_MIN_SHARE_IN_BAND:
         return {"first_date": _day(head.index[0]), "checked_until": _day(head.index[-1]),
-                "close_min": float(head.min()), "close_max": float(head.max())}
+                "median_close": median, "share_in_band": share}
     return None
 
 
@@ -401,10 +405,11 @@ def load_all(client, ticker, now=None, start=None) -> dict:
     dq["spac_like_start"] = spac_like_start(bars) if override is None else None
     if dq["spac_like_start"]:
         sp = dq["spac_like_start"]
-        notes.append(f"history starts {sp['first_date']} with {C.SPAC_CHECK_BARS} closes between "
-                     f"{sp['close_min']:.2f} and {sp['close_max']:.2f}: this looks like a pre-merger SPAC "
-                     f"shell, which long-history statistics include; re-run with --history-start set to "
-                     f"the merger date to exclude it")
+        notes.append(f"history starts {sp['first_date']} with closes centred on $10 (median "
+                     f"{sp['median_close']:.2f} through {sp['checked_until']}, {sp['share_in_band']:.0%} "
+                     f"between {C.SPAC_PRICE_BAND[0]:.0f} and {C.SPAC_PRICE_BAND[1]:.0f}): this looks like a "
+                     f"pre-merger SPAC shell, which long-history statistics include; re-run with "
+                     f"--history-start set to the merger date to exclude it")
 
     # a plan without /dividend-adjusted: benchmarks go straight to /full (no wasted requests)
     adj_restricted = not adj_rows and str(adj_problem or "").startswith("restricted")

@@ -63,8 +63,10 @@ dividend adjustment.
 ### 1.3 History fetch
 
 - **Earliest date requested:** max(`HISTORY_START` = 1990-01-01, `profile.ipoDate`, `--history-start`).
-  If the first `SPAC_CHECK_BARS` = 63 closes all sit within `SPAC_PRICE_BAND` = 9.00-11.50 and a 15% range,
-  `data_quality.spac_like_start` flags a probable pre-merger SPAC shell (kept, never dropped silently).
+  If the median of the first `SPAC_CHECK_BARS` = 126 closes is within `SPAC_MEDIAN_BAND` = 9.50-11.50 and
+  at least `SPAC_MIN_SHARE_IN_BAND` = 60% of them sit within `SPAC_PRICE_BAND` = 9.00-12.00 (so a
+  deal-announcement spike does not hide it), `data_quality.spac_like_start` flags a probable pre-merger
+  SPAC shell. The bars are kept, never dropped silently; `--history-start` cuts them.
 - **Row cap:** each EOD request returns at most `EOD_ROW_CAP` = 5000 rows, the *newest* rows within
   from..to. Requests therefore run newest-first, in date chunks.
 - **Chunk size:** each chunk spans `CHUNK_YEARS` = 18 calendar years (about 4,540 sessions). When the
