@@ -21,7 +21,7 @@
       k_range52: "52 周区间", k_next_e: "下次财报", k_move: h => `${h} 日 1σ 预期波动`, k_adx: "ADX(14)",
       days_away: (cd, td) => td != null ? `${cd} 天后（约 ${td} 个交易日）` : `${cd} 天后`,
       daily: "日线", weekly: "周线", auto: "自动",
-      range_label: "时间范围", r_1m: "1月", r_3m: "3月", r_6m: "6月", r_ytd: "年初至今", r_1y: "1年", r_all: "全部",
+      range_label: "时间范围", r_1m: "1个月", r_3m: "3个月", r_6m: "6个月", r_ytd: "今年", r_1y: "1年", r_all: "全部",
       zoom_in: "放大（+）", zoom_out: "缩小（−）", fs_enter: "全屏", fs_exit: "退出全屏",
       auto_weekly: "图表宽度不足以每天一根 K 线，已自动切换为周线",
       weekly_note: "周线模式：指标数值为该周最后一个交易日的日线读数",

@@ -44,7 +44,7 @@
     for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) out.push(+v.toFixed(10));
     return out;
   }
-  const tickLabel = (v, step) => step >= 1 ? v.toFixed(0) : step >= 0.1 ? v.toFixed(1) : v.toFixed(2);
+  const tickLabel = (v, step) => v.toFixed(Math.min(4, (String(+step.toPrecision(6)).split(".")[1] || "").length));
   const measure = (() => {
     const ctx = global.document.createElement("canvas").getContext("2d");
     return (s, px = 11, weight = 400) => {
@@ -295,7 +295,8 @@
     // full screen: the price panel takes the screen height (the sub-panels scroll into view below it);
     // the box's offset is taken inside the scrolled full-screen card, so scrolling does not change it
     const boxTop = fs ? box.getBoundingClientRect().top - fsEl.getBoundingClientRect().top + fsEl.scrollTop : 0;
-    const top = 8, HM = fs ? Math.round(Math.max(280, Math.min(W * 0.7, viewH - boxTop - top - 120)))
+    const top = 8, HM = fs ? Math.round(Math.max(Math.min(W * 0.7, viewH - boxTop - top - 120),
+                                                 Math.min(280, Math.max(160, viewH - boxTop - top - LANE - 30))))
       : Math.round(Math.max(280, Math.min(W * 0.5, viewH * 0.66, 760)));
     let lo0 = Infinity, hi0 = -Infinity;
     for (const b of bars) { if (b.l < lo0) lo0 = b.l; if (b.h > hi0) hi0 = b.h; }
@@ -324,14 +325,10 @@
 
     // grid and price axis
     const lastY = y(last.c);
-    const ticks = niceTicks(lo, hi, HM > 480 ? 9 : HM > 320 ? 7 : 5), step = ticks.length > 1 ? ticks[1] - ticks[0] : 1;
-    const tickYs = [];
-    for (const v of ticks) {
-      const yy = Math.round(y(v)) + 0.5;
-      if (yy < top || yy > top + HM) continue;
-      back += `<line x1="0" x2="${XV + VPW}" y1="${yy}" y2="${yy}" stroke="var(--grid)"/>`;
-      tickYs.push([yy, tickLabel(v, step)]);
-    }
+    const tickSet = k => {
+      const ts = niceTicks(lo, hi, k), step = ts.length > 1 ? ts[1] - ts[0] : 1;
+      return ts.map(v => [Math.round(y(v)) + 0.5, tickLabel(v, step)]).filter(([yy]) => yy >= top && yy <= top + HM);
+    };
 
     // volume profile sidebar (shares the price scale): value-area shading, bins, POC
     if (vpOn) {
@@ -393,8 +390,14 @@
       fore += `<g><title>${esc(l.title)}</title><rect x="${XA - 4}" y="${(l.y - 8).toFixed(1)}" width="${AX - 4}" height="16" rx="3" fill="var(--card)" stroke="var(${c})"/>` +
         `<text class="lvl ${l.cls}" x="${XA}" y="${(l.y + 4).toFixed(1)}">${esc(l.text)}</text></g>`;
     }
-    const busy = [lastY, ...tags.map(l => l.y)];
-    for (const [yy, label] of tickYs) if (busy.every(b => Math.abs(yy - b) > 12)) back += `<text x="${XA}" y="${yy + 4}">${label}</text>`;
+    // price ticks: their labels give way to the tags and the chip; when fewer than two would be left
+    // (narrow charts, where tags carry no prices), a denser tick set keeps the scale readable
+    const busy = [lastY, ...tags.map(l => l.y)], free = ts => ts.filter(([yy]) => busy.every(b => Math.abs(yy - b) > 12));
+    const k0 = HM > 480 ? 9 : HM > 320 ? 7 : 5;
+    let ticks = tickSet(k0);
+    for (let k = k0 + 2; free(ticks).length < 2 && k <= k0 + 10; k += 2) ticks = tickSet(k);
+    back = ticks.map(([yy]) => `<line x1="0" x2="${XV + VPW}" y1="${yy}" y2="${yy}" stroke="var(--grid)"/>`).join("") + back;
+    for (const [yy, label] of free(ticks)) back += `<text x="${XA}" y="${yy + 4}">${label}</text>`;
 
     // earnings: dotted lines in the price panel and E badges on a lane under it (time axis)
     const laneY = top + HM + LANE / 2 + 2;
@@ -595,6 +598,7 @@
     hit.addEventListener("pointerleave", leave);
     svg.addEventListener("blur", leave);
     svg.addEventListener("keydown", e => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;   // browser shortcuts: page zoom, history
       if (e.key === "Escape") { leave(); return; }
       if (e.key === "+" || e.key === "=" || e.key === "-" || e.key === "_") { e.preventDefault(); st.zoom(e.key === "+" || e.key === "=" ? 1 / 1.5 : 1.5); return; }
       const step = { ArrowLeft: -1, ArrowRight: 1, PageUp: -10, PageDown: 10, Home: -n, End: n }[e.key];
@@ -697,11 +701,14 @@
     box.addEventListener("pointerdown", e => {
       if (!st.geom || e.button !== 0) return;
       pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      if (e.pointerType !== "mouse") box.setPointerCapture(e.pointerId);   // keeps the finger through redraws
       const v = currentView(st), c = v.i1 - v.i0 + 1;
       drag = null; pinch = null;
       if (pts.size === 1) drag = { x: e.clientX, i0: v.i0, c, per: st.geom.PW / c, moved: false };
-      else if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = { d: gap(), i0: v.i0, c, f: frac((a.x + b.x) / 2) }; }
+      else if (pts.size === 2) {
+        pts.forEach((_, id) => box.setPointerCapture(id));   // keeps both fingers through redraws
+        const [a, b] = [...pts.values()];
+        pinch = { d: gap(), i0: v.i0, c, f: frac((a.x + b.x) / 2) };
+      }
     });
     box.addEventListener("pointermove", e => {
       if (!pts.has(e.pointerId)) return;
@@ -736,9 +743,13 @@
     st.onFs = () => { fsLabel(); requestAnimationFrame(() => st.onSize && st.onSize(true)); };
     global.document.addEventListener("fullscreenchange", st.onFs);
     let width = 0, height = 0;
+    // a height-only change on a touch screen outside full screen is the browser toolbar showing or hiding
+    // during a scroll: redrawing then would make the page jump
+    const coarse = global.matchMedia?.("(pointer: coarse)").matches;
     const onSize = force => {
       const w = Math.floor(st.box.clientWidth), h = global.innerHeight;
-      if (w && (force === true || w !== width || h !== height)) { width = w; height = h; redraw(); }
+      const newH = h !== height && (!coarse || global.document.fullscreenElement);
+      if (w && (force === true || w !== width || newH)) { width = w; height = h; redraw(); }
     };
     if (global.ResizeObserver) { st.ro = new ResizeObserver(onSize); st.ro.observe(st.box); }
     if (!st.onWin) { st.onWin = () => st.onSize && st.onSize(); global.addEventListener("resize", st.onWin); }
