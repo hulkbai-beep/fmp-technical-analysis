@@ -158,6 +158,38 @@ SIGNAL_HIT_EDGE_MIN = 0.05        # and hit-rate edge (5 percentage points)
 SIGNAL_MACD_WARMUP_BARS = MACD_SLOW + MACD_SIGNAL   # MACD crosses before this bar index are ignored (EMA warm-up)
 SIGNAL_DATES_SAMPLE = 10          # most recent de-clustered event dates listed per statistic
 
+# ---------------------------------------------------------------------------- price action (price_action.py, chart 2)
+# Mechanical daily-bar versions of Al Brooks' price-action ideas; references/patterns.md has the rules.
+PA_EMA_PERIOD = 20                # Brooks' 20-bar EMA
+PA_TREND_BAR_BODY = 0.5           # body >= this share of the bar's range -> trend bar
+PA_DOJI_BODY = 0.25               # body <= this share of the range -> doji (anything between: weak bar)
+PA_STATE_BARS = 20                # bars used to classify the market state (channel / trading range)
+PA_EMA_SLOPE_BARS = 10            # EMA rising = EMA today > EMA this many bars ago
+PA_TIGHT_SHARE = 0.8              # share of bars entirely beyond the EMA (lows above / highs below) -> tight channel
+PA_CHANNEL_SHARE = 0.6            # share of closes on one side of the EMA -> (broad) channel
+PA_RANGE_BARS = 20                # trading-range window
+PA_RANGE_MAX_ATR = 5.0            # window high - low at most this many ATRs ...
+PA_RANGE_MIN_CROSSES = 3          # ... and closes crossing the EMA at least this many times -> trading range
+PA_BREAKOUT_FAIL_BARS = 2         # a range breakout that closes back inside within this many more bars has failed
+PA_PULLBACK_EMA_ATR = 0.5         # an H2 / L2 needs the pullback to reach within this many ATRs of the EMA
+PA_COUNT_MAX = 4                  # pullback counts beyond H4 / L4 are not labelled
+PA_GAP_BARS = 20                  # "20 gap bars": this many bars in a row not touching the EMA
+PA_PIVOT_K = 2                    # swing pivots for wedges and measured moves (confirmed k bars later)
+PA_WEDGE_MAX_BARS = 60            # three pushes inside this many bars
+PA_WEDGE_MIN_SPACING = 3          # bars between consecutive pushes, at least
+PA_MM_MAX_AGE = 120               # measured moves only from swings whose first point is at most this many bars old
+PA_ALWAYS_IN_BARS = 2             # consecutive strong trend bars that flip the always-in direction
+
+# ---------------------------------------------------------------------------- candlestick patterns (candlesticks.py, chart 3)
+CS_TREND_BARS = 5                 # prior trend: close[t-k-1] vs close[t-k-1-this] before a k-bar pattern
+CS_LONG_BODY_ATR = 0.6            # long body: body >= this many ATRs (ATR of the bar before the pattern)
+CS_MIN_RANGE_ATR = 0.5            # single-bar shapes need a range of at least this many ATRs
+CS_SHADOW_BODY = 2.0              # hammer / shooting star: long shadow >= this many bodies ...
+CS_SMALL_SHADOW = 0.25            # ... and the other shadow <= this share of the range
+CS_DOJI_BODY = 0.1                # doji: body <= this share of the range
+CS_STAR_BODY = 0.3                # star: middle body <= this share of the first bar's body
+CS_SOLDIER_SHADOW = 0.25          # three soldiers / crows: closing shadow <= this share of the range
+
 # ---------------------------------------------------------------------------- scorecard
 PILLARS = ("trend", "momentum", "relative_strength", "volume_flow", "volatility_setup", "mean_reversion")
 REGIME_WEIGHTS = {

@@ -281,6 +281,83 @@ def active_ids(ev: pd.DataFrame, window: int = C.SIGNAL_ACTIVE_BARS) -> list[str
     return [sid for sid, pos in last_fires(ev).items() if pos is not None and pos >= start]
 
 
+# ---------------------------------------------------------------------------- shared by other libraries
+class OutcomeCache:
+    """Forward outcomes and baselines per (horizon, side[, regime]), computed once per bars/ind.
+
+    Shared by this module and the price-action and candlestick libraries, which measure their
+    events the same way."""
+
+    def __init__(self, bars: pd.DataFrame, ind: pd.DataFrame):
+        self.bars, self.ind = bars, ind
+        self._out: dict[tuple, tuple] = {}
+        self._base: dict[tuple, dict] = {}
+
+    def outcomes(self, h: int, side: int) -> tuple:
+        if (h, side) not in self._out:
+            self._out[(h, side)] = forward_outcomes(self.bars, h, side)
+        return self._out[(h, side)]
+
+    def baseline(self, h: int, regime: str | None, side: int) -> dict:
+        if (h, regime, side) not in self._base:
+            self._base[(h, regime, side)] = baseline(self.bars, h, regime_mask(self.bars, self.ind, regime),
+                                                     self.outcomes(h, side))
+        return self._base[(h, regime, side)]
+
+
+def active_rows(bars: pd.DataFrame, ind: pd.DataFrame, ev: pd.DataFrame, specs: dict, horizons: list[int],
+                primary: int, notes: list, cache: OutcomeCache | None = None) -> list[dict]:
+    """Per-horizon statistics with baselines for every event column of `ev` that fired on the last
+    C.SIGNAL_ACTIVE_BARS bars. `specs` maps each id to {name, bias, regime, pillar, rule, family};
+    a "current_side" regime takes the SMA200 side on the fire date."""
+    cache = cache or OutcomeCache(bars, ind)
+    fires, n_bars, out = last_fires(ev), len(bars), []
+    for sid in active_ids(ev):
+        spec, pos = specs[sid], fires[sid]
+        regime = spec["regime"] if spec["regime"] != "current_side" else side_at(bars, ind, pos)
+        if regime is None:
+            notes.append(f"{sid}: SMA200 side undefined on the fire date; stats use all days.")
+        mask = regime_mask(bars, ind, regime)
+        side = -1 if spec["bias"] < 0 else 1
+        per_h = {}
+        for h in horizons:
+            sig = stats(bars, ind, sid, h, regime_mask=mask, ev=ev, outcomes=cache.outcomes(h, side))
+            uncond, same = cache.baseline(h, None, side), cache.baseline(h, regime, side)
+            per_h[h] = {**sig, "unconditional": uncond, "same_regime": same, "edge": edge(sig, same, uncond)}
+        conf = per_h[primary]["confidence"]
+        out.append({
+            "id": sid, "family": spec.get("family"), "name": spec["name"], "bias": spec["bias"],
+            "pillar": spec.get("pillar"), "rule": spec["rule"],
+            "fired_date": _iso(bars.index[pos]), "bars_ago": n_bars - 1 - pos,
+            "regime_used": regime or "all_days", "horizons": per_h,
+            "mae_basis": "highest high after entry" if side < 0 else "lowest low after entry",
+            "confidence": conf, "scorable": conf != "insufficient",
+        })
+    return out
+
+
+def library_rows(bars: pd.DataFrame, ind: pd.DataFrame, ev: pd.DataFrame, specs: list[dict], h: int,
+                 cache: OutcomeCache | None = None) -> list[dict]:
+    """Every rule of a library at horizon h over all days: last fire, fire count, de-clustered n,
+    hit rate and median, and the edge against the unconditional baseline on the same side."""
+    cache = cache or OutcomeCache(bars, ind)
+    fires, out = last_fires(ev), []
+    for spec in specs:
+        sid, side = spec["id"], -1 if spec["bias"] < 0 else 1
+        sig = stats(bars, ind, sid, h, ev=ev, outcomes=cache.outcomes(h, side))
+        uncond = cache.baseline(h, None, side)
+        diff = edge(sig, uncond, uncond)
+        out.append({
+            "id": sid, "name": spec["name"], "bias": spec["bias"],
+            "last_fired": _iso(bars.index[fires[sid]]) if fires[sid] is not None else None,
+            "fires_total": int(ev[sid].sum()), "horizon": h,
+            "n": sig["n"], "hit_rate": sig["hit_rate"], "median": sig["median"], "confidence": sig["confidence"],
+            "base_median": uncond["median"], "base_hit_rate": uncond["hit_rate"],
+            "edge_median": diff["median"], "edge_hit_rate": diff["hit_rate"],
+        })
+    return out
+
+
 # ---------------------------------------------------------------------------- module builder
 def _caveats(ticker: str, history: dict) -> list[str]:
     return [
@@ -331,47 +408,11 @@ def build_signal_stats(ctx) -> dict:
 
     ev = events(bars, ind)
     fires = last_fires(ev)
-    outcomes: dict[tuple, tuple] = {}
-    baselines: dict[tuple, dict] = {}
-
-    def cached_outcomes(h: int, side: int) -> tuple:
-        if (h, side) not in outcomes:
-            outcomes[(h, side)] = forward_outcomes(bars, h, side)
-        return outcomes[(h, side)]
-
-    def cached_baseline(h: int, regime: str | None, side: int) -> dict:
-        if (h, regime, side) not in baselines:
-            baselines[(h, regime, side)] = baseline(bars, h, regime_mask(bars, ind, regime),
-                                                    cached_outcomes(h, side))
-        return baselines[(h, regime, side)]
-
     library = [{"id": s["id"], "name": s["name"],
                 "last_fired": _iso(bars.index[fires[s["id"]]]) if fires[s["id"]] is not None else None,
                 "fires_total": int(ev[s["id"]].sum())} for s in SIGNALS]
-
-    active = []
     act = active_ids(ev)
-    for sid in act:
-        spec, pos = _BY_ID[sid], fires[sid]
-        regime = spec["regime"] if spec["regime"] != "current_side" else side_at(bars, ind, pos)
-        if regime is None:
-            notes.append(f"{sid}: SMA200 side undefined on the fire date; stats use all days.")
-        mask = regime_mask(bars, ind, regime)
-        side = -1 if spec["bias"] < 0 else 1
-        per_h = {}
-        for h in horizons:
-            sig = stats(bars, ind, sid, h, regime_mask=mask, ev=ev, outcomes=cached_outcomes(h, side))
-            uncond, same = cached_baseline(h, None, side), cached_baseline(h, regime, side)
-            per_h[h] = {**sig, "unconditional": uncond, "same_regime": same, "edge": edge(sig, same, uncond)}
-        conf = per_h[primary]["confidence"]
-        active.append({
-            "id": sid, "family": spec["family"], "name": spec["name"], "bias": spec["bias"],
-            "pillar": spec["pillar"], "rule": spec["rule"],
-            "fired_date": _iso(bars.index[pos]), "bars_ago": n_bars - 1 - pos,
-            "regime_used": regime or "all_days", "horizons": per_h,
-            "mae_basis": "highest high after entry" if side < 0 else "lowest low after entry",
-            "confidence": conf, "scorable": conf != "insufficient",
-        })
+    active = active_rows(bars, ind, ev, _BY_ID, horizons, primary, notes)
 
     return {
         **base, "available": True, "notes": notes,
