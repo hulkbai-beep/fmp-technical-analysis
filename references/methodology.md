@@ -363,6 +363,20 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
 
 ---
 
+### K. Price action (`price_action`) and candlestick patterns (`candlesticks`)
+Two further pattern libraries, both context next to the scorecard and never part of it. The rules,
+parameters (`PA_*`, `CS_*` in config.py) and what the daily-bar approximation leaves out are in
+[patterns.md](patterns.md). In short:
+- **Price action:** daily-bar versions of Al Brooks' reading: bar types (trend bar, weak bar, doji),
+  the market state over the last 20 bars (tight / broad channel or trading range against the EMA20),
+  the always-in direction, H1-H4 / L1-L4 pullback counts, wedges, trading-range breakouts that fail,
+  20-gap-bar EMA tests and measured-move targets. Eight setups (`pa_*`) get statistics.
+- **Candlestick patterns:** twelve classic directional patterns after a 5-bar decline or advance
+  (`cs_*`), plus doji markers without statistics.
+- **Statistics:** the same machinery as section 4 (`signal_stats.OutcomeCache`, `active_rows`): active
+  rows with same-regime baselines, plus a `library` table of every rule at the primary horizon against
+  the unconditional baseline.
+
 ## 4. Signal statistics (`signals`)
 
 The full pre-registered library, the rules exactly as coded, and the statistics are in
@@ -562,6 +576,10 @@ slippage, financing or borrow are modelled. A gap can fill a stop well beyond it
   - earnings markers;
   - a volume-profile sidebar (POC, value area);
   - volume with RVOL, RSI(14) with 30/70 lines, and the RS line vs SPY rebased to 100 at the window start.
+- **Charts 2 and 3:** below the main chart, daily candles over the same window: price action after
+  Al Brooks (bar types, EMA20, H/L counts, wedges, trading ranges, failed breakouts, 20-gap-bar tests,
+  measured moves, and strips for the market state and always-in direction) and candlestick patterns.
+  Panning or zooming any of the three moves all of them. Rules: `references/patterns.md`.
 - **Weekly view:** weekly candles are shown automatically when the screen has fewer than 3 px per daily
   bar. In the weekly view, indicator values are the daily readings on each week's last session.
 - **Numbers:** every number comes from Python; the page only draws. Prices are rounded to

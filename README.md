@@ -7,7 +7,7 @@ entry point Claude reads.
 ```
 pip install -r requirements.txt
 python scripts/fmp_client.py check                    # connection and plan check (needs FMP_API_KEY)
-python scripts/analyze.py AAPL --horizon swing        # -> ta-output/AAPL_<date>/metrics.json, chart.html
+python scripts/analyze.py AAPL --horizon swing        # -> ta-output/AAPL_<date>/metrics.json, chart.html (3 charts)
 python ui/server.py                                   # local UI at http://127.0.0.1:8876
 python -m pytest -q                                   # offline tests
 ```
@@ -22,8 +22,8 @@ set `FMP_TLS_VERIFY=0`, for that process only (see `SKILL.md` > Setup). Never st
 | Path | Contents |
 |---|---|
 | `SKILL.md` | setup, workflow, interpretation rules, options, edge cases, troubleshooting |
-| `scripts/` | `analyze.py` (entry point), `fmp_client.py`, `fetch.py`, `indicators.py`, `regime.py`, `modules.py`, `levels.py`, `signal_stats.py`, `scorecard.py`, `chart.py`, `crosscheck.py`, `config.py` (every threshold) |
-| `references/` | `report_template.md` (report structure), `methodology.md`, `signals.md` |
+| `scripts/` | `analyze.py` (entry point), `fmp_client.py`, `fetch.py`, `indicators.py`, `regime.py`, `modules.py`, `levels.py`, `signal_stats.py`, `price_action.py`, `candlesticks.py`, `scorecard.py`, `chart.py`, `crosscheck.py`, `config.py` (every threshold) |
+| `references/` | `report_template.md` (report structure), `methodology.md`, `signals.md`, `patterns.md` (price action and candlestick patterns) |
 | `ui/` | standard-library local web UI and the chart's JS/CSS |
 | `tests/` | offline pytest suite with a fake FMP client (`tests/fakes.py`) |
 

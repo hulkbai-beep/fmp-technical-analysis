@@ -1,12 +1,13 @@
 ---
 name: technical-analysis
-description: Technical analysis of one US-listed stock or ETF from Financial Modeling Prep (FMP) daily data - market regime, trend and moving averages, RSI, MACD, momentum, relative strength vs SPY and the sector ETF, volume flow, volatility, support/resistance levels, back-tested signal statistics, earnings event risk, scenarios and risk arithmetic, plus an interactive chart. Use it when the user asks for technical analysis, a chart, support/resistance, moving averages, RSI, MACD, momentum or the trend of a ticker, including in Chinese (技术面, 技术分析, K线, 支撑阻力, 均线, 趋势, 走势).
+description: Technical analysis of one US-listed stock or ETF from Financial Modeling Prep (FMP) daily data - market regime, trend and moving averages, RSI, MACD, momentum, relative strength vs SPY and the sector ETF, volume flow, volatility, support/resistance levels, back-tested signal statistics, Al Brooks-style price action (trend vs trading range, H2/L2, wedges, failed breakouts, measured moves) and candlestick patterns with their own back-tested statistics, earnings event risk, scenarios and risk arithmetic, plus three interactive charts. Use it when the user asks for technical analysis, a chart, support/resistance, moving averages, RSI, MACD, momentum, price action, Al Brooks, candlestick patterns or the trend of a ticker, including in Chinese (技术面, 技术分析, K线, K线形态, 价格行为, 支撑阻力, 均线, 趋势, 走势).
 ---
 
 # Technical analysis (FMP)
 
 `scripts/analyze.py` fetches daily bars, benchmarks and earnings dates from FMP, computes every number
-and writes `metrics.json` plus a self-contained `chart.html`. Claude then writes `report.md` from
+and writes `metrics.json` plus a self-contained `chart.html` with three charts: indicators, price
+action after Al Brooks, and candlestick patterns. Claude then writes `report.md` from
 `metrics.json` only, following `references/report_template.md`. Python does the arithmetic; Claude
 does the explaining. The output describes conditions and historical base rates. It is not advice.
 
@@ -54,12 +55,14 @@ does the explaining. The output describes conditions and historical base rates. 
 3. **Read `metrics.json`.** Skip the bulky parts listed in the template (`levels.candidates`,
    `levels.volume_profile.bins`, `signals.library`, `dates_sample`, `meta.config_snapshot`).
 4. **Write `report.md`** next to `metrics.json`, following `references/report_template.md`
-   exactly: 11 sections in fixed order, the exact key paths and its wording rules. Write it in the
+   exactly: 12 sections in fixed order, the exact key paths and its wording rules. Write it in the
    user's language.
 5. **Reply** with a short summary:
    - regime, bias and confidence;
    - the nearest support and resistance;
    - any active signals, each with its n;
+   - the price-action state and always-in direction, and any setup or candlestick pattern that fired
+     in the last 3 bars, each with its n (context, not part of the scorecard);
    - the earnings date if it falls inside the horizon;
    - any data warning;
    - the paths to `report.md` and `chart.html`;
@@ -90,6 +93,13 @@ does the explaining. The output describes conditions and historical base rates. 
   - `insufficient` (n < 15) is not evidence;
   - compare with the same-regime baseline, not with zero;
   - for a bearish rule, a *negative* edge supports it.
+- **Price action and candlestick patterns** (`price_action`, `candlesticks`):
+  - they are context next to the scorecard and never change it; say so;
+  - they are daily-bar approximations: never quote Al Brooks' own probabilities, only the statistics
+    in `metrics.json`;
+  - read them with the same statistics rules as the signals; a pattern with no edge on this stock is
+    reported as such;
+  - measured-move targets are zones, never price targets presented as advice.
 - **Report every conflict** in `scorecard.conflicts`, with its typical meaning. Do not add your own.
 - **Data source:** if `data_source` names a third-party proxy, say so and suggest verifying key
   figures.
@@ -154,3 +164,5 @@ All analysis thresholds live in `scripts/config.py`, and each run records them i
   and approximations.
 - `references/signals.md`: the 14 pre-registered signal rules and how their statistics are
   computed.
+- `references/patterns.md`: the price-action readings and setups (chart 2) and the candlestick
+  patterns (chart 3), rule by rule, and what the daily-bar approximation leaves out.

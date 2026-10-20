@@ -15,7 +15,8 @@ from fakes import ADJ, FULL, NOW, FakeClient, earnings_history, market, profile_
 
 TOP_KEYS = ["ticker", "as_of", "data_source", "horizon", "snapshot", "data_quality", "market_context",
             "regime", "trend_momentum", "relative_strength", "mean_reversion", "volume_flow", "volatility",
-            "levels", "multi_timeframe", "event_risk", "signals", "scorecard", "scenarios", "risk", "meta"]
+            "levels", "multi_timeframe", "event_risk", "signals", "price_action", "candlesticks", "scorecard",
+            "scenarios", "risk", "meta"]
 MODULES = TOP_KEYS[6:-1]
 META_KEYS = {"network_calls", "cache_hits", "restricted", "errors", "skipped", "notes", "connection",
              "config_snapshot"}

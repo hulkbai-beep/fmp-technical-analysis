@@ -55,9 +55,9 @@ layouts and the wording rules.
   faithfully, keeping every number exactly.
 
 **Reading metrics.json**
-- The file is 50-80 KB. The large, rarely needed parts are `levels.candidates`,
-  `levels.volume_profile.bins`, `signals.library`, `signals.active[*].horizons[*].dates_sample` and
-  `meta.config_snapshot`.
+- The file is 60-100 KB. The large, rarely needed parts are `levels.candidates`,
+  `levels.volume_profile.bins`, `signals.library`, the `dates_sample` lists inside every
+  `active[*].horizons` (signals, price_action, candlesticks) and `meta.config_snapshot`.
 - Horizon keys inside `signals.active[*].horizons` are strings (`"10"`). The primary horizon is
   `signals.primary_horizon`.
 
@@ -65,7 +65,7 @@ layouts and the wording rules.
 
 ## Section order and contents
 
-The report starts with a title line, then exactly these 11 sections in this order. In Chinese, use
+The report starts with a title line, then exactly these 12 sections in this order. In Chinese, use
 the bracketed headings.
 
 ### 0. Title
@@ -200,7 +200,41 @@ the last 3 bars."
 **Caveats:** finish with the caveats from `signals.caveats`, condensed to one bullet each. Always cover
 single stock, in-sample, no costs or slippage, and history depth.
 
-### 8. Event risk (事件风险)
+### 8. Price action and candlestick patterns (价格行为与 K 线形态)
+These two libraries are context next to the scorecard, not part of it (`references/patterns.md`). Say
+so once.
+
+**Fields:**
+- `price_action.state.label`, `.since`, `.bars`; `price_action.always_in.direction`, `.since`;
+  `price_action.ema`, `.ema_slope`, `.close_vs_ema_atr`; `price_action.bar.type`;
+  `price_action.trading_range` (`active`, `low`, `high`, `height_atr`); `price_action.gap_bars`;
+  `price_action.last_high_count`, `.last_low_count`, `.last_wedge`, `.last_failed_breakout`;
+  `price_action.measured_moves[*]` (`kind`, `side`, `target`, `distance_pct`, `distance_atr`, `reached`);
+- `price_action.active[*]` and `candlesticks.active[*]`: the same fields as `signals.active[*]`;
+- `price_action.library[*]` and `candlesticks.library[*]`: `name`, `n`, `hit_rate`, `median`,
+  `edge_median`, `edge_hit_rate`, `confidence`, `last_fired`;
+- `candlesticks.recent[*]`, `candlesticks.last_doji`; `price_action.approximation`, `.caveats`,
+  `candlesticks.caveats`.
+
+**Layout:**
+1. **Price action:** two or three sentences: the market state since when, the always-in direction,
+   where the close sits against the EMA, a trading range if one is on, and the latest wedge, failed
+   breakout or H2 / L2 if it is recent (within the primary horizon). List the measured-move targets
+   that are not `reached`, with their distance, as "measured-move zones", never as targets to aim for.
+2. **Candlestick patterns:** the most recent patterns (`candlesticks.recent`, up to 3) in one line.
+3. **Active setups and patterns** (`price_action.active`, `candlesticks.active`): the same table and
+   sentence form as section 7, at the primary horizon. None active: "No price-action setup or
+   candlestick pattern fired in the last 3 bars."
+4. **Library record:** one sentence per library naming the rules with normal or low confidence whose
+   `edge_median` is clearly away from zero, with n, and saying plainly when most of them are near zero.
+5. Always state `price_action.approximation` in one line: a daily-bar approximation of Al Brooks'
+   methods; his own probabilities are not used.
+
+**Wording:** Brooks' terms stay recognisable: "tight bull channel", "trading range", "always-in long",
+"H2", "wedge", "failed breakout", "measured move". In Chinese: 紧密上升通道, 交易区间, Always-in 多头,
+H2, 楔形, 假突破, 等距目标位.
+
+### 9. Event risk (事件风险)
 **Fields:**
 - `event_risk.next_earnings.date`, `.calendar_days`, `.trading_days_est`;
 - `event_risk.within_horizon`, `event_risk.horizon_days`;
@@ -214,7 +248,7 @@ market flag). If n < 8 (`config.EARNINGS_REACTIONS_MIN`), say the sample is smal
 **Skipped:** ETFs: "Skipped: ETF (no earnings)." A restricted or missing earnings endpoint: give its
 `reason`.
 
-### 9. Scenarios (情景)
+### 10. Scenarios (情景)
 **Fields:**
 - for `bull` and `bear` in `scenarios`:
   - `trigger.level`, `.condition`, `.volume`, `.basis`, `.distance_pct`, `.distance_atr`;
@@ -230,7 +264,7 @@ market flag). If n < 8 (`config.EARNINGS_REACTIONS_MIN`), say the sample is smal
 Projection targets must be called "projections (no level beyond the trigger)". Mention `leaning` as
 "the scorecard bias leans toward the {bull|bear} scenario", not as a forecast.
 
-### 10. Risk (风险测算)
+### 11. Risk (风险测算)
 **Fields:** for `risk.long_side` and `risk.short_side`:
 - `entry_ref`;
 - `structural_stop` (`structural_stop_basis`) and `atr_stop` (`atr_stop_basis`);
@@ -247,7 +281,7 @@ notes as bullets.
 **Framing:** say this shows what a 1% risk on a hypothetical $100,000 account would mean. It is not
 a suggestion to trade.
 
-### 11. Methodology & caveats (方法与说明)
+### 12. Methodology & caveats (方法与说明)
 **Content:**
 - **Data:** `data_source`; split-adjusted `/full` prices drive levels, indicators and signals;
   dividend-adjusted closes drive returns, volatility, beta and the forward-return statistics.
@@ -331,29 +365,43 @@ the median 10-day forward return was +0.8% (hit rate 55%), versus +0.4% (53%) fo
 200-day SMA: an edge of +0.4% / +2 pp, below the scorecard's thresholds.
 - Caveats: single stock, in-sample, no costs or slippage, history since 1996-10-01.
 
-## 8. Event risk
+## 8. Price action and candlestick patterns
+Context only, not part of the scorecard (daily-bar approximation of Al Brooks' methods). The market
+has been in a tight bull channel since 2026-10-09 (6 bars), always-in long since 2026-09-30; the close
+sits 1.4 ATR above the rising 20 EMA. The last H2 was 4 bars ago. Unreached measured-move zone:
+4,701.20 (+3.1%, +1.4 ATR). Recent candlestick patterns: shooting star 2 bars ago.
+
+| Setup / pattern | Fired | Regime | n | Hit | Median | Same-regime | Edge | Confidence |
+|---|---|---|---|---|---|---|---|---|
+| ▼ Shooting star | 2 bars ago | above 200 SMA | 96 | 54% | +1.0% | +0.9% / 55% | +0.1% / −1 pp | normal |
+
+Across this stock's history, most candlestick patterns sit within ±0.5% of the all-days median at 10
+days; H2 pullbacks near the rising EMA (n = 74) had a median edge of +0.6%.
+
+## 9. Event risk
 Earnings on 2026-10-29 (13 calendar days, ~9 trading days) fall inside the 10-day horizon. The median
 absolute two-day reaction over the last 12 reports was 1.6%.
 
-## 9. Scenarios
+## 10. Scenarios
 | Scenario | Trigger | Target zones | Invalidation |
 |---|---|---|---|
 | Bull | close above 4509.87 on RVOL ≥ 1.5 | 4552.98-4601.15 | close back below 4461.69 |
 | Bear | close below 4266.35 on RVOL ≥ 1.5 | 4186.54-4234.71, 4084.49-4132.66 | close back above 4314.52 |
 | Base (1σ, 10 days) | — | 4250.80-4699.87 (±5.0%, 2.3 ATR) | — |
 
-## 10. Risk
+## 11. Risk
 Illustrative arithmetic, not a recommendation.
 | Item | Long side | Short side |
 |---|---|---|
 | Structural stop | 4218.17 (2.7 ATR, 5.7%) | 4558.04 (0.9 ATR, 1.8%) |
 | … | | |
 
-## 11. Methodology & caveats
+## 12. Methodology & caveats
 - Prices: split-adjusted FMP /full for levels, indicators and signals; dividend-adjusted closes for
   returns, volatility and forward-return statistics.
 - Approximations: daily-bar anchored VWAP and volume profile; two-day earnings move.
-- Definitions: references/methodology.md and references/signals.md. Interactive chart: chart.html.
+- Definitions: references/methodology.md, references/signals.md and references/patterns.md. Interactive
+  charts: chart.html (indicators, price action, candlestick patterns).
 
 *This is technical analysis for information only, not investment advice.*
 ```
