@@ -10,8 +10,8 @@ import config as C
 import levels as L
 from conftest import synthetic_bars
 
-REQUIRED_LEVEL_KEYS = {"price", "zone_low", "zone_high", "sources", "touches", "volume_share",
-                       "score", "distance_pct", "distance_atr"}
+REQUIRED_LEVEL_KEYS = {"price", "zone_low", "zone_high", "sources", "touches", "holds", "breaks", "flips",
+                       "fresh", "volume_share", "score", "distance_pct", "distance_atr"}
 
 
 def frame(highs, lows, volumes=None, start="2024-01-01"):
@@ -46,26 +46,54 @@ def make_ctx(bars, horizon="swing"):
             "is_etf": False, "earnings": None, "skipped": {}, "notes": []}
 
 
-# ---------------------------------------------------------------------------- pivots
-def test_fractal_pivots_zigzag():
-    highs = [10, 11, 12, 11, 10, 11, 13, 12, 11, 12, 11]
-    lows = [h - 1 for h in highs]
-    df = frame(highs, lows)
-    piv = L.fractal_pivots(df, k=2)
-    assert [p["price"] for p in piv["highs"]] == [12.0, 13.0]
-    assert [p["date"] for p in piv["highs"]] == [df.index[2].strftime("%Y-%m-%d"),
-                                                 df.index[6].strftime("%Y-%m-%d")]
-    # bar 4 is the strict lowest low of bars 2..6; bar 8 ties with bar 10 (not strict) -> no pivot
-    assert [p["price"] for p in piv["lows"]] == [9.0]
+# ---------------------------------------------------------------------------- swing pivots
+def flat_atr(df, value=1.0):
+    return pd.Series(value, index=df.index)
 
 
-def test_fractal_pivots_need_k_bars_on_the_right_and_strict_extremes():
-    df = frame([10, 12, 11, 10, 11, 14, 13], [9, 8, 9, 7, 9, 9, 8])
-    piv = L.fractal_pivots(df, k=2)
-    assert [p["price"] for p in piv["highs"]] == []        # 14 at bar 5 has only one bar after it
-    assert [p["price"] for p in piv["lows"]] == [7.0]
-    flat = frame([10, 11, 12, 12, 11, 10], [9, 9, 9, 9, 9, 9])
-    assert L.fractal_pivots(flat, k=2) == {"highs": [], "lows": []}   # equal highs: no pivot
+def test_swing_pivots_atr_zigzag():
+    highs = [10, 11, 12, 13, 14, 13, 12, 11.5, 12.5, 13.5, 14.5, 13.0, 12.5]
+    df = frame(highs, [h - 0.5 for h in highs])
+    piv = L.swing_pivots(df, flat_atr(df), mult=1.5)
+    d = [x.strftime("%Y-%m-%d") for x in df.index]
+    # bar 0 starts the count (never a pivot); 14 is confirmed by bar 5's low 12.5 = 14 - 1.5
+    assert [(p["date"], p["price"]) for p in piv["highs"]] == [(d[4], 14.0), (d[10], 14.5)]
+    assert [(p["date"], p["price"]) for p in piv["lows"]] == [(d[7], 11.0)]
+    # swing = smaller leg: 14 <- 9.5 (4.5) / -> 11 (3); 11: 3 / 3.5; 14.5: 3.5 / -> latest low 12 (2.5)
+    assert [p["swing_atr"] for p in piv["highs"]] == pytest.approx([3.0, 2.5])
+    assert piv["lows"][0]["swing_atr"] == pytest.approx(3.0)
+
+
+def test_swing_pivots_ignore_moves_smaller_than_the_threshold():
+    highs = [10, 10.8, 10.2, 10.9, 10.1, 10.7, 10.3]
+    df = frame(highs, [h - 0.5 for h in highs])
+    assert L.swing_pivots(df, flat_atr(df), mult=1.5) == {"highs": [], "lows": []}
+    assert L.swing_pivots(df, flat_atr(df, np.nan), mult=0.1) == {"highs": [], "lows": []}   # no ATR yet
+
+
+# ---------------------------------------------------------------------------- supply / demand
+def ohlc(rows, start="2024-01-01"):
+    idx = pd.bdate_range(start, periods=len(rows), name="date")
+    df = pd.DataFrame(rows, columns=["open", "high", "low", "close"], index=idx, dtype=float)
+    return df.assign(volume=1000.0)
+
+
+BASE_ROWS = [(10, 10.5, 9.5, 10), (10.2, 11.5, 10.1, 11.4), (11.4, 12.5, 11.3, 12.3),
+             (12.3, 12.8, 12.0, 12.5), (12.5, 12.6, 11.0, 11.2)]
+
+
+def test_base_zones_fresh_demand_then_tested_then_broken():
+    df = ohlc(BASE_ROWS)
+    d = [x.strftime("%Y-%m-%d") for x in df.index]
+    # bar 0: range 1 ATR, then closes 11.4, 12.3 (+2.3 ATR by bar 2) with no low under 9.5
+    assert L.base_zones(df, flat_atr(df)) == [
+        {"date": d[0], "kind": "demand", "zone_low": 9.5, "zone_high": 10.5, "fresh": True}]
+    tested = ohlc(BASE_ROWS + [(11.2, 11.3, 10.3, 10.6)])            # low 10.3 trades back into it
+    assert [z["fresh"] for z in L.base_zones(tested, flat_atr(tested))] == [False]
+    broken = ohlc(BASE_ROWS + [(11.2, 11.3, 10.3, 10.6), (10.6, 10.7, 9.3, 9.4)])
+    zones = L.base_zones(broken, flat_atr(broken))
+    # the demand zone is gone (close 9.4 < 9.5); bar 3 became a supply base (12.5 -> 9.4)
+    assert [(z["kind"], z["zone_low"], z["zone_high"], z["fresh"]) for z in zones] == [("supply", 12.0, 12.8, True)]
 
 
 # ---------------------------------------------------------------------------- volume profile
@@ -140,52 +168,68 @@ def test_gap_filled_exactly_at_the_prior_extreme():
     assert L.unfilled_gaps(df) == []
 
 
-# ---------------------------------------------------------------------------- merge / score / select
-def test_merge_levels_within_half_atr_uses_running_mean():
-    pts = [(100.0, "pivot_low"), (100.3, "poc"), (100.45, "pivot_low"), (101.2, "sma50"), (99.0, "low_52w")]
-    cands = [{"price": p, "source": s} for p, s in pts]
-    clusters = L.merge_levels(cands, atr=1.0, merge_atr=0.5)
-    assert [c["price"] for c in clusters] == pytest.approx([99.0, 100.25, 101.2])
-    mid = clusters[1]
-    assert (mid["zone_low"], mid["zone_high"]) == (100.0, 100.45)
-    assert mid["sources"] == ["pivot_low", "poc"]
-    assert mid["source_types"] == ["pivot", "volume_profile"]
-    assert mid["n_candidates"] == 3
+# ---------------------------------------------------------------------------- zones / tests / select
+def test_density_zones_merge_close_candidates_and_split_far_ones():
+    cands = [{"price": 100.0, "source": "pivot_low", "weight": 1.0},
+             {"price": 100.3, "source": "poc", "weight": 1.0},
+             {"price": 103.0, "source": "sma50", "weight": 0.25}]
+    low, high = L.density_zones(cands, atr=1.0)
+    assert low["sources"] == ["pivot_low", "poc"] and low["source_types"] == ["pivot", "volume_profile"]
+    assert low["n_candidates"] == 2 and low["weight"] == pytest.approx(2.0)
+    assert low["price"] == pytest.approx(100.15)                   # weighted mean of the members inside
+    assert low["zone_low"] < 100.0 and low["zone_high"] > 100.3
+    assert low["zone_high"] - low["zone_low"] <= C.ZONE_MAX_ATR + 1e-9
+    # a lone candidate: the Gaussian's width at half its peak, 2.355 bandwidths
+    assert high["price"] == pytest.approx(103.0)
+    assert high["zone_high"] - high["zone_low"] == pytest.approx(2.355 * C.KDE_BANDWIDTH_ATR, abs=0.02)
 
 
-def test_merge_levels_boundary_and_no_chaining():
-    exact = L.merge_levels([{"price": 10.0, "source": "a"}, {"price": 10.5, "source": "b"}], 1.0, 0.5)
-    assert len(exact) == 1                               # exactly 0.5 ATR apart -> merged
-    chain = L.merge_levels([{"price": p, "source": "x"} for p in (0.0, 0.5, 1.0)], 1.0, 0.5)
-    # 1.0 is 0.75 from the running mean 0.25 -> new cluster
-    assert [c["price"] for c in chain] == pytest.approx([0.25, 1.0])
-    assert L.merge_levels([{"price": float("nan"), "source": "x"}], 1.0, 0.5) == []
+def test_density_zones_bound_and_candidate_zones():
+    cands = [{"price": 10.4, "zone_low": 10.0, "zone_high": 10.8, "source": "gap_up", "weight": 0.75}]
+    (z,) = L.density_zones(cands, atr=1.0)
+    assert z["zone_low"] < 10.2 and z["zone_high"] > 10.6 and z["source_types"] == ["gap"]
+    (clipped,) = L.density_zones([{"price": 99.9, "source": "pivot_low"}], atr=1.0, bound=(-np.inf, 99.95))
+    assert clipped["zone_high"] == 99.95 and clipped["price"] == pytest.approx(99.9)
+    assert L.density_zones([{"price": float("nan"), "source": "x"}], 1.0) == []
 
 
-def test_score_levels_touches_volume_and_source_bonus():
-    # four bars; the level at 10 is touched by bar 0's low and bar 2's high, bar 1 crosses it
-    df = frame([11, 12, 10.1, 13], [10.05, 8, 9, 12])
-    vp = L.volume_profile(df, bins=5)
-    clusters = [{"price": 10.0, "zone_low": 10.0, "zone_high": 10.0, "sources": ["pivot_low", "poc"],
-                 "source_types": ["pivot", "volume_profile"], "n_candidates": 2},
-                {"price": 12.5, "zone_low": 12.5, "zone_high": 12.5, "sources": ["sma50"],
-                 "source_types": ["moving_average"], "n_candidates": 1}]
-    scored = L.score_levels(clusters, df, vp, atr=0.4)    # band = level +- 0.1
-    assert [c["touches"] for c in scored] == [2, 0]
-    expected_share = L._zone_volume(vp, 9.9, 10.1) / vp["total_volume"]
-    assert scored[0]["volume_share"] == pytest.approx(expected_share)
-    assert scored[0]["score"] == pytest.approx(1.0 + scored[0]["volume_share"] / max(
-        c["volume_share"] for c in scored) + C.LEVEL_SOURCE_BONUS)
-    assert scored[1]["score"] == pytest.approx(scored[1]["volume_share"] / scored[0]["volume_share"])
+TEST_BARS = [(12, 11), (11.2, 10.3), (11.8, 10.8), (12, 11.2), (11, 9.8), (9.6, 9.0), (9.5, 8.8),
+             (10.2, 9.4), (9.7, 8.9), (9.2, 8.5)]
 
 
-def test_merge_levels_keeps_a_candidate_zone():
-    cands = [{"price": 100.0, "zone_low": 99.6, "zone_high": 100.4, "source": "gap_up"},
-             {"price": 100.3, "source": "pivot_low"}]
-    (cl,) = L.merge_levels(cands, atr=1.0, merge_atr=0.5)
-    assert (cl["zone_low"], cl["zone_high"]) == (99.6, 100.4)
-    assert cl["price"] == pytest.approx(100.15)
-    assert cl["source_types"] == ["gap", "pivot"]
+def test_zone_tests_hold_break_and_flip():
+    df = frame(*zip(*TEST_BARS))
+    tests = L.zone_tests(df, 10.0, 10.5, atr=1.0)
+    # from above, out above, high 11.8 >= 10.5 + 1 -> hold; then down through -> break;
+    # back up from below, out below, low 8.9 <= 10 - 1 -> hold right after a break -> flip
+    assert [(t["end"], t["entry"], t["result"], t["flip"]) for t in tests] == [
+        (2, 1, "hold", False), (5, 1, "break", False), (8, -1, "hold", True)]
+    scored, = L.score_zones([{"price": 10.25, "zone_low": 10.0, "zone_high": 10.5, "weight": 2.0}],
+                            df, {"available": False}, atr=1.0, half_life=1e12)
+    assert (scored["touches"], scored["holds"], scored["breaks"], scored["flips"]) == (3, 2, 1, 1)
+    assert scored["score"] == pytest.approx(1.0 - 0.5 + 1.5 + C.LEVEL_CONFLUENCE_WEIGHT * 2.0)
+    assert scored["fresh"] is False and scored["last_test"] == df.index[8].strftime("%Y-%m-%d")
+
+
+def test_zone_tests_leave_out_unresolved_tests_and_count_jumps_and_weak_ones():
+    pending = frame(*zip(*(TEST_BARS + [(10.2, 9.5), (9.7, 9.5)])))
+    assert len(L.zone_tests(pending, 10.0, 10.5, atr=1.0)) == 3        # out below, 9.0 not reached yet
+    inside = frame(*zip(*(TEST_BARS + [(10.2, 9.5)])))
+    assert len(L.zone_tests(inside, 10.0, 10.5, atr=1.0)) == 3         # still in the zone at the last bar
+    jump = frame([12, 9.5], [11, 9.0])
+    assert [t["result"] for t in L.zone_tests(jump, 10.0, 10.5, atr=1.0)] == ["break"]
+    weak = frame([12, 11, 11.1, 10.9, 11.0], [11, 10.2, 10.7, 10.3, 10.8])   # out above, no 1-ATR rally, back in
+    assert [t["result"] for t in L.zone_tests(weak, 10.0, 10.5, atr=1.0)] == ["weak"]
+
+
+def test_score_zones_decay_and_volume_share():
+    df = frame(*zip(*TEST_BARS))
+    vp = L.volume_profile(df, bins=10)
+    z = {"price": 10.25, "zone_low": 10.0, "zone_high": 10.5, "weight": 0.0}
+    (s,) = L.score_zones([z], df, vp, atr=1.0, half_life=1.0)
+    n = len(df)
+    assert s["score"] == pytest.approx(0.5 ** (n - 1 - 2) - 0.5 * 0.5 ** (n - 1 - 5) + 1.5 * 0.5 ** (n - 1 - 8))
+    assert s["volume_share"] == pytest.approx(L._zone_volume(vp, 10.0, 10.5) / vp["total_volume"])
 
 
 def test_gap_candidates_one_zone_when_narrow_two_edges_when_wide():
@@ -202,21 +246,23 @@ def lv(price, score, lo=None, hi=None, sources=("pivot_low",)):
             "zone_high": price if hi is None else hi, "sources": list(sources)}
 
 
-def test_select_levels_nearest_qualifying_first_on_each_side():
-    clusters = [lv(90, 3.0), lv(95, 0.1), lv(97, 1.0), lv(99, 0.5), lv(101, 0.2), lv(104, 2.0),
-                lv(110, 5.0), lv(120, 1.0)]
-    sup, res = L.select_levels(clusters, close=100.0, atr=2.0, per_side=3, min_score=0.25)
-    assert [c["price"] for c in sup] == [99, 97, 90]      # 95 is too weak to be a key level
-    assert [c["price"] for c in res] == [104, 110, 120]   # so is 101
+def test_select_levels_nearest_then_strongest_within_reach():
+    clusters = [lv(99, 1.2), lv(98, 0.5), lv(97, 1.0), lv(95, 5.0), lv(93, 3.0), lv(90, 9.0),
+                lv(101, 2.0), lv(103, 1.5), lv(120, 8.0)]
+    sup, res = L.select_levels(clusters, close=100.0, atr=2.0, per_side=3, min_score=1.0, reach_atr=4.0)
+    # 98 is too weak; 90 is out of reach (5 ATR) although strongest; 97 loses to 95 and 93
+    assert [c["price"] for c in sup] == [99, 95, 93]
+    # only 103 is in reach besides the nearest: the nearest zone beyond reach fills the third place
+    assert [c["price"] for c in res] == [101, 103, 120]
     assert sup[0]["distance_pct"] == pytest.approx(-0.01)
     assert sup[0]["distance_atr"] == pytest.approx(-0.5)
-    assert res[0]["distance_atr"] == pytest.approx(2.0)
+    assert res[0]["distance_atr"] == pytest.approx(0.5)
 
 
 def test_select_levels_keeps_weak_52_week_extremes_and_drops_zones_holding_the_close():
     clusters = [lv(98, 0.01, sources=["low_52w"]), lv(103, 0.0, sources=["high_52w"]),
                 lv(100.2, 2.0, lo=99.7, hi=100.6)]                # contains the close of 100
-    sup, res = L.select_levels(clusters, close=100.0, atr=2.0, per_side=3, min_score=0.25)
+    sup, res = L.select_levels(clusters, close=100.0, atr=2.0, per_side=3, min_score=1.0)
     assert [c["price"] for c in sup] == [98] and [c["price"] for c in res] == [103]
 
 
@@ -267,12 +313,12 @@ def test_build_levels_on_synthetic_bars():
     assert close == pytest.approx(bars["close"].iloc[-1])
     assert atr == pytest.approx(ctx["ind"]["atr14"].iloc[-1])
 
-    # pivots lie in the window, never in the last k bars
-    last_k = {d.strftime("%Y-%m-%d") for d in bars.index[-C.FRACTAL_K:]}
+    # pivots lie in the window; they alternate, so the counts differ by at most one
     start = window.index[0].strftime("%Y-%m-%d")
-    for p in out["pivots"]["highs"] + out["pivots"]["lows"]:
-        assert p["date"] >= start and p["date"] not in last_k
-    assert out["pivots"]["highs"] and out["pivots"]["lows"]
+    highs, lows = out["pivots"]["highs"], out["pivots"]["lows"]
+    assert highs and lows and all(p["date"] >= start for p in highs + lows)
+    assert abs(len(highs) - len(lows)) <= 1
+    assert all(p["swing_atr"] > 0 for p in out["pivots"]["highs"] + out["pivots"]["lows"])
 
     vp = out["volume_profile"]
     assert len(vp["bins"]) == C.PROFILE_BINS
@@ -308,7 +354,8 @@ def test_build_levels_uses_anchored_vwaps_when_available(monkeypatch):
     fake.anchored_vwap_series = lambda ctx: {"ytd_start": pd.Series(77.7, index=ctx["bars"].index)}
     monkeypatch.setitem(sys.modules, "modules", fake)
     out = L.build_levels(make_ctx(bars))
-    assert {"price": 77.7, "source": "avwap_ytd_start"} in out["candidates"]
+    assert {"price": 77.7, "source": "avwap_ytd_start",
+            "weight": C.LEVEL_SOURCE_WEIGHTS["anchored_vwap"]} in out["candidates"]
 
 
 def test_build_levels_ignores_anchored_vwaps_anchored_a_few_bars_ago(monkeypatch):
@@ -349,7 +396,7 @@ def test_build_levels_at_all_time_high_has_no_resistances():
     assert out["extremes"]["at_high_52w"] and out["extremes"]["at_all_time_high"]
     assert any(n.startswith("price at an all-time high") and "no resistance levels" in n
                for n in out["notes"])
-    assert len(out["supports"]) == C.LEVELS_PER_SIDE
+    assert out["supports"] and all(x["zone_high"] < df["close"].iloc[-1] for x in out["supports"])
 
 
 def test_build_levels_short_history_and_missing_sma200():

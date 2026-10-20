@@ -60,7 +60,7 @@
       bars_ago: n => n === 0 ? "今日" : `${n} 根前`,
       sc_normal: "正常", sc_low: "偏少", sc_insufficient: "不足",
       edge_note: "超额 = 信号中位数 − 同状态基准中位数（括号内为胜率差）；样本不足（n < 15）的信号不计入评分。",
-      th_level: "价位", th_dist: "距离", th_src: "来源", touches: n => `触及 ${n} 次`,
+      th_level: "价位", th_dist: "距离", th_src: "来源", touches: (n, h, b) => `测试 ${n} 次 · 守住 ${h ?? 0} · 击穿 ${b ?? 0}`,
       lv_none: "没有可用的关键价位。",
       dn_partial: "未完成 K 线已排除", dn_stale: "数据可能过期", dn_illiquid: "流动性提示", dn_skipped: "已跳过的模块",
       dn_notes: "其他说明", dn_approx: "近似方法",
@@ -119,7 +119,7 @@
       bars_ago: n => n === 0 ? "today" : n === 1 ? "1 bar ago" : `${n} bars ago`,
       sc_normal: "normal", sc_low: "low", sc_insufficient: "insufficient",
       edge_note: "Edge = signal median − same-regime baseline median (hit-rate difference in brackets); signals with n < 15 are not scored.",
-      th_level: "Level", th_dist: "Distance", th_src: "Sources", touches: n => `${n} touch${n === 1 ? "" : "es"}`,
+      th_level: "Level", th_dist: "Distance", th_src: "Sources", touches: (n, h, b) => `${n} test${n === 1 ? "" : "s"} · ${h ?? 0} held · ${b ?? 0} broken`,
       lv_none: "No key levels available.",
       dn_partial: "Partial bar excluded", dn_stale: "Possibly stale data", dn_illiquid: "Liquidity warning", dn_skipped: "Skipped modules",
       dn_notes: "Other notes", dn_approx: "Approximations",
@@ -161,11 +161,13 @@
   const SOURCE_ZH = {
     pivot_high: "摆动高点", pivot_low: "摆动低点", poc: "POC", value_area_low: "VAL", value_area_high: "VAH",
     hvn: "HVN", high_52w: "52周高", low_52w: "52周低", sma50: "SMA50", sma200: "SMA200",
+    demand: "需求区", supply: "供给区", gap_up: "向上缺口", gap_down: "向下缺口",
     gap_up_top: "向上缺口上沿", gap_up_bottom: "向上缺口下沿", gap_down_top: "向下缺口上沿", gap_down_bottom: "向下缺口下沿",
   };
   const SOURCE_EN = {
     pivot_high: "pivot high", pivot_low: "pivot low", poc: "POC", value_area_low: "VAL", value_area_high: "VAH",
     hvn: "HVN", high_52w: "52w high", low_52w: "52w low", sma50: "SMA50", sma200: "SMA200",
+    demand: "demand zone", supply: "supply zone", gap_up: "gap up", gap_down: "gap down",
     gap_up_top: "gap-up top", gap_up_bottom: "gap-up bottom", gap_down_top: "gap-down top", gap_down_bottom: "gap-down bottom",
   };
 

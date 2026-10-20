@@ -1,8 +1,11 @@
 """
-Key levels (module H): fractal swing pivots, a volume profile, the 52-week range and unfilled
-gaps, plus the current SMA50/SMA200 and anchored VWAPs, merged into ranked support and resistance
-zones around the last close. Candidates below and above the close are merged separately, so a
-support zone lies wholly below the close and a resistance zone wholly above it.
+Key levels (module H): ATR ZigZag swing pivots, supply/demand base zones, a volume profile, the
+52-week range and unfilled gaps, plus the current SMA50/SMA200 and anchored VWAPs, as weighted
+candidate prices. Per side of the last close, a Gaussian density of the candidates gives the zones
+(its peaks, as wide as the density stays above half the peak); each zone is scored by how price
+reacted on earlier tests (holds, breaks, role reversals, recent ones counting more) plus the
+weight of candidates in it. A support zone lies wholly below the close and a resistance zone
+wholly above it.
 
 Everything uses split-adjusted OHLC (the prices that actually traded, continuous across splits)
 over the last ctx["hz"]["levels_lookback"] bars, as of the last complete bar. Definitions are
@@ -14,19 +17,19 @@ import math
 
 import numpy as np
 import pandas as pd
-from numpy.lib.stride_tricks import sliding_window_view
 
 import config as C
 
 PROFILE_NOTE = "approximation: each bar's volume spread evenly across its high-low range"
-PIVOT_NOTE = ("a pivot needs {k} bars on each side inside the data, so the last {k} bars cannot be "
-              "pivots yet (the only right-side dependence; levels are measured as of the last bar)")
+PIVOT_NOTE = ("a swing pivot is confirmed once price reverses {m:g} ATR from it, so the latest swing "
+              "is not a pivot yet (the only right-side dependence; levels are measured as of the last bar)")
 
 _SOURCE_TYPES = {
     "pivot_high": "pivot", "pivot_low": "pivot",
     "poc": "volume_profile", "value_area_low": "volume_profile",
     "value_area_high": "volume_profile", "hvn": "volume_profile",
     "high_52w": "range_52w", "low_52w": "range_52w",
+    "demand": "supply_demand", "supply": "supply_demand",
     "sma50": "moving_average", "sma200": "moving_average",
 }
 
@@ -45,7 +48,7 @@ def _iso(ts) -> str:
 
 
 def source_type(source: str) -> str:
-    """Family of a candidate source; each family counts once in the multi-source score bonus."""
+    """Family of a candidate source (pivot, volume_profile, gap, ...)."""
     if source.startswith("gap_"):
         return "gap"
     if source.startswith("avwap_"):
@@ -53,27 +56,97 @@ def source_type(source: str) -> str:
     return _SOURCE_TYPES.get(source, source)
 
 
-# ---------------------------------------------------------------------------- pivots
-def fractal_pivots(df: pd.DataFrame, k: int = C.FRACTAL_K) -> dict:
-    """Fractal swing pivots from df's high and low columns.
+# ---------------------------------------------------------------------------- swing pivots
+def swing_pivots(df: pd.DataFrame, atr: pd.Series, mult: float = C.SWING_ATR) -> dict:
+    """ATR ZigZag swing pivots from df's high and low columns.
 
-    Bar i is a pivot high when high[i] is strictly greater than every other high in bars
-    i-k..i+k; a pivot low is the strictly lowest low. Equal extremes never form a pivot, and the
-    first and last k bars of df cannot be pivots (no full window).
-    Returns {"highs": [{date, price}], "lows": [...]}, chronological.
+    The running high (low) since the last pivot becomes a pivot high (low) once a later bar's
+    low (high) is at least mult x ATR of that later bar below (above) it; pivots alternate. The
+    latest swing is never confirmed by the data, so it is not a pivot, and neither is the first
+    bar (no left side; it only starts the count). Each pivot carries
+    swing_atr: the smaller of the legs into and out of it (the one available at either end), in
+    ATRs at the pivot bar. Returns {"highs": [{date, price, swing_atr}], "lows": [...]}.
     """
-    return {"highs": _fractal_side(df["high"], k, np.greater),
-            "lows": _fractal_side(df["low"], k, np.less)}
+    high = df["high"].to_numpy(dtype=float, na_value=np.nan)
+    low = df["low"].to_numpy(dtype=float, na_value=np.nan)
+    a = atr.reindex(df.index).to_numpy(dtype=float, na_value=np.nan)
+    piv: list[tuple[int, int, float]] = []          # (bar, +1 high / -1 low, price)
+    direction, hi_i, lo_i = 0, 0, 0
+    for i in range(len(df)):
+        if not (np.isfinite(high[i]) and np.isfinite(low[i])):
+            continue
+        if direction >= 0 and (not np.isfinite(high[hi_i]) or high[i] > high[hi_i]):
+            hi_i = i
+        if direction <= 0 and (not np.isfinite(low[lo_i]) or low[i] < low[lo_i]):
+            lo_i = i
+        thr = mult * a[i]
+        if not np.isfinite(thr):
+            continue
+        top = direction >= 0 and low[i] <= high[hi_i] - thr
+        bottom = direction <= 0 and high[i] >= low[lo_i] + thr
+        if top and bottom:                       # undecided start: the earlier extreme came first
+            top, bottom = hi_i < lo_i, hi_i >= lo_i
+        if top:
+            piv.append((hi_i, +1, high[hi_i]))
+            direction, lo_i = -1, hi_i + int(np.nanargmin(low[hi_i:i + 1]))
+        elif bottom:
+            piv.append((lo_i, -1, low[lo_i]))
+            direction, hi_i = +1, lo_i + int(np.nanargmax(high[lo_i:i + 1]))
+    if direction > 0:                            # unconfirmed latest swing: the leg out of the last pivot
+        tail = high[hi_i]
+    elif direction < 0:
+        tail = low[lo_i]
+    else:
+        tail = np.nan
+    out = {"highs": [], "lows": []}
+    for j, (i, kind, price) in enumerate(piv):
+        if i == 0:
+            continue
+        legs = [abs(price - piv[j - 1][2])] if j > 0 else []
+        legs.append(abs((piv[j + 1][2] if j + 1 < len(piv) else tail) - price))
+        legs = [x for x in legs if np.isfinite(x)]
+        swing = min(legs) / a[i] if legs and np.isfinite(a[i]) and a[i] > 0 else np.nan
+        out["highs" if kind > 0 else "lows"].append(
+            {"date": _iso(df.index[i]), "price": float(price), "swing_atr": _num(swing)})
+    return out
 
 
-def _fractal_side(s: pd.Series, k: int, beats) -> list[dict]:
-    x = s.to_numpy(dtype=float, na_value=np.nan)
-    if len(x) < 2 * k + 1:
-        return []
-    win = sliding_window_view(x, 2 * k + 1)          # row j covers bars j..j+2k, centre j+k
-    others = np.delete(win, k, axis=1)
-    is_pivot = beats(win[:, k:k + 1], others).all(axis=1)   # a NaN anywhere compares False
-    return [{"date": _iso(s.index[i]), "price": float(x[i])} for i in np.flatnonzero(is_pivot) + k]
+# ---------------------------------------------------------------------------- supply / demand
+def base_zones(df: pd.DataFrame, atr: pd.Series) -> list[dict]:
+    """Supply/demand zones: the range of a quiet base bar that an impulse left behind.
+
+    Bar b is a demand base when its high-low range is at most C.BASE_MAX_ATR x ATR[b] and, within
+    the next C.IMPULSE_BARS bars, a close is at least C.IMPULSE_ATR x ATR[b] above close[b] with
+    no low below low[b] on the way (supply mirrors it). The zone is low[b]..high[b]. Zones that a
+    later close has gone through (below the zone for demand, above it for supply) are dropped;
+    fresh = no bar after the impulse has traded back into the zone. Chronological.
+    """
+    o = df["open"].to_numpy(dtype=float, na_value=np.nan)
+    h = df["high"].to_numpy(dtype=float, na_value=np.nan)
+    lo = df["low"].to_numpy(dtype=float, na_value=np.nan)
+    c = df["close"].to_numpy(dtype=float, na_value=np.nan)
+    a = atr.reindex(df.index).to_numpy(dtype=float, na_value=np.nan)
+    n, out = len(df), []
+    for b in range(n - 1):
+        if not (np.isfinite(a[b]) and a[b] > 0 and h[b] - lo[b] <= C.BASE_MAX_ATR * a[b]):
+            continue
+        for kind, sign in (("demand", 1.0), ("supply", -1.0)):
+            done = None
+            for j in range(b + 1, min(n, b + 1 + C.IMPULSE_BARS)):
+                if (lo[j] < lo[b]) if sign > 0 else (h[j] > h[b]):
+                    break
+                if sign * (c[j] - c[b]) >= C.IMPULSE_ATR * a[b]:
+                    done = j
+                    break
+            if done is None or sign * (c[b + 1] - o[b + 1]) <= 0:   # the first impulse bar moves away
+                continue
+            later = slice(done + 1, n)
+            if (c[later] < lo[b]).any() if sign > 0 else (c[later] > h[b]).any():
+                continue
+            fresh = not ((lo[later] <= h[b]).any() if sign > 0 else (h[later] >= lo[b]).any())
+            out.append({"date": _iso(df.index[b]), "kind": kind, "zone_low": float(lo[b]),
+                        "zone_high": float(h[b]), "fresh": bool(fresh)})
+    return out
 
 
 # ---------------------------------------------------------------------------- volume profile
@@ -222,80 +295,174 @@ def unfilled_gaps(df: pd.DataFrame) -> list[dict]:
     return out
 
 
-# ---------------------------------------------------------------------------- merge / rank / select
-def merge_levels(candidates: list[dict], atr: float, merge_atr: float = C.LEVEL_MERGE_ATR) -> list[dict]:
-    """Greedy one-pass clustering of candidate prices, ascending.
+# ---------------------------------------------------------------------------- zones / tests / select
+def _decay(age_bars, half_life: float):
+    """Recency factor 0.5 ** (age / half_life)."""
+    return 0.5 ** (np.asarray(age_bars, dtype=float) / half_life)
 
-    A candidate joins the current cluster when it is within merge_atr x atr of the cluster's
-    running mean price (simple mean of members), otherwise it starts a new cluster. Cluster
-    price = mean of member prices; zone_low/zone_high = lowest/highest member price, or a
-    member's own zone_low/zone_high when it carries one (a gap zone).
+
+def density_zones(candidates: list[dict], atr: float, bound: tuple[float, float] | None = None) -> list[dict]:
+    """Zones from a weighted Gaussian density of candidate prices, ascending.
+
+    Each candidate adds weight x a kernel of width C.KDE_BANDWIDTH_ATR x atr at its price (a
+    candidate with a zone spreads its weight evenly across it). Every local peak of the density is
+    a zone: it spans the prices around the peak where the density is at least C.ZONE_HALF_MAX x
+    the peak, without crossing the lowest point between it and a neighbouring peak, clamped to
+    C.ZONE_MIN_ATR..C.ZONE_MAX_ATR ATRs around the peak and to `bound` (lo, hi). Its members are
+    the candidates between those lowest points; price = weighted mean of the members inside the
+    zone (the peak if none); weight = summed member weight.
     """
-    pts = sorted((c for c in candidates if _num(c.get("price")) is not None), key=lambda c: c["price"])
-    tol = merge_atr * atr
-    groups: list[list[dict]] = []
-    for c in pts:
-        if groups and abs(c["price"] - _mean_price(groups[-1])) <= tol:
-            groups[-1].append(c)
-        else:
-            groups.append([c])
-    return [_cluster(g) for g in groups]
-
-
-def _mean_price(members: list[dict]) -> float:
-    return sum(float(m["price"]) for m in members) / len(members)
-
-
-def _cluster(members: list[dict]) -> dict:
-    lows = [float(m.get("zone_low", m["price"])) for m in members]
-    highs = [float(m.get("zone_high", m["price"])) for m in members]
-    sources = list(dict.fromkeys(m["source"] for m in members))
-    return {"price": _mean_price(members), "zone_low": min(lows), "zone_high": max(highs),
-            "sources": sources, "source_types": list(dict.fromkeys(map(source_type, sources))),
-            "n_candidates": len(members)}
-
-
-def score_levels(clusters: list[dict], df: pd.DataFrame, profile: dict, atr: float) -> list[dict]:
-    """Copies of the clusters with touches, volume_share and score.
-
-    Band = [zone_low - C.TOUCH_ATR x atr, zone_high + C.TOUCH_ATR x atr]. touches = bars of df
-    whose high or low lies in the band (a bar that only crosses it with its body does not
-    count); volume_share = profile volume inside the band / total profile volume.
-    score = touches / max touches + volume_share / max volume_share (over all clusters)
-            + C.LEVEL_SOURCE_BONUS x (distinct source types - 1).
-    """
-    if not clusters:
+    pts = [c for c in candidates if _num(c.get("price")) is not None and float(c.get("weight", 1.0)) > 0]
+    if not pts:
         return []
-    tol = C.TOUCH_ATR * atr
-    band_lo = np.array([c["zone_low"] for c in clusters]) - tol
-    band_hi = np.array([c["zone_high"] for c in clusters]) + tol
-    high = df["high"].to_numpy(dtype=float, na_value=np.nan)[:, None]
-    low = df["low"].to_numpy(dtype=float, na_value=np.nan)[:, None]
-    touched = ((high >= band_lo) & (high <= band_hi)) | ((low >= band_lo) & (low <= band_hi))
-    touches = touched.sum(axis=0)
-    if profile.get("available"):
-        share = np.array([_zone_volume(profile, a, b) for a, b in zip(band_lo, band_hi)])
-        share = share / profile["total_volume"]
-    else:
-        share = np.zeros(len(clusters))
-    t_norm = touches / touches.max() if touches.max() > 0 else np.zeros(len(clusters))
-    v_norm = share / share.max() if share.max() > 0 else np.zeros(len(clusters))
-    return [{**c, "touches": int(t), "volume_share": float(v),
-             "score": float(tn + vn + C.LEVEL_SOURCE_BONUS * (len(c["source_types"]) - 1))}
-            for c, t, v, tn, vn in zip(clusters, touches, share, t_norm, v_norm)]
+    bw = C.KDE_BANDWIDTH_ATR * atr
+    xs, ws = [], []
+    for c in pts:
+        w = float(c.get("weight", 1.0))
+        lo, hi = float(c.get("zone_low", c["price"])), float(c.get("zone_high", c["price"]))
+        k = max(1, int(math.ceil((hi - lo) / (bw / 2.0))) + 1) if hi > lo else 1
+        xs.extend(np.linspace(lo, hi, k) if k > 1 else [float(c["price"])])
+        ws.extend([w / k] * k)
+    xs, ws = np.array(xs), np.array(ws)
+    step = max(bw / 20.0, (xs.max() - xs.min() + 6 * bw) / 4000.0)
+    grid = np.arange(xs.min() - 3 * bw, xs.max() + 3 * bw + step, step)
+    dens = np.exp(-0.5 * ((grid[:, None] - xs[None, :]) / bw) ** 2) @ ws
+    up = np.r_[True, dens[1:] > dens[:-1]]          # rising into i
+    down = np.r_[dens[:-1] >= dens[1:], True]       # not rising out of i
+    peaks = np.flatnonzero(up & down & (dens > 1e-12 * dens.max()))
+    cuts = [0] + [p + int(np.argmin(dens[p:q + 1])) for p, q in zip(peaks[:-1], peaks[1:])] + [len(grid) - 1]
+    prices = np.array([float(c["price"]) for c in pts])
+    out = []
+    for n, p in enumerate(peaks):
+        a, b = cuts[n], cuts[n + 1]
+        half = C.ZONE_HALF_MAX * dens[p]
+        i = p
+        while i > a and dens[i - 1] >= half:
+            i -= 1
+        j = p
+        while j < b and dens[j + 1] >= half:
+            j += 1
+        peak = float(grid[p])
+        lo = max(float(grid[i]), peak - C.ZONE_MAX_ATR * atr / 2.0)
+        hi = min(float(grid[j]), peak + C.ZONE_MAX_ATR * atr / 2.0)
+        if hi - lo < C.ZONE_MIN_ATR * atr:
+            lo, hi = peak - C.ZONE_MIN_ATR * atr / 2.0, peak + C.ZONE_MIN_ATR * atr / 2.0
+        if bound is not None:
+            lo, hi = max(lo, bound[0]), min(hi, bound[1])
+            if hi <= lo:
+                continue
+        members = [c for c, x in zip(pts, prices) if (x >= grid[a] if n == 0 else x > grid[a]) and x <= grid[b]]
+        if not members:
+            continue
+        inside = [c for c in members if lo <= c["price"] <= hi]
+        price = (sum(c["price"] * c.get("weight", 1.0) for c in inside) / sum(c.get("weight", 1.0) for c in inside)
+                 if inside else min(max(peak, lo), hi))
+        sources = list(dict.fromkeys(m["source"] for m in members))
+        out.append({"price": float(price), "zone_low": float(lo), "zone_high": float(hi),
+                    "sources": sources, "source_types": list(dict.fromkeys(map(source_type, sources))),
+                    "n_candidates": len(members),
+                    "weight": float(sum(float(m.get("weight", 1.0)) for m in members))})
+    return out
+
+
+def zone_tests(df: pd.DataFrame, lo: float, hi: float, atr: float) -> list[dict]:
+    """Earlier tests of the zone [lo, hi] in df, chronological.
+
+    With tolerance t = C.TEST_TOL_ATR x atr, a bar is above the zone when its low > hi + t, below
+    it when its high < lo - t, and in it otherwise. A test is a run of bars in the zone between a
+    bar on one side (the entry side) and the next bar outside it, or a jump straight from one side
+    to the other. It is a break when price leaves on the other side, a hold when it leaves on the
+    entry side and then trades C.REACTION_ATR x atr beyond the near edge within C.REACTION_BARS
+    bars (before testing again), and weak otherwise. A hold right after a break is a flip (role
+    reversal). Tests still open at the last bar, holds still able to complete and a run at the
+    first bar (no entry side) are left out. Each test: {end (bar index), entry, result, flip}.
+    """
+    high = df["high"].to_numpy(dtype=float, na_value=np.nan)
+    low = df["low"].to_numpy(dtype=float, na_value=np.nan)
+    tol = C.TEST_TOL_ATR * atr
+    state = np.where(low > hi + tol, 1, np.where(high < lo - tol, -1, 0))
+    n = len(state)
+    out: list[dict] = []
+    i = 0
+    while i < n and state[i] == 0:                  # in the zone at the start: no entry side
+        i += 1
+    while i < n:
+        entry = int(state[i])                       # bar i is outside the zone
+        j = i + 1
+        while j < n and state[j] == 0:
+            j += 1
+        if j >= n:
+            break                                   # still in the zone (or never came back) at the last bar
+        if j == i + 1 and state[j] == entry:
+            i = j                                   # stayed on the same side
+            continue
+        if state[j] != entry:
+            result = "break"
+        else:
+            nxt = j
+            while nxt < n and state[nxt] == entry:
+                nxt += 1                            # bars until the next test
+            stop = min(nxt, j + C.REACTION_BARS, n)
+            far = (high[j:stop].max() >= hi + C.REACTION_ATR * atr) if entry > 0 else \
+                  (low[j:stop].min() <= lo - C.REACTION_ATR * atr)
+            if far:
+                result = "hold"
+            elif stop == n and nxt == n and n - j < C.REACTION_BARS:
+                i = j
+                continue                            # could still become a hold
+            else:
+                result = "weak"
+        flip = result == "hold" and bool(out) and out[-1]["result"] == "break"
+        out.append({"end": j, "entry": entry, "result": result, "flip": flip})
+        i = j
+    return out
+
+
+def score_zones(zones: list[dict], df: pd.DataFrame, profile: dict, atr: float, half_life: float) -> list[dict]:
+    """Copies of the zones with their test record, volume_share and score.
+
+    score = sum over tests of recency x (C.LEVEL_HOLD_POINTS per hold, + C.LEVEL_FLIP_POINTS when
+    it is a flip, - C.LEVEL_BREAK_POINTS per break) + C.LEVEL_CONFLUENCE_WEIGHT x zone weight,
+    recency = 0.5 ** (bars since the test / half_life). touches = number of tests; fresh = no test.
+    volume_share = profile volume inside the zone / total profile volume (shown, not scored).
+    """
+    n = len(df)
+    out = []
+    for z in zones:
+        tests = zone_tests(df, z["zone_low"], z["zone_high"], atr)
+        pts = 0.0
+        for t in tests:
+            r = float(_decay(n - 1 - t["end"], half_life))
+            if t["result"] == "hold":
+                pts += r * (C.LEVEL_HOLD_POINTS + (C.LEVEL_FLIP_POINTS if t["flip"] else 0.0))
+            elif t["result"] == "break":
+                pts -= r * C.LEVEL_BREAK_POINTS
+        share = (_zone_volume(profile, z["zone_low"], z["zone_high"]) / profile["total_volume"]
+                 if profile.get("available") else 0.0)
+        holds = sum(t["result"] == "hold" for t in tests)
+        last = max((t["end"] for t in tests), default=None)
+        out.append({**z, "touches": len(tests), "holds": int(holds),
+                    "breaks": int(sum(t["result"] == "break" for t in tests)),
+                    "flips": int(sum(t["flip"] for t in tests)), "fresh": not tests,
+                    "last_test": _iso(df.index[last]) if last is not None else None,
+                    "reaction_score": float(pts), "volume_share": float(share),
+                    "score": float(pts + C.LEVEL_CONFLUENCE_WEIGHT * z.get("weight", 0.0))})
+    return out
 
 
 def qualifies(cluster: dict, min_score: float = C.LEVEL_MIN_SCORE) -> bool:
-    """Strong enough to be a key level: score >= min_score, or the cluster holds the 52-week high
+    """Strong enough to be a key level: score >= min_score, or the zone holds the 52-week high
     or low (structural extremes, which price has rarely revisited by construction)."""
     extreme = {"high_52w", "low_52w"} & set(cluster.get("sources") or ())
     return bool(extreme) or float(cluster.get("score") or 0.0) >= min_score
 
 
 def select_levels(clusters: list[dict], close: float, atr: float, per_side: int = C.LEVELS_PER_SIDE,
-                  min_score: float = C.LEVEL_MIN_SCORE) -> tuple[list[dict], list[dict]]:
-    """(supports, resistances): per side, the per_side qualifying clusters nearest the close,
-    nearest first, with signed distances (price / close - 1 and (price - close) / atr; negative below).
+                  min_score: float = C.LEVEL_MIN_SCORE, reach_atr: float = math.inf) -> tuple[list[dict], list[dict]]:
+    """(supports, resistances): per side, the nearest qualifying zone plus the highest-scoring
+    other qualifying zones within reach_atr ATRs of the close (nearest ones fill any shortfall),
+    per_side in all, nearest first, with signed distances (price / close - 1 and
+    (price - close) / atr; negative below).
 
     Supports lie wholly below the close (zone_high < close), resistances wholly above it
     (zone_low > close); a zone containing the close belongs to neither side.
@@ -303,10 +470,20 @@ def select_levels(clusters: list[dict], close: float, atr: float, per_side: int 
     def with_distance(c: dict) -> dict:
         return {**c, "distance_pct": c["price"] / close - 1.0, "distance_atr": (c["price"] - close) / atr}
 
+    def pick(side: list[dict]) -> list[dict]:
+        if not side:
+            return []
+        rest = side[1:]
+        near = [c for c in rest if abs(c["price"] - close) <= reach_atr * atr]
+        best = sorted(near, key=lambda c: -float(c.get("score") or 0.0))[:per_side - 1]
+        fill = [c for c in rest if c not in best][:max(0, per_side - 1 - len(best))]
+        chosen = [side[0]] + best + fill
+        return sorted(chosen, key=lambda c: abs(c["price"] - close))
+
     strong = [c for c in clusters if qualifies(c, min_score)]
     below = sorted((c for c in strong if c.get("zone_high", c["price"]) < close), key=lambda c: close - c["price"])
     above = sorted((c for c in strong if c.get("zone_low", c["price"]) > close), key=lambda c: c["price"] - close)
-    return [with_distance(c) for c in below[:per_side]], [with_distance(c) for c in above[:per_side]]
+    return [with_distance(c) for c in pick(below)], [with_distance(c) for c in pick(above)]
 
 
 # ---------------------------------------------------------------------------- builder
@@ -352,26 +529,38 @@ def _gap_candidates(g: dict, atr: float) -> list[dict]:
             {"price": g["bottom"], "source": f"gap_{g['direction']}_bottom", "date": g["date"]}]
 
 
-def _candidates(pivots: dict, profile: dict, r52: dict, gaps: list, ind_row: pd.Series,
-                avwaps: list, atr: float, notes: list) -> list[dict]:
-    cands = [{"price": p["price"], "source": "pivot_high", "date": p["date"]} for p in pivots["highs"]]
-    cands += [{"price": p["price"], "source": "pivot_low", "date": p["date"]} for p in pivots["lows"]]
+def _candidates(pivots: dict, bases: list, profile: dict, r52: dict, gaps: list, ind_row: pd.Series,
+                avwaps: list, atr: float, age, notes: list) -> list[dict]:
+    """Weighted candidates: C.LEVEL_SOURCE_WEIGHTS by source type, x swing size for pivots, x
+    C.LEVEL_FRESH_FACTOR for untested supply/demand zones, x recency (age(date)) when dated."""
+    W = C.LEVEL_SOURCE_WEIGHTS
+    cands = []
+    for side, source in (("highs", "pivot_high"), ("lows", "pivot_low")):
+        for p in pivots[side]:
+            size = min(max((p["swing_atr"] or C.SWING_ATR) / C.SWING_ATR, 1.0), C.SWING_WEIGHT_CAP)
+            cands.append({"price": p["price"], "source": source, "date": p["date"],
+                          "weight": W["pivot"] * size * age(p["date"])})
+    for z in bases:
+        w = W["supply_demand"] * (C.LEVEL_FRESH_FACTOR if z["fresh"] else 1.0) * age(z["date"])
+        cands.append({"price": (z["zone_low"] + z["zone_high"]) / 2.0, "zone_low": z["zone_low"],
+                      "zone_high": z["zone_high"], "source": z["kind"], "date": z["date"], "weight": w})
     if profile["available"]:
-        cands += [{"price": profile["poc"], "source": "poc"},
-                  {"price": profile["value_area_low"], "source": "value_area_low"},
-                  {"price": profile["value_area_high"], "source": "value_area_high"}]
-        cands += [{"price": p, "source": "hvn"} for p in profile["hvn"]]
-    cands += [{"price": r52["high_52w"], "source": "high_52w", "date": r52["high_52w_date"]},
-              {"price": r52["low_52w"], "source": "low_52w", "date": r52["low_52w_date"]}]
+        vp, edge = W["volume_profile"], W["volume_profile"] * C.LEVEL_VALUE_AREA_WEIGHT
+        cands += [{"price": profile["poc"], "source": "poc", "weight": vp},
+                  {"price": profile["value_area_low"], "source": "value_area_low", "weight": edge},
+                  {"price": profile["value_area_high"], "source": "value_area_high", "weight": edge}]
+        cands += [{"price": p, "source": "hvn", "weight": edge} for p in profile["hvn"]]
+    cands += [{"price": r52["high_52w"], "source": "high_52w", "date": r52["high_52w_date"], "weight": W["range_52w"]},
+              {"price": r52["low_52w"], "source": "low_52w", "date": r52["low_52w_date"], "weight": W["range_52w"]}]
     for g in gaps:
-        cands += _gap_candidates(g, atr)
+        cands += [{**c, "weight": W["gap"] * age(g["date"])} for c in _gap_candidates(g, atr)]
     for name in ("sma50", "sma200"):
         v = _num(ind_row.get(name))
         if v is None:
             notes.append(f"{name.upper()} unavailable at the last bar: not used as a level")
         else:
-            cands.append({"price": v, "source": name})
-    return cands + avwaps
+            cands.append({"price": v, "source": name, "weight": W["moving_average"]})
+    return cands + [{**c, "weight": W["anchored_vwap"]} for c in avwaps]
 
 
 def _extremes(bars: pd.DataFrame, r52: dict, close: float, near: float) -> dict:
@@ -390,7 +579,7 @@ def _shortfall_note(side: str, n: int, weak: int, extremes: dict) -> str:
     msg = (f"no {side} levels {where} the last close in the window" if n == 0
            else f"only {n} {side} level(s) {where} the last close in the window")
     if weak:
-        msg += f" ({weak} weaker cluster(s) with score < {C.LEVEL_MIN_SCORE:g} not used)"
+        msg += f" ({weak} weaker zone(s) with score < {C.LEVEL_MIN_SCORE:g} not used)"
     if extremes[f"at_all_time_{word}"]:
         return f"price at an all-time {word} (available history): {msg}"
     if extremes[f"at_{word}_52w"]:
@@ -399,9 +588,10 @@ def _shortfall_note(side: str, n: int, weak: int, extremes: dict) -> str:
 
 
 def build_levels(ctx) -> dict:
-    """H: pivots, volume profile, 52-week range, gaps, SMAs and anchored VWAPs merged into zones,
-    scored by touches and volume, and the nearest qualifying C.LEVELS_PER_SIDE supports and
-    resistances around the last close."""
+    """H: swing pivots, supply/demand zones, volume profile, 52-week range, gaps, SMAs and anchored
+    VWAPs as weighted candidates; per side of the close, density zones scored by earlier reactions
+    and candidate weight; the nearest qualifying zone and the strongest within reach, up to
+    C.LEVELS_PER_SIDE supports and resistances around the last close."""
     notes: list[str] = []
     bars = ctx.get("bars")
     if bars is not None and ctx.get("as_of"):
@@ -415,17 +605,25 @@ def build_levels(ctx) -> dict:
     if close is None or atr is None or atr <= 0:
         return {"available": False, "notes": notes,
                 "reason": f"close or ATR({C.ATR_PERIOD}) unavailable at {_iso(last_date)} "
-                          f"(levels are merged and measured in ATR units)"}
+                          f"(levels are built and measured in ATR units)"}
 
     lookback = int(ctx["hz"]["levels_lookback"])
+    reach = float(ctx["hz"].get("levels_reach_atr", math.inf))
     window = bars.iloc[-lookback:]
     if len(window) < lookback:
         notes.append(f"levels window has only {len(window)} bars (lookback {lookback})")
     start = _iso(window.index[0])
+    half_life = C.LEVEL_HALF_LIFE * lookback
+    pos = {_iso(d): i for i, d in enumerate(bars.index)}
 
-    k = C.FRACTAL_K
-    raw = fractal_pivots(bars.iloc[-(lookback + k):], k)  # +k bars: a left side for the first window bars
+    def age(date: str) -> float:
+        return float(_decay(len(bars) - 1 - pos.get(date, len(bars) - 1), half_life))
+
+    atr_s = ind["atr14"]
+    lead = bars.iloc[-(lookback + C.IMPULSE_BARS * 5):]   # a few bars before the window to start the swing count
+    raw = swing_pivots(lead, atr_s, C.SWING_ATR)
     pivots = {side: [p for p in raw[side] if p["date"] >= start] for side in ("highs", "lows")}
+    bases = base_zones(window, atr_s)
     profile = volume_profile(window, C.PROFILE_BINS)
     if not profile["available"]:
         notes.append(f"volume profile skipped: {profile['reason']}")
@@ -433,17 +631,19 @@ def build_levels(ctx) -> dict:
     r52 = _range_52w(bars, notes)
 
     avwaps = _avwap_candidates({**ctx, "bars": bars, "ind": ind}, last_date, notes)
-    candidates = _candidates(pivots, profile, r52, gaps, ind_row, avwaps, atr, notes)
-    # each side is merged on its own, so no zone straddles the close; a candidate exactly at the
-    # close is on neither side
-    below = merge_levels([c for c in candidates if c["price"] < close], atr, C.LEVEL_MERGE_ATR)
-    above = merge_levels([c for c in candidates if c["price"] > close], atr, C.LEVEL_MERGE_ATR)
-    clusters = score_levels(below + above, window, profile, atr)
-    supports, resistances = select_levels(clusters, close, atr, C.LEVELS_PER_SIDE, C.LEVEL_MIN_SCORE)
+    candidates = _candidates(pivots, bases, profile, r52, gaps, ind_row, avwaps, atr, age, notes)
+    # each side is built on its own and bounded by the close, so no zone straddles it; a candidate
+    # exactly at the close is on neither side
+    below = density_zones([c for c in candidates if c["price"] < close], atr,
+                          (-math.inf, float(np.nextafter(close, -math.inf))))
+    above = density_zones([c for c in candidates if c["price"] > close], atr,
+                          (float(np.nextafter(close, math.inf)), math.inf))
+    zones = score_zones(below + above, window, profile, atr, half_life)
+    supports, resistances = select_levels(zones, close, atr, C.LEVELS_PER_SIDE, C.LEVEL_MIN_SCORE, reach)
 
-    extremes = _extremes(bars, r52, close, C.LEVEL_MERGE_ATR * atr)
-    weak = {"support": sum(not qualifies(c, C.LEVEL_MIN_SCORE) for c in clusters[:len(below)]),
-            "resistance": sum(not qualifies(c, C.LEVEL_MIN_SCORE) for c in clusters[len(below):])}
+    extremes = _extremes(bars, r52, close, C.EXTREME_NEAR_ATR * atr)
+    weak = {"support": sum(not qualifies(c, C.LEVEL_MIN_SCORE) for c in zones[:len(below)]),
+            "resistance": sum(not qualifies(c, C.LEVEL_MIN_SCORE) for c in zones[len(below):])}
     for side, levels in (("support", supports), ("resistance", resistances)):
         if len(levels) < C.LEVELS_PER_SIDE:
             notes.append(_shortfall_note(side, len(levels), weak[side], extremes))
@@ -456,16 +656,19 @@ def build_levels(ctx) -> dict:
         "lookback_bars": len(window),
         "window_start": start,
         "window_end": _iso(last_date),
-        "pivots": {"k": k, **pivots, "note": PIVOT_NOTE.format(k=k)},
+        "pivots": {"method": "atr_zigzag", "swing_atr": C.SWING_ATR, **pivots,
+                   "note": PIVOT_NOTE.format(m=C.SWING_ATR)},
+        "supply_demand": bases,
         "volume_profile": profile,
         **r52,
         "extremes": extremes,
         "gaps": gaps,
         "candidates": candidates,
-        "n_clusters": len(clusters),
-        "selection": {"min_score": C.LEVEL_MIN_SCORE, "weak_clusters": weak,
-                      "rule": f"nearest {C.LEVELS_PER_SIDE} per side among clusters with score >= "
-                              f"{C.LEVEL_MIN_SCORE:g} or holding the 52-week high/low"},
+        "n_zones": len(zones),
+        "selection": {"min_score": C.LEVEL_MIN_SCORE, "reach_atr": reach, "weak_zones": weak,
+                      "rule": f"per side: the nearest zone with score >= {C.LEVEL_MIN_SCORE:g} (or holding "
+                              f"the 52-week high/low), then the highest-scoring such zones within "
+                              f"{reach:g} ATR of the close, {C.LEVELS_PER_SIDE} in all"},
         "supports": supports,
         "resistances": resistances,
         "notes": notes,

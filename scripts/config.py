@@ -54,6 +54,7 @@ HORIZONS = {
         "stat_horizons": [5, 10, 20],   # forward-return horizons (trading days) for signal stats
         "primary": 10,                  # horizon used for scoring and scenarios
         "levels_lookback": 126,         # bars (~6 months) for pivots, volume profile, gaps
+        "levels_reach_atr": 4.0,        # S2-S3 / R2-R3 = the strongest zones within this many ATRs of the close
         "chart_bars": 252,              # bars shown in the chart (~12 months)
         "chart_timeframe": "daily",
         "weekly_emphasis": False,
@@ -62,6 +63,7 @@ HORIZONS = {
         "stat_horizons": [20, 60],
         "primary": 60,
         "levels_lookback": 504,         # ~2 years
+        "levels_reach_atr": 8.0,
         "chart_bars": 504,
         "chart_timeframe": "weekly",
         "weekly_emphasis": True,
@@ -114,16 +116,36 @@ MR_Z_EXTENDED = 2.0               # z20 beyond +-this -> stretched (= %B outside
 MR_DIST_SMA50_ATR = 2.0           # |close - SMA50| / ATR beyond this -> stretched (scorecard)
 
 # ---------------------------------------------------------------------------- levels
-FRACTAL_K = 2                     # pivot high: high strictly above the highs of the k bars on each side
+SWING_ATR = 1.5                   # ATR ZigZag: a swing high/low is confirmed once price reverses this many ATRs from it
+SWING_WEIGHT_CAP = 3.0            # a swing pivot's weight = its swing size / SWING_ATR, between 1 and this
 PROFILE_BINS = 60                 # volume-profile price bins over the lookback range
 VALUE_AREA_SHARE = 0.70
 HVN_FACTOR = 1.5                  # bin volume > 1.5 x mean bin volume and a local peak -> HVN
 LVN_FACTOR = 0.5                  # bin volume < 0.5 x mean bin volume and a local trough -> LVN
-LEVEL_MERGE_ATR = 0.5             # merge level candidates closer than this many ATRs
-TOUCH_ATR = 0.25                  # a bar "touches" a level if its high or low is within this many ATRs of the zone
+BASE_MAX_ATR = 1.0                # supply/demand: a base bar's high-low range is at most this many ATRs ...
+IMPULSE_ATR = 2.0                 # ... and the close moves this many ATRs away from the base close ...
+IMPULSE_BARS = 3                  # ... within this many bars after it, without trading back through the base
+LEVEL_SOURCE_WEIGHTS = {          # candidate weight per source type (x swing size for pivots, x recency when dated)
+    "pivot": 1.0, "volume_profile": 1.0, "range_52w": 1.0, "supply_demand": 1.0, "gap": 0.75,
+    "moving_average": 0.25, "anchored_vwap": 0.25,
+}
+LEVEL_VALUE_AREA_WEIGHT = 0.5     # value-area edges and HVNs weigh this much of the POC
+LEVEL_FRESH_FACTOR = 1.5          # an untested supply/demand zone weighs this much more
+LEVEL_HALF_LIFE = 0.5             # recency half-life of dated candidates and tests, as a share of levels_lookback
+KDE_BANDWIDTH_ATR = 0.25          # Gaussian kernel width for the candidate-price density, in ATRs
+ZONE_HALF_MAX = 0.5               # a zone spans the prices where the density is at least this share of its peak ...
+ZONE_MIN_ATR = 0.2                # ... clamped to this many ATRs wide at least ...
+ZONE_MAX_ATR = 1.0                # ... and at most this many
+TEST_TOL_ATR = 0.1                # a bar tests a zone when its range comes within this many ATRs of it
+REACTION_ATR = 1.0                # a test holds when price then moves this many ATRs beyond the zone's near edge ...
+REACTION_BARS = 10                # ... within this many bars of leaving it
+LEVEL_HOLD_POINTS = 1.0           # score per hold (x recency)
+LEVEL_FLIP_POINTS = 0.5           # extra score when a hold follows a break (role reversal)
+LEVEL_BREAK_POINTS = 0.5          # score taken per break
+LEVEL_CONFLUENCE_WEIGHT = 0.5     # score per unit of candidate weight in the zone
+EXTREME_NEAR_ATR = 0.5            # close within this many ATRs of the 52-week high/low -> "at" it
 LEVELS_PER_SIDE = 3
-LEVEL_SOURCE_BONUS = 0.5          # level score bonus per extra distinct source type in a merged cluster
-LEVEL_MIN_SCORE = 0.25            # a cluster scoring below this is too weak to be S1-S3 / R1-R3 (52-week extremes exempt)
+LEVEL_MIN_SCORE = 1.0             # a zone scoring below this is too weak to be S1-S3 / R1-R3 (52-week extremes exempt)
 LEVEL_AVWAP_MIN_BARS = 10         # an anchored VWAP is a level candidate only once its anchor is this many bars old
 GAP_ZONE_MAX_ATR = 1.0            # an unfilled gap at most this many ATRs wide is one level zone; wider: two edges
 LARGEST_GAP_LOOKBACK = 126        # bars searched for the largest gap (anchored VWAP anchor)
