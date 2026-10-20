@@ -152,7 +152,8 @@ Do not invent conflicts, and do not drop any.
 ### 6. Key levels (关键价位)
 **Fields:**
 - resistances and supports: `levels.resistances[*]` and `levels.supports[*]`, each with `price`,
-  `zone_low`, `zone_high`, `distance_pct`, `distance_atr`, `sources`, `touches`, `score`;
+  `zone_low`, `zone_high`, `distance_pct`, `distance_atr`, `sources`, `touches` (earlier tests), `holds`,
+  `breaks`, `flips`, `fresh`, `score`;
 - the last close and ATR: `levels.last_close`, `levels.atr`;
 - the window: `levels.lookback_bars`, `levels.window_start`;
 - volume profile: `levels.volume_profile.poc`, `.value_area_low`, `.value_area_high`;
@@ -163,7 +164,8 @@ Do not invent conflicts, and do not drop any.
 
 **Layout:**
 1. One table, top to bottom: R3, R2, R1, **Close**, S1, S2, S3. Columns: Level | Price | Zone | Distance
-   (% / ATR) | Sources | Touches.
+   (% / ATR) | Sources | Tests (`touches`, with holds / breaks, e.g. "4 (3 held, 1 broken)"; "untested"
+   when `fresh`).
 2. One line with the POC and value area.
 3. A small anchored-VWAP table.
 
@@ -347,11 +349,11 @@ Weighted score +1.25 → **Bullish**; confidence **high**
   consolidation or a shallow pullback rather than a reversal.
 
 ## 6. Key levels
-| Level | Price | Zone | Distance | Sources | Touches |
+| Level | Price | Zone | Distance | Sources | Tests |
 |---|---|---|---|---|---|
-| R1 | 4509.87 | 4509.87-4509.87 | +0.8% / +0.4 ATR | AVWAP 52-week high | 1 |
+| R1 | 4509.87 | 4502.10-4517.40 | +0.8% / +0.4 ATR | AVWAP 52-week high | 1 (1 held, 0 broken) |
 | **Close** | **4475.34** | | | | |
-| S1 | 4266.35 | … | -4.7% / -2.2 ATR | gap-up top | 2 |
+| S1 | 4266.35 | … | -4.7% / -2.2 ATR | gap-up top | 2 (1 held, 1 broken) |
 
 POC 3,540.12; value area 3,402.55-3,781.20 (daily-bar approximation, last 126 bars).
 

@@ -32,8 +32,8 @@ VWAP_NOTE = ("Anchored VWAPs are a daily-bar approximation: typical price (H+L+C
              "cumulated from the anchor bar; not intraday VWAP.")
 PROFILE_NOTE = ("Volume profile is a daily-bar approximation: each bar's volume is spread evenly across "
                 "its high-low range.")
-LEVEL_KEYS = ("price", "zone_low", "zone_high", "sources", "touches", "volume_share", "score",
-              "distance_pct", "distance_atr")
+LEVEL_KEYS = ("price", "zone_low", "zone_high", "sources", "touches", "holds", "breaks", "flips", "fresh",
+              "volume_share", "score", "distance_pct", "distance_atr")
 MODULE_NAMES = ("market_context", "regime", "trend_momentum", "relative_strength", "mean_reversion",
                 "volume_flow", "volatility", "levels", "multi_timeframe", "event_risk", "signals",
                 "price_action", "candlesticks", "scorecard", "scenarios", "risk")

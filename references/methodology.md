@@ -9,8 +9,8 @@ How every number in `metrics.json` is produced. Parameter names in `CODE` refer 
 - **Everything is computed in Python** from FMP daily bars. No TA-Lib, and no FMP indicator endpoints in
   the analysis. Claude never estimates a figure in prose.
 - **Causal.** Every indicator and signal at bar t uses bars up to and including t. The only forward-looking
-  quantities are the labelled forward returns and MAE in signal statistics. Fractal pivots need k bars on
-  their right, but levels are measured as of the last bar, so no future bar is ever used.
+  quantities are the labelled forward returns and MAE in signal statistics. A swing pivot is confirmed
+  only by the reversal after it, but levels are measured as of the last bar, so no future bar is ever used.
 - **Nothing is filled in.** A missing input gives `null` and a note. A missing module gives
   `available: false` with the reason.
 - **Conditional output.** Scenarios have triggers and invalidation levels. Nothing is a buy, sell or hold
@@ -297,10 +297,17 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   - the window is the last `levels_lookback` bars: 126 for swing, 504 for position (all history if
     shorter, with a note);
   - ATR = ATR(14) at the last bar; without it the module is unavailable.
-- **Fractal pivots** (`FRACTAL_K` = 2):
-  - bar i is a pivot high when its high is strictly above every other high in bars i-2..i+2; pivot lows
-    mirror this;
-  - equal extremes never form a pivot, and the last 2 bars cannot be pivots yet.
+- **Swing pivots** (ATR ZigZag, `SWING_ATR` = 1.5):
+  - the running high since the last pivot becomes a pivot high once a later bar's low is 1.5 ATR (that
+    bar's ATR) below it; pivot lows mirror this, and pivots alternate;
+  - the latest swing is not confirmed yet, so it is not a pivot, and the first bar only starts the count;
+  - `swing_atr` = the smaller of the legs into and out of the pivot, in ATRs.
+- **Supply/demand zones** (`BASE_MAX_ATR` = 1, `IMPULSE_ATR` = 2, `IMPULSE_BARS` = 3):
+  - a demand base is a bar with a range of at most 1 ATR after which, within 3 bars, a close is at least
+    2 ATR above its close, the first of those bars closes up, and no low goes under the base's low;
+    supply mirrors this;
+  - zone = the base bar's low..high; zones a later close has gone through are dropped;
+  - `fresh` = no bar after the impulse has traded back into the zone.
 - **Volume profile** (`PROFILE_BINS` = 60, approximation, section 7):
   - equal-width bins from the window's lowest low to its highest high; each bar's volume is spread
     evenly across its high-low range;
@@ -314,27 +321,50 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   - gap up: low[t] > high[t-1]; filled once a later low reaches high[t-1], otherwise the zone shrinks
     to what is left;
   - gap down: the mirror case.
-- **Candidates and their source types:**
-  - pivot highs and lows (pivot);
-  - POC, VAL, VAH and HVNs (volume_profile);
-  - 52-week high and low (range_52w);
-  - both edges of each remaining gap (gap);
-  - current SMA50 and SMA200 (moving_average);
-  - current anchored VWAPs (anchored_vwap).
-- **Merging** (`LEVEL_MERGE_ATR` = 0.5): one greedy pass in ascending price.
-  - A candidate joins the current cluster when it is within 0.5 ATR of the cluster's running mean.
-  - Cluster price = the mean; zone = min..max member price. Zones can reach about 1 ATR.
-- **Ranking:**
-  - band = zone ± `TOUCH_ATR` (0.25) ATR;
-  - `touches` = bars whose high or low lies in the band;
-  - `volume_share` = profile volume in the band / total;
-  - `score` = touches / max touches + volume_share / max volume_share + `LEVEL_SOURCE_BONUS` (0.5) ×
-    (distinct source types - 1).
-
-  Scores are relative within one run.
-- **Selection** (`LEVELS_PER_SIDE` = 3):
-  - the nearest 3 clusters below the close (supports) and above it (resistances), nearest first;
-  - each carries its score, `distance_pct` and `distance_atr` (negative below the close).
+- **Candidates, source types and weights** (`LEVEL_SOURCE_WEIGHTS`):
+  - swing pivot highs and lows (pivot, 1.0 x `swing_atr` / 1.5, between 1 and `SWING_WEIGHT_CAP` = 3);
+  - supply/demand zones (supply_demand, 1.0; x `LEVEL_FRESH_FACTOR` = 1.5 when fresh);
+  - POC (volume_profile, 1.0), VAL, VAH and HVNs (0.5);
+  - 52-week high and low (range_52w, 1.0);
+  - each remaining gap: one zone if at most `GAP_ZONE_MAX_ATR` = 1 ATR wide, else its two edges (gap, 0.75);
+  - current SMA50 and SMA200 (moving_average, 0.25) and anchored VWAPs (anchored_vwap, 0.25);
+  - dated candidates (pivots, supply/demand zones, gaps) are also x 0.5 ^ (bars since / half-life),
+    half-life = `LEVEL_HALF_LIFE` (0.5) x the window: 63 bars for swing, 252 for position.
+- **Zones** (`KDE_BANDWIDTH_ATR` = 0.25): candidates below and above the close are handled apart.
+  - Per side, each candidate adds its weight x a Gaussian kernel of width 0.25 ATR at its price (a
+    candidate with a zone spreads its weight across it).
+  - Every peak of that density is a zone: the prices around the peak where the density is at least
+    half the peak (`ZONE_HALF_MAX`), not crossing the low point towards a neighbouring peak, clamped to
+    `ZONE_MIN_ATR` = 0.2 to `ZONE_MAX_ATR` = 1 ATR and to the close (supports end below it,
+    resistances start above it). A lone candidate gives a zone about 0.6 ATR wide.
+  - Price = the weight-averaged member candidates inside the zone; `weight` = the members' total weight.
+- **Tests** (`TEST_TOL_ATR` = 0.1, `REACTION_ATR` = 1, `REACTION_BARS` = 10), over the window:
+  - a bar is above the zone when its low is more than 0.1 ATR above it, below it in the mirror case, and in
+    it otherwise;
+  - a test is a run of bars in the zone between a bar on one side and the next bar outside it (or a jump
+    straight across);
+  - **hold:** price leaves on the side it came from and then trades 1 ATR beyond the zone's near edge
+    within 10 bars (before testing again); **break:** it leaves on the other side; **weak:** neither;
+  - **flip** (role reversal): a hold right after a break;
+  - tests still running at the last bar, holds that could still complete and a run at the window's
+    first bar are left out;
+  - `touches` = tests, `holds`, `breaks`, `flips`, `fresh` = no test, `last_test`.
+- **Score:** recency x (`LEVEL_HOLD_POINTS` 1 per hold, plus `LEVEL_FLIP_POINTS` 0.5 per flip, minus
+  `LEVEL_BREAK_POINTS` 0.5 per break) summed over the tests, recency = 0.5 ^ (bars since the test /
+  half-life), + `LEVEL_CONFLUENCE_WEIGHT` (0.5) x `weight`. Scores are absolute, so they compare across
+  runs. `volume_share` (profile volume in the zone / total) is shown, not scored.
+- **Selection** (`LEVELS_PER_SIDE` = 3, `LEVEL_MIN_SCORE` = 1, `levels_reach_atr` = 4 ATR for swing, 8 for
+  position):
+  - zones scoring at least 1, or holding the 52-week high or low, qualify;
+  - per side: the nearest qualifying zone, then the highest-scoring other qualifying zones within reach
+    of the close; the nearest zones beyond reach fill any shortfall;
+  - listed nearest first, each with its score, `distance_pct` and `distance_atr` (negative below the close).
+- **Walk-forward check** (`scripts/levels_backtest.py`): builds the levels every 5 bars from past bars only
+  and records whether each zone held (price trades 1 ATR beyond its near edge before a close beyond its far
+  edge) within 20 bars, against the same zone shape moved to other dates. On six large-cap stocks
+  (1995-2018 daily bars) neither these zones nor the earlier fractal-pivot clusters held more often than
+  the moved ones (edge within about ±2 percentage points), while zones at levels planted in synthetic data
+  showed about +23 points. Read the zones as where price has reacted before, not as predictions.
 - **Short side:** if a side has fewer than 3 levels, a note says so, naming an all-time or 52-week
   extreme when price is at one.
 

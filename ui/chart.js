@@ -211,7 +211,7 @@
       return `<tr><td class="${cls}"><b>${tag}</b></td><td>${esc(fmtPx(x.price))}${zone ? `<br><span class="ta-sub">${esc(zone)}</span>` : ""}</td>
         <td>${esc(fmtPct(x.distance_pct, 1, true))}<br><span class="ta-sub">${esc(fmtSigned(x.distance_atr, 1))} ATR</span></td>
         <td class="l wrap" title="${esc(src.join(", "))}">${esc(src.slice(0, MAX_SRC).join(", ") + more)}
-          ${isNum(x.touches) ? `<div class="ta-sub">${esc(t("touches", x.touches))}</div>` : ""}</td></tr>`;
+          ${isNum(x.touches) ? `<div class="ta-sub">${esc(t("touches", x.touches, x.holds, x.breaks))}</div>` : ""}</td></tr>`;
     };
     const res = lv.resistances.map((x, i) => row("R" + (i + 1), x, "neg")).reverse().join("");
     const sup = lv.supports.map((x, i) => row("S" + (i + 1), x, "pos")).join("");
