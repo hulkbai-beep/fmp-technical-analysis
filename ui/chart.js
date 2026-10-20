@@ -1,8 +1,9 @@
 // Technical-analysis chart for chart.html and the local app (ui/index.html): hand-drawn SVG, no
-// libraries. TAChart.render(root, data) draws the header, the chart (candles, SMAs, anchored
+// libraries. TAChart.render(root, data) draws the header, the main chart (candles, SMAs, anchored
 // VWAPs, support/resistance zones, earnings markers, volume-profile sidebar, volume / RSI / RS
-// sub-panels) and the side panels from the JSON that scripts/chart.py builds. Every number shown
-// comes from that JSON; this file only lays it out (weekly candles are precomputed too).
+// sub-panels), chart 2 (price action after Al Brooks), chart 3 (candlestick patterns) and the side
+// panels from the JSON that scripts/chart.py builds. Every number shown comes from that JSON; this
+// file only lays it out (weekly candles are precomputed too).
 (function (global) {
   "use strict";
 
@@ -70,7 +71,36 @@
     const avwaps = Object.entries(data.avwaps || {}).map(([name, pairs]) => ({ name, key: "avwap_" + name, vals: align(pairs) }));
     // a panned view can put any close on the last-close chip, so the chip is sized for the longest one
     const widestClose = daily.reduce((w, b) => { const s = fmtPx(b.c); return s.length > w.length ? s : w; }, "");
-    return { daily, weekly, series, avwaps, widestClose };
+    return { daily, weekly, series, avwaps, widestClose, pa: preparePA(data.price_action, index, align), cs: prepareCS(data.candlesticks, index) };
+  }
+
+  // chart 2: per-bar arrays share the candles' order; markers, wedges and ranges get daily indices
+  function preparePA(p, index, align) {
+    if (!p || !p.available) return null;
+    const byBar = new Map(), at = d => index.get(d);
+    for (const m of p.markers || []) {
+      const i = at(m.date);
+      if (i == null) continue;
+      if (!byBar.has(i)) byBar.set(i, []);
+      byBar.get(i).push(m);
+    }
+    const wedges = (p.wedges || []).map(w => ({ ...w, pts: w.pushes.map(([d, v]) => [at(d), v]) })).filter(w => w.pts.every(([i]) => i != null));
+    const ranges = (p.ranges || []).map(r => ({ ...r, i0: at(r.start), i1: at(r.end) })).filter(r => r.i0 != null && r.i1 != null);
+    const mms = (p.measured_moves || []).map(m => ({ ...m, i0: at(m.from_date) ?? 0 }));
+    return { ema: align(p.ema), types: p.bar_types || [], states: p.states || [], ai: p.always_in || [], byBar, wedges, ranges, mms };
+  }
+
+  // chart 3: markers by their last bar
+  function prepareCS(p, index) {
+    if (!p || !p.available) return null;
+    const byBar = new Map();
+    for (const m of p.markers || []) {
+      const i = index.get(m.date), i0 = index.get(m.start);
+      if (i == null) continue;
+      if (!byBar.has(i)) byBar.set(i, []);
+      byBar.get(i).push({ ...m, i0: i0 ?? i });
+    }
+    return { byBar };
   }
 
   function loadVis() {
@@ -143,11 +173,8 @@
       ${head}${rows}${list(t("confidence"), reasons)}${list(t("conflicts"), conflicts)}`, "score");
   }
 
-  function signalsHtml(sg) {
-    const title = t("t_signals");
-    if (!sg || !sg.available) return card(title, `<p class="ta-small">${esc(t("unavailable"))}: ${esc(sg?.reason)}</p>`, "signals");
-    if (!sg.active.length) return card(title, `<p class="ta-small">${esc(t("sig_none"))}</p>`, "signals");
-    const rows = sg.active.map(a => {
+  function activeTable(rows, primary) {
+    const body = rows.map(a => {
       const arrow = a.bias > 0 ? `<span class="pos" aria-hidden="true">▲</span> ` : a.bias < 0 ? `<span class="neg" aria-hidden="true">▼</span> ` : "";
       const fired = `${t("th_fired")} ${t("bars_ago", a.bars_ago)} · ${String(a.fired_date || "").slice(5)}`;
       const sample = a.confidence ? ` · ${t("sample")} ${tv("sc_", a.confidence)}` : "";
@@ -158,10 +185,17 @@
         <td class="${pctCls(a.median)}">${esc(fmtPct(a.median, 1, true))}</td>
         <td class="${pctCls(a.edge_median)}">${esc(fmtPct(a.edge_median, 1, true))}<br><span class="ta-sub">${esc(fmtPP(a.edge_hit_rate))}</span></td></tr>`;
     }).join("");
-    return card(title, `<p class="ta-small" style="margin:0 0 6px">${esc(t("sig_h", sg.primary_horizon))}</p>
+    return `<p class="ta-small" style="margin:0 0 6px">${esc(t("sig_h", primary))}</p>
       <div class="ta-tablewrap"><table class="ta-table ta-sig"><thead><tr><th>${esc(t("th_signal"))}</th>
       <th>${esc(t("th_n"))}</th><th>${esc(t("th_hit"))}</th><th>${esc(t("th_med"))}</th><th>${esc(t("th_edge"))}</th></tr></thead>
-      <tbody>${rows}</tbody></table></div><p class="ta-small">${esc(t("edge_note"))}</p>`, "signals");
+      <tbody>${body}</tbody></table></div>`;
+  }
+
+  function signalsHtml(sg) {
+    const title = t("t_signals");
+    if (!sg || !sg.available) return card(title, `<p class="ta-small">${esc(t("unavailable"))}: ${esc(sg?.reason)}</p>`, "signals");
+    if (!sg.active.length) return card(title, `<p class="ta-small">${esc(t("sig_none"))}</p>`, "signals");
+    return card(title, `${activeTable(sg.active, sg.primary_horizon)}<p class="ta-small">${esc(t("edge_note"))}</p>`, "signals");
   }
 
   function levelsHtml(d) {
@@ -177,7 +211,7 @@
       return `<tr><td class="${cls}"><b>${tag}</b></td><td>${esc(fmtPx(x.price))}${zone ? `<br><span class="ta-sub">${esc(zone)}</span>` : ""}</td>
         <td>${esc(fmtPct(x.distance_pct, 1, true))}<br><span class="ta-sub">${esc(fmtSigned(x.distance_atr, 1))} ATR</span></td>
         <td class="l wrap" title="${esc(src.join(", "))}">${esc(src.slice(0, MAX_SRC).join(", ") + more)}
-          ${isNum(x.touches) ? `<div class="ta-sub">${esc(t("touches", x.touches))}</div>` : ""}</td></tr>`;
+          ${isNum(x.touches) ? `<div class="ta-sub">${esc(t("touches", x.touches, x.holds, x.breaks))}</div>` : ""}</td></tr>`;
     };
     const res = lv.resistances.map((x, i) => row("R" + (i + 1), x, "neg")).reverse().join("");
     const sup = lv.supports.map((x, i) => row("S" + (i + 1), x, "pos")).join("");
@@ -239,6 +273,49 @@
     let i0 = daily.findIndex(b => b.d >= from);
     if (i0 < 0) i0 = N - 1;
     return { i0: Math.max(0, Math.min(i0, N - Math.min(N, MIN_VIEW))), i1: N - 1 };
+  }
+
+  // ------------------------------------------------------------------ time axis (shared by the three charts)
+  // returns [grid lines, labels] for the bars at x = cx(i) inside a plot of width PW
+  function timeAxis(bars, cx, PW, top, bottom, tf) {
+    // time axis: month starts every `mstep` months (1, 2, 3, 6 or 12, whatever fits), so January
+    // (labelled with the year) is always a tick; without a January tick the first label carries the year.
+    let back = "", axis = "", lastRight = -1e9;
+    const n = bars.length;
+    const zh = I18N.lang() === "zh", MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const short = tf === "daily" && n <= 90;
+    const dayNo = s => Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10)) / 864e5;
+    const newWeek = i => { const a = dayNo(bars[i - 1].d), b = dayNo(bars[i].d); return b - a >= 7 || (b + 3) % 7 < (a + 3) % 7; };
+    const starts = [];
+    for (let i = 1; i < n; i++) if (short ? newWeek(i) : bars[i].d.slice(0, 7) !== bars[i - 1].d.slice(0, 7)) starts.push(i);
+    const perMonth = starts.length > 1 ? (cx(starts[starts.length - 1]) - cx(starts[0])) / (starts.length - 1) : PW;
+    const mstep = short ? 1 : [1, 2, 3, 6, 12].find(s => s * perMonth >= measure(zh ? "12月" : "May", 11) + 16) ?? 12;
+    const yearTick = starts.some(i => bars[i].d.slice(5, 7) === "01");
+    for (const i of starts) {
+      const yv = bars[i].d.slice(0, 4), m = +bars[i].d.slice(5, 7);
+      if (short) {
+        // week ticks: month/day, with the year at the first tick of a year
+        const md = zh ? `${m}/${+bars[i].d.slice(8, 10)}` : `${MON[m - 1]} ${+bars[i].d.slice(8, 10)}`;
+        const label = lastRight < 0 || bars[i].d.slice(0, 4) !== bars[i - 1].d.slice(0, 4) ? `${md} ${yv}` : md;
+        const x = cx(i), w = measure(label, 11), lx = Math.max(x, w / 2);
+        if (lx - w / 2 < lastRight + 10 || lx + w / 2 > PW) continue;
+        lastRight = lx + w / 2;
+        const xx = Math.round(x) + 0.5;
+        back += `<line x1="${xx}" x2="${xx}" y1="${top}" y2="${bottom}" stroke="var(--grid)"/>`;
+        axis += `<text x="${lx}" y="${bottom + 15}" text-anchor="middle">${esc(label)}</text>`;
+        continue;
+      }
+      if ((m - 1) % mstep) continue;
+      const withYear = !yearTick && lastRight < 0;
+      const label = m === 1 ? yv : withYear ? (zh ? `${yv}年${m}月` : `${MON[m - 1]} ${yv}`) : (zh ? `${m}月` : MON[m - 1]);
+      const x = cx(i), w = measure(label, 11), lx = Math.max(x, w / 2);
+      if (lx - w / 2 < lastRight + 8 || lx + w / 2 > PW) continue;
+      lastRight = lx + w / 2;
+      const xx = Math.round(x) + 0.5;
+      back += `<line x1="${xx}" x2="${xx}" y1="${top}" y2="${bottom}" stroke="var(--grid)"/>`;
+      axis += `<text x="${lx}" y="${bottom + 15}" text-anchor="middle">${esc(label)}</text>`;
+    }
+    return [back, axis];
   }
 
   // ------------------------------------------------------------------ chart drawing
@@ -500,42 +577,8 @@
     }
     const bottom = cur - 8;
 
-    // time axis: month starts every `mstep` months (1, 2, 3, 6 or 12, whatever fits), so January
-    // (labelled with the year) is always a tick; without a January tick the first label carries the year.
-    let axis = "", lastRight = -1e9;
-    const zh = I18N.lang() === "zh", MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    const short = tf === "daily" && n <= 90;
-    const dayNo = s => Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10)) / 864e5;
-    const newWeek = i => { const a = dayNo(bars[i - 1].d), b = dayNo(bars[i].d); return b - a >= 7 || (b + 3) % 7 < (a + 3) % 7; };
-    const starts = [];
-    for (let i = 1; i < n; i++) if (short ? newWeek(i) : bars[i].d.slice(0, 7) !== bars[i - 1].d.slice(0, 7)) starts.push(i);
-    const perMonth = starts.length > 1 ? (cx(starts[starts.length - 1]) - cx(starts[0])) / (starts.length - 1) : PW;
-    const mstep = short ? 1 : [1, 2, 3, 6, 12].find(s => s * perMonth >= measure(zh ? "12月" : "May", 11) + 16) ?? 12;
-    const yearTick = starts.some(i => bars[i].d.slice(5, 7) === "01");
-    for (const i of starts) {
-      const yv = bars[i].d.slice(0, 4), m = +bars[i].d.slice(5, 7);
-      if (short) {
-        // week ticks: month/day, with the year at the first tick of a year
-        const md = zh ? `${m}/${+bars[i].d.slice(8, 10)}` : `${MON[m - 1]} ${+bars[i].d.slice(8, 10)}`;
-        const label = lastRight < 0 || bars[i].d.slice(0, 4) !== bars[i - 1].d.slice(0, 4) ? `${md} ${yv}` : md;
-        const x = cx(i), w = measure(label, 11), lx = Math.max(x, w / 2);
-        if (lx - w / 2 < lastRight + 10 || lx + w / 2 > PW) continue;
-        lastRight = lx + w / 2;
-        const xx = Math.round(x) + 0.5;
-        back += `<line x1="${xx}" x2="${xx}" y1="${top}" y2="${bottom}" stroke="var(--grid)"/>`;
-        axis += `<text x="${lx}" y="${bottom + 15}" text-anchor="middle">${esc(label)}</text>`;
-        continue;
-      }
-      if ((m - 1) % mstep) continue;
-      const withYear = !yearTick && lastRight < 0;
-      const label = m === 1 ? yv : withYear ? (zh ? `${yv}年${m}月` : `${MON[m - 1]} ${yv}`) : (zh ? `${m}月` : MON[m - 1]);
-      const x = cx(i), w = measure(label, 11), lx = Math.max(x, w / 2);
-      if (lx - w / 2 < lastRight + 8 || lx + w / 2 > PW) continue;
-      lastRight = lx + w / 2;
-      const xx = Math.round(x) + 0.5;
-      back += `<line x1="${xx}" x2="${xx}" y1="${top}" y2="${bottom}" stroke="var(--grid)"/>`;
-      axis += `<text x="${lx}" y="${bottom + 15}" text-anchor="middle">${esc(label)}</text>`;
-    }
+    const [timeGrid, axis] = timeAxis(bars, cx, PW, top, bottom, tf);
+    back += timeGrid;
     const H = bottom + 22;
 
     const hadFocus = box.contains(global.document.activeElement), keep = { di: st.hoverDi, y: st.hoverY };
@@ -612,6 +655,329 @@
     if (hadFocus) svg.focus({ preventScroll: true });
   }
 
+  // ------------------------------------------------------------------ charts 2 and 3: price action, candlesticks
+  // Daily candles over the same window as the main chart (panning or zooming any chart moves all three).
+  // Chart 2 colours each bar by its Brooks bar type and marks the setups of scripts/price_action.py;
+  // chart 3 marks the patterns of scripts/candlesticks.py. The side panel shows each library's statistics.
+  const PA_STATE_COLORS = { 2: "var(--up)", 1: "var(--up-zone)", 0: "var(--tr-strip)", "-1": "var(--down-zone)", "-2": "var(--down)" };
+
+  function patternLegend(kind, P) {
+    if (kind === "pa") {
+      return [
+        { key: "pa_ema", label: t("lg_ema", P.ema_period ?? 20), color: "var(--ema)", sw: "" },
+        { key: "pa_counts", label: t("lg_pa_counts"), color: "var(--text)", sw: "box" },
+        { key: "pa_wedges", label: t("lg_pa_wedges"), color: "var(--wedge)", sw: "" },
+        { key: "pa_ranges", label: t("lg_pa_ranges"), color: "var(--faint)", fill: "var(--tr-zone)", sw: "box" },
+        { key: "pa_fb", label: t("lg_pa_fb"), color: "var(--text)", sw: "box" },
+        { key: "pa_g20", label: t("lg_pa_g20"), color: "var(--text)", sw: "box" },
+        { key: "pa_mm", label: t("lg_pa_mm"), color: "var(--muted)", sw: "dash" },
+      ];
+    }
+    return [
+      { key: "cs_bull", label: t("lg_cs_bull"), color: "var(--up)", sw: "box" },
+      { key: "cs_bear", label: t("lg_cs_bear"), color: "var(--down)", sw: "box" },
+      { key: "cs_doji", label: t("lg_cs_doji"), color: "var(--faint)", sw: "box" },
+    ];
+  }
+
+  function libraryTable(rows) {
+    if (!rows || !rows.length) return "";
+    const h = rows[0].horizon;
+    const body = rows.map(r => {
+      const arrow = r.bias > 0 ? `<span class="pos" aria-hidden="true">▲</span> ` : r.bias < 0 ? `<span class="neg" aria-hidden="true">▼</span> ` : "";
+      return `<tr class="${r.confidence === "insufficient" ? "dim" : ""}"><td class="l wrap">${arrow}${esc(I18N.signalName(r.id, r.name))}
+          <div class="ta-sub">${esc(r.last_fired ? t("last_seen", r.last_fired) : t("never_seen"))}</div></td>
+        <td>${esc(r.n ?? "–")}</td><td>${esc(fmtPct(r.hit_rate, 0))}</td>
+        <td class="${pctCls(r.median)}">${esc(fmtPct(r.median, 1, true))}</td>
+        <td class="${pctCls(r.edge_median)}">${esc(fmtPct(r.edge_median, 1, true))}<br><span class="ta-sub">${esc(fmtPP(r.edge_hit_rate))}</span></td></tr>`;
+    }).join("");
+    return `<details class="ta-lib"><summary>${esc(t("lib_title", h))}</summary>
+      <div class="ta-tablewrap"><table class="ta-table ta-sig"><thead><tr><th>${esc(t("th_pattern"))}</th>
+      <th>${esc(t("th_n"))}</th><th>${esc(t("th_hit"))}</th><th>${esc(t("th_med"))}</th><th>${esc(t("th_edge_all"))}</th></tr></thead>
+      <tbody>${body}</tbody></table></div><p class="ta-small">${esc(t("lib_note"))}</p></details>`;
+  }
+
+  function paSideHtml(P) {
+    const s = P.summary || {}, st = s.state || {}, tr = s.trading_range || {};
+    const ago = x => x ? `${x.label ?? ""} · ${t("bars_ago", x.bars_ago)} (${String(x.date || x.confirmed_date || "").slice(5)})` : "–";
+    const mm = (P.measured_moves || []).map(m => {
+      const arrow = m.side === "up" ? "↑" : "↓";
+      const dist = `${fmtPct(m.distance_pct, 1, true)} · ${fmtSigned(m.distance_atr, 1)} ATR`;
+      return `<li class="${m.reached ? "dim" : ""}">${esc(t("mm_" + m.kind))} ${arrow} <b>${esc(fmtPx(m.target))}</b> <span class="ta-sub">${esc(dist)}${m.reached ? " · " + esc(t("mm_reached")) : ""}</span></li>`;
+    }).join("");
+    const wedge = s.last_wedge ? `${tv("wedge_", s.last_wedge.side)} · ${t("bars_ago", s.last_wedge.bars_ago)}` : "–";
+    const fb = s.last_failed_breakout ? `${tv("fb_", s.last_failed_breakout.side)} ${fmtPx(s.last_failed_breakout.level)} · ${t("bars_ago", s.last_failed_breakout.bars_ago)}` : "–";
+    const gaps = s.gap_bars || {};
+    const gap = gaps.bull ? t("gap_bull", gaps.bull) : gaps.bear ? t("gap_bear", gaps.bear) : "–";
+    const kv = `<p class="ta-regime">${esc(tv("state_", st.label))}</p>
+      <dl class="ta-kv">
+        <dt>${esc(t("pa_since"))}</dt><dd>${esc(st.since ?? "–")} · ${esc(t("n_bars", st.bars ?? 0))}</dd>
+        <dt>${esc(t("pa_ai"))}</dt><dd>${esc(tv("ai_", s.always_in?.direction))}${s.always_in?.since ? ` · ${esc(t("since", s.always_in.since))}` : ""}</dd>
+        <dt>EMA${esc(P.ema_period)}</dt><dd>${esc(fmtPx(s.ema))} · ${esc(tv("slope_", s.ema_slope))} · ${esc(t("vs_ema", fmtSigned(s.close_vs_ema_atr, 1)))}</dd>
+        <dt>${esc(t("pa_bar"))}</dt><dd>${esc(tv("bt_", s.bar?.type))}</dd>
+        <dt>${esc(t("pa_range"))}</dt><dd>${tr.active ? `${esc(fmtPx(tr.low))}–${esc(fmtPx(tr.high))} · ${esc(fmtNum(tr.height_atr, 1))} ATR` : esc(t("none"))}</dd>
+        <dt>${esc(t("pa_gap"))}</dt><dd>${esc(gap)}</dd>
+        <dt>${esc(t("pa_hcount"))}</dt><dd>${esc(ago(s.last_high_count))}</dd>
+        <dt>${esc(t("pa_lcount"))}</dt><dd>${esc(ago(s.last_low_count))}</dd>
+        <dt>${esc(t("pa_wedge"))}</dt><dd>${esc(wedge)}</dd>
+        <dt>${esc(t("pa_fb"))}</dt><dd>${esc(fb)}</dd>
+      </dl>${mm ? `<h4 class="ta-small" style="margin-top:10px">${esc(t("pa_mm"))}</h4><ul class="ta-list">${mm}</ul>` : ""}`;
+    return kv + setupsHtml(P);
+  }
+
+  function csSideHtml(P) {
+    const recent = (P.recent || []).map(r => `<li><span class="${r.bias > 0 ? "pos" : "neg"}" aria-hidden="true">${r.bias > 0 ? "▲" : "▼"}</span> ${esc(I18N.signalName(r.id, r.id))} <span class="ta-sub">${esc(t("bars_ago", r.bars_ago))} · ${esc(String(r.date).slice(5))}</span></li>`).join("");
+    const doji = P.last_doji ? `<p class="ta-small">${esc(t("last_doji", P.last_doji.date, P.last_doji.bars_ago))}</p>` : "";
+    return `${recent ? `<h4 class="ta-small" style="margin-top:0">${esc(t("cs_recent"))}</h4><ul class="ta-list plain">${recent}</ul>` : `<p class="ta-small">${esc(t("cs_none_recent"))}</p>`}${doji}` + setupsHtml(P);
+  }
+
+  function setupsHtml(P) {
+    const active = P.active || [];
+    return `<h4 class="ta-small" style="margin-top:12px">${esc(t("setups_active"))}</h4>` +
+      (active.length ? activeTable(active, P.primary_horizon) + `<p class="ta-small">${esc(t("edge_note"))}</p>` : `<p class="ta-small">${esc(t("sig_none"))}</p>`) +
+      libraryTable(P.library) + `<p class="ta-small">${esc(t("not_scored"))}</p>`;
+  }
+
+  function patternCardHtml(st, kind, d) {
+    const P = kind === "pa" ? d.price_action : d.candlesticks;
+    const title = t(kind === "pa" ? "t_pa" : "t_cs");
+    if (!P || !P.available) return `<section class="ta-card ta-${kind}"><h3>${esc(title)}</h3><p class="ta-small">${esc(t("unavailable"))}: ${esc(P?.reason ?? "")}</p></section>`;
+    const legend = patternLegend(kind, P).map(it =>
+      `<button type="button" class="ta-chip" data-k="${esc(it.key)}" aria-pressed="${st.vis[it.key] !== false}">` +
+      `<span class="sw ${it.sw}" style="color:${it.color}${it.fill ? ";background:" + it.fill : ""}"></span>${esc(it.label)}</button>`).join("");
+    const strip = kind === "pa" ? `<div class="ta-pkey">${[2, 1, 0, -1, -2].map(c =>
+      `<span><i style="background:${PA_STATE_COLORS[c]}"></i>${esc(tv("state_", { 2: "tight_bull_channel", 1: "bull_channel", 0: "trading_range", "-1": "bear_channel", "-2": "tight_bear_channel" }[c]))}</span>`).join("")}</div>` : "";
+    return `<section class="ta-card ta-${kind}"><h3>${esc(title)}</h3>
+      <div class="ta-pgrid"><div class="ta-pchart">
+        <div class="ta-toolbar"><div class="ta-legend">${legend}</div></div>${strip}
+        <div class="ta-readout"></div>
+        <div class="ta-chartbox"></div>
+        <p class="ta-note">${esc(t(kind === "pa" ? "pa_note" : "cs_note"))}</p>
+      </div><div class="ta-pside">${kind === "pa" ? paSideHtml(P) : csSideHtml(P)}</div></div></section>`;
+  }
+
+  function drawPattern(st, kind) {
+    const box = st.pboxes?.[kind], d = st.data, prep = st.prep, pp = prep[kind];
+    if (!box || !pp || !prep.daily.length) return;
+    const W = Math.floor(box.clientWidth);
+    if (!W) return;
+    const P = kind === "pa" ? d.price_action : d.candlesticks, on = k => st.vis[k] !== false;
+    const view = currentView(st), bars = prep.daily.slice(view.i0, view.i1 + 1), n = bars.length;
+    // the price axis is wide enough for its measured-move tags (tabular figures: measure every digit as 0)
+    const tagW = kind === "pa" ? Math.max(0, ...pp.mms.map(m => measure("MM " + fmtPx(m.target).replace(/\d/g, "0"), 11, 650) + 12)) : 0;
+    const AX = Math.ceil(Math.max(W < 420 ? 52 : 64, tagW)), PW = Math.max(80, W - AX - 8), XA = PW + 8;
+    const slot = PW / n, cx = i => slot * (i + 0.5);
+    const bw = Math.max(1, Math.min(13, Math.round(slot * 0.7)));
+    const bx = i => Math.round(cx(i) - bw / 2), wx = i => bx(i) + Math.floor(bw / 2) + 0.5;
+    st.geoms[kind] = { PW };
+    const top = 8, HM = Math.round(Math.max(220, Math.min(W * 0.42, (global.innerHeight || 900) * 0.55, 520)));
+    const inView = i => i != null && i >= view.i0 && i <= view.i1;
+
+    // price scale: candles, plus the EMA and measured-move targets that sit reasonably close
+    let lo0 = Infinity, hi0 = -Infinity;
+    for (const b of bars) { if (b.l < lo0) lo0 = b.l; if (b.h > hi0) hi0 = b.h; }
+    const span0 = hi0 - lo0 || Math.abs(hi0) * 0.02 || 1;
+    let lo = lo0, hi = hi0;
+    const take = (v, lim) => { if (isNum(v) && v > lo0 - lim * span0 && v < hi0 + lim * span0) { lo = Math.min(lo, v); hi = Math.max(hi, v); } };
+    if (kind === "pa") {
+      if (on("pa_ema")) for (const b of bars) take(pp.ema[b.di], 0.5);
+      if (on("pa_mm")) for (const m of pp.mms) if (!m.reached) take(m.target, 0.3);
+    }
+    // room for the marker labels above the highs and below the lows
+    const room = (hi - lo) * 34 / HM;
+    hi += room + (hi - lo) * 0.03; lo -= room + (hi - lo) * 0.03;
+    const y = v => top + (hi - v) / (hi - lo) * HM;
+
+    let back = "", zones = "", lines = "", marks = "", fore = "";
+    // price ticks; a label gives way to a measured-move tag on the axis
+    const tagYs = kind === "pa" && on("pa_mm") ? pp.mms.filter(m => isNum(m.target) && m.target >= lo && m.target <= hi).map(m => y(m.target)) : [];
+    const ts = niceTicks(lo, hi, HM > 360 ? 7 : 5), step = ts.length > 1 ? ts[1] - ts[0] : 1;
+    for (const v of ts) {
+      const yy = Math.round(y(v)) + 0.5;
+      if (yy < top || yy > top + HM) continue;
+      back += `<line x1="0" x2="${PW}" y1="${yy}" y2="${yy}" stroke="var(--grid)"/>`;
+      if (tagYs.every(ty => Math.abs(ty - yy) > 12)) back += `<text x="${XA}" y="${yy + 4}">${tickLabel(v, step)}</text>`;
+    }
+
+    // candles: chart 2 by bar type (trend bars solid, weak bars pale, dojis grey); chart 3 pale, the pattern bars solid
+    const csBars = new Set();
+    if (kind === "cs") {
+      for (const [i, ms] of pp.byBar) for (const m of ms) {
+        if (!on(m.bias > 0 ? "cs_bull" : m.bias < 0 ? "cs_bear" : "cs_doji")) continue;
+        for (let k = m.i0; k <= i; k++) csBars.add(k);
+      }
+    }
+    let candles = "";
+    bars.forEach((b, i) => {
+      let col = b.c >= b.o ? "var(--up)" : "var(--down)", op = 1;
+      if (kind === "pa") {
+        const ty = pp.types[b.di];
+        if (ty === 0) col = "var(--faint)";
+        else if (Math.abs(ty) === 1) op = 0.45;
+      } else if (!csBars.has(b.di)) op = 0.35;
+      const yo = y(b.o), yc = y(b.c);
+      candles += `<g opacity="${op}"><line x1="${wx(i)}" x2="${wx(i)}" y1="${y(b.h).toFixed(1)}" y2="${y(b.l).toFixed(1)}" stroke="${col}"/>` +
+        `<rect x="${bx(i)}" y="${Math.min(yo, yc).toFixed(1)}" width="${bw}" height="${Math.max(1, Math.abs(yo - yc)).toFixed(1)}" fill="${col}"/></g>`;
+    });
+
+    // markers: stacked labels above a bar's high (bearish) or below its low (bullish)
+    const stack = new Map(), labels = slot >= 7;
+    const label = (i, up, text, cls, title, bold) => {
+      const key = i + (up ? "u" : "d"), k = stack.get(key) || 0;
+      stack.set(key, k + 1);
+      const b = bars[i], yy = up ? y(b.h) - 6 - k * 12 : y(b.l) + 13 + k * 12;
+      if (!labels) {
+        const yt = up ? y(b.h) - 4 - k * 5 : y(b.l) + 4 + k * 5;
+        marks += `<g><title>${esc(title)}</title><path d="M${cx(i).toFixed(1)},${yt.toFixed(1)}l-3,${up ? -4 : 4}h6z" class="mk ${cls}"/></g>`;
+        return;
+      }
+      marks += `<g><title>${esc(title)}</title><text class="mk ${cls}${bold ? " b" : ""}" x="${cx(i).toFixed(1)}" y="${yy.toFixed(1)}" text-anchor="middle">${esc(text)}</text></g>`;
+    };
+
+    let strips = "", bottom = top + HM;
+    if (kind === "pa") {
+      // trading ranges: shaded boxes over the bars of each range
+      if (on("pa_ranges")) for (const r of pp.ranges) {
+        if (r.i1 < view.i0 || r.i0 > view.i1) continue;
+        const x1 = Math.max(0, cx(Math.max(r.i0, view.i0) - view.i0) - slot / 2), x2 = Math.min(PW, cx(Math.min(r.i1, view.i1) - view.i0) + slot / 2);
+        const y1 = y(r.high), y2 = y(r.low);
+        zones += `<g><title>${esc(t("tr_title", fmtPx(r.low), fmtPx(r.high), r.start, r.end))}</title><rect x="${x1.toFixed(1)}" y="${y1.toFixed(1)}" width="${Math.max(1, x2 - x1).toFixed(1)}" height="${Math.max(1, y2 - y1).toFixed(1)}" fill="var(--tr-zone)" stroke="var(--faint)" stroke-dasharray="3 3"/></g>`;
+      }
+      if (on("pa_ema")) {
+        let pth = "", pen = false;
+        bars.forEach((b, i) => {
+          const v = pp.ema[b.di];
+          if (!isNum(v)) { pen = false; return; }
+          pth += (pen ? "L" : "M") + cx(i).toFixed(1) + "," + y(v).toFixed(1);
+          pen = true;
+        });
+        if (pth) lines += `<path d="${pth}" fill="none" stroke="var(--ema)" stroke-width="1.6"/>`;
+      }
+      if (on("pa_wedges")) for (const w of pp.wedges) {
+        if (!w.pts.every(([i]) => inView(i))) continue;
+        const col = w.side === "top" ? "var(--down)" : "var(--up)", pts = w.pts.map(([i, v]) => [cx(i - view.i0), y(v)]);
+        lines += `<polyline points="${pts.map(([a, b]) => a.toFixed(1) + "," + b.toFixed(1)).join(" ")}" fill="none" stroke="var(--wedge)" stroke-width="1.4" stroke-dasharray="5 3"/>`;
+        pts.forEach(([a, b], k) => {
+          const yy = w.side === "top" ? b - 14 : b + 14;
+          fore += `<g><title>${esc(t("wedge_title", tv("wedge_", w.side), k + 1, w.confirmed_date))}</title><circle cx="${a.toFixed(1)}" cy="${yy.toFixed(1)}" r="7" fill="var(--card)" stroke="${col}"/><text class="e" x="${a.toFixed(1)}" y="${(yy + 3.5).toFixed(1)}" text-anchor="middle">${k + 1}</text></g>`;
+        });
+      }
+      for (let di = view.i0; di <= view.i1; di++) {
+        for (const m of pp.byBar.get(di) || []) {
+          const i = di - view.i0, up = m.side < 0;
+          if (/^[HL]\d$/.test(m.kind)) {
+            if (!on("pa_counts") || (!labels && !m.setup)) continue;
+            label(i, up, m.kind, m.setup ? (up ? "neg" : "pos") : "muted", m.setup ? t(up ? "mk_l2" : "mk_h2") : t("mk_count", m.kind), m.setup);
+          } else if (m.kind === "FB") {
+            if (!on("pa_fb")) continue;
+            label(i, up, "FB", up ? "neg" : "pos", t(up ? "mk_fb_up" : "mk_fb_down", fmtPx(m.level), m.breakout_date), true);
+            if (isNum(m.level)) {
+              const yl = Math.round(y(m.level)) + 0.5, b0 = Math.max(view.i0, prep.daily.findIndex(b => b.d === m.breakout_date));
+              marks += `<line x1="${(cx(b0 - view.i0) - slot * 2).toFixed(1)}" x2="${(cx(i) + slot).toFixed(1)}" y1="${yl}" y2="${yl}" stroke="var(${up ? "--down" : "--up"})" stroke-dasharray="2 2"/>`;
+            }
+          } else if (m.kind === "G20") {
+            if (!on("pa_g20")) continue;
+            label(i, up, "20", up ? "neg" : "pos", t(up ? "mk_g20_bear" : "mk_g20_bull"), true);
+          }
+        }
+      }
+      // measured-move targets: dashed lines from the swing that set them, tags on the price axis
+      if (on("pa_mm")) for (const m of pp.mms) {
+        if (!isNum(m.target) || m.target < lo || m.target > hi) continue;
+        const yy = Math.round(y(m.target)) + 0.5, x0 = m.i0 >= view.i0 ? cx(m.i0 - view.i0) : 0;
+        const c = m.side === "up" ? "--up" : "--down";
+        lines += `<line x1="${x0.toFixed(1)}" x2="${PW}" y1="${yy}" y2="${yy}" stroke="var(${c})" stroke-dasharray="6 4" opacity="${m.reached ? 0.35 : 0.9}"/>`;
+        fore += `<g><title>${esc(t("mm_title", t("mm_" + m.kind), fmtPx(m.target), m.from_date))}</title><rect x="${XA - 4}" y="${yy - 8}" width="${AX - 4}" height="16" rx="3" fill="var(--card)" stroke="var(${c})"/>` +
+          `<text class="lvl ${m.side === "up" ? "s" : "r"}" x="${XA}" y="${yy + 4}">MM ${esc(fmtPx(m.target))}</text></g>`;
+      }
+      // state and always-in strips under the price panel
+      const sy = top + HM + 6, ay = sy + 11;
+      bars.forEach((b, i) => {
+        const sc = pp.states[b.di], ai = pp.ai[b.di], x = (slot * i).toFixed(2), w = (slot + 0.4).toFixed(2);
+        if (sc != null) strips += `<rect x="${x}" y="${sy}" width="${w}" height="8" fill="${PA_STATE_COLORS[sc]}"/>`;
+        strips += `<rect x="${x}" y="${ay}" width="${w}" height="5" fill="${ai > 0 ? "var(--up)" : ai < 0 ? "var(--down)" : "var(--faint)"}" opacity=".8"/>`;
+      });
+      strips += `<text x="${XA}" y="${sy + 8}" class="st">${esc(t("strip_state"))}</text><text x="${XA}" y="${ay + 6}" class="st">${esc(t("strip_ai"))}</text>`;
+      bottom = ay + 8;
+    } else {
+      for (let di = view.i0; di <= view.i1; di++) {
+        for (const m of pp.byBar.get(di) || []) {
+          const key = m.bias > 0 ? "cs_bull" : m.bias < 0 ? "cs_bear" : "cs_doji";
+          if (!on(key)) continue;
+          const i = di - view.i0, up = m.bias < 0, cls = m.bias > 0 ? "pos" : m.bias < 0 ? "neg" : "muted";
+          if (m.bars > 1 && labels) {    // a bracket under (or over) the pattern's bars
+            const x1 = cx(Math.max(m.i0, view.i0) - view.i0) - bw / 2, x2 = cx(i) + bw / 2;
+            const lowest = Math.min(...prep.daily.slice(Math.max(m.i0, view.i0), di + 1).map(b => b.l));
+            const highest = Math.max(...prep.daily.slice(Math.max(m.i0, view.i0), di + 1).map(b => b.h));
+            const yb = up ? y(highest) - 3 : y(lowest) + 3;
+            marks += `<path d="M${x1.toFixed(1)},${(yb + (up ? 3 : -3)).toFixed(1)}V${yb.toFixed(1)}H${x2.toFixed(1)}V${(yb + (up ? 3 : -3)).toFixed(1)}" fill="none" class="br ${cls}"/>`;
+          }
+          label(i, up, I18N.patternShort(m.id), cls, I18N.signalName(m.id, m.id) + " · " + m.date, m.bias !== 0);
+        }
+      }
+    }
+
+    const [timeGrid, axis] = timeAxis(bars, cx, PW, top, bottom, "daily");
+    back = timeGrid + back;
+    const H = bottom + 22, id = st.id + kind;
+    const hadFocus = box.contains(global.document.activeElement), keep = st.phover?.[kind];
+    box.innerHTML = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" tabindex="0" aria-label="${esc(t(kind === "pa" ? "pa_aria" : "cs_aria"))}">
+      <defs><clipPath id="${id}-clip"><rect x="0" y="${top}" width="${PW}" height="${HM}"/></clipPath></defs>
+      ${back}<line x1="0" x2="${PW}" y1="${top + HM + 0.5}" y2="${top + HM + 0.5}" stroke="var(--border)"/>
+      <g clip-path="url(#${id}-clip)">${zones}${lines}</g><g clip-path="url(#${id}-clip)" shape-rendering="crispEdges">${candles}</g>
+      <g clip-path="url(#${id}-clip)">${marks}</g>${strips}${axis}${fore}
+      <line class="xh xv" x1="0" x2="0" y1="${top}" y2="${bottom}" visibility="hidden"/>
+      <rect class="hit" x="0" y="${top}" width="${PW}" height="${bottom - top}" fill="transparent"/></svg>`;
+
+    // hover readout and keyboard crosshair
+    const svg = box.querySelector("svg"), xv = svg.querySelector(".xv"), readout = box.parentNode.querySelector(".ta-readout");
+    const show = i => {
+      const b = bars[i], prev = b.di ? prep.daily[b.di - 1].c : null;
+      const chg = isNum(prev) ? ` <span class="${pctCls(b.c - prev)}">${esc(fmtPct(b.c / prev - 1, 2, true))}</span>` : "";
+      let extra = "";
+      if (kind === "pa") {
+        const sc = pp.states[b.di];
+        extra = `<span>${esc(tv("bt_", ["bear_trend_bar", "weak_bear_bar", "doji", "weak_bull_bar", "bull_trend_bar"][pp.types[b.di] + 2]))}</span>` +
+          `<span>${esc(t("strip_state"))} <b>${esc(sc == null ? "–" : tv("state_", ["tight_bear_channel", "bear_channel", "trading_range", "bull_channel", "tight_bull_channel"][sc + 2]))}</b></span>` +
+          `<span>${esc(t("strip_ai"))} <b>${esc(tv("ai_", { 1: "long", "-1": "short", 0: "none" }[pp.ai[b.di]]))}</b></span>` +
+          `<span>EMA <b>${esc(fmtPx(pp.ema[b.di]))}</b></span>` +
+          (pp.byBar.get(b.di) || []).map(m => `<span><b class="${m.side > 0 ? "pos" : "neg"}">${esc(m.kind === "G20" ? t("lg_pa_g20") : m.kind === "FB" ? t(m.side < 0 ? "fb_up" : "fb_down") : m.kind)}</b></span>`).join("");
+      } else {
+        extra = (pp.byBar.get(b.di) || []).map(m => `<span><b class="${m.bias > 0 ? "pos" : m.bias < 0 ? "neg" : ""}">${esc(I18N.signalName(m.id, m.id))}</b></span>`).join("");
+      }
+      readout.innerHTML = `<span><b>${esc(b.d)}</b></span>` +
+        ["o", "h", "l", "c"].map(k => `<span>${esc(t(k))} <b>${esc(fmtPx(b[k]))}</b>${k === "c" ? chg : ""}</span>`).join("") + extra;
+    };
+    st.phover = st.phover || {};
+    const point = i => {
+      i = Math.max(0, Math.min(n - 1, i));
+      st.phover[kind] = bars[i].di;
+      const xx = wx(i);
+      xv.setAttribute("x1", xx); xv.setAttribute("x2", xx); xv.setAttribute("visibility", "visible");
+      show(i);
+    };
+    const leave = () => { st.phover[kind] = null; xv.setAttribute("visibility", "hidden"); show(n - 1); };
+    const hit = svg.querySelector(".hit");
+    const fromEvent = e => point(Math.floor((e.clientX - svg.getBoundingClientRect().left) / slot));
+    hit.addEventListener("pointermove", fromEvent);
+    hit.addEventListener("pointerdown", fromEvent);
+    hit.addEventListener("pointerleave", leave);
+    svg.addEventListener("blur", leave);
+    svg.addEventListener("keydown", e => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key === "Escape") { leave(); return; }
+      if (e.key === "+" || e.key === "=" || e.key === "-" || e.key === "_") { e.preventDefault(); st.zoom(e.key === "+" || e.key === "=" ? 1 / 1.5 : 1.5); return; }
+      const stepK = { ArrowLeft: -1, ArrowRight: 1, PageUp: -10, PageDown: 10, Home: -n, End: n }[e.key];
+      if (stepK == null) return;
+      e.preventDefault();
+      const cur = st.phover[kind] != null ? bars.findIndex(b => b.di >= st.phover[kind]) : n - 1;
+      point(cur + stepK);
+    });
+    const at = keep != null && inView(keep) ? bars.findIndex(b => b.di >= keep) : -1;
+    if (at >= 0) point(at); else { st.phover[kind] = null; show(n - 1); }
+    if (hadFocus) svg.focus({ preventScroll: true });
+  }
+
   // ------------------------------------------------------------------ public
   function render(root, data) {
     const st = root._ta || (root._ta = { vis: loadVis(), userTf: null, hover: null, id: "ta" + (++uid) });
@@ -640,12 +1006,20 @@
           <p class="ta-note">${esc(t("approx"))}${vp.available && vp.lookback_bars ? " " + esc(t("vp_window", vp.lookback_bars, vp.window_start ?? "")) : ""}</p>
           <p class="ta-note">${esc(t("kb_hint"))}</p>
         </section>
+        ${patternCardHtml(st, "pa", data)}
+        ${patternCardHtml(st, "cs", data)}
         <aside class="ta-side">${regimeHtml(data.regime)}${scoreHtml(data.scorecard)}${signalsHtml(data.signals)}</aside>
         <div class="ta-below">${levelsHtml(data)}${notesHtml(data)}</div>
       </div>
       <p class="ta-disclaimer">${esc(I18N.lang() === "zh" ? t("disclaimer") : data.meta?.disclaimer || t("disclaimer"))}</p>`;
-    st.box = root.querySelector(".ta-chartbox");
-    const redraw = () => draw(st, Math.floor(st.box.clientWidth));
+    st.box = root.querySelector(".ta-main .ta-chartbox");
+    st.pboxes = {};
+    st.geoms = {};
+    for (const kind of ["pa", "cs"]) st.pboxes[kind] = root.querySelector(`.ta-${kind} .ta-chartbox`);
+    const redraw = () => {
+      draw(st, Math.floor(st.box.clientWidth));
+      for (const kind of ["pa", "cs"]) drawPattern(st, kind);
+    };
     root.querySelectorAll(".ta-chip").forEach(b => b.addEventListener("click", () => {
       const k = b.dataset.k;
       st.vis[k] = st.vis[k] === false;
@@ -680,59 +1054,64 @@
       setView(r.i0, r.i1 - r.i0 + 1);
     }));
     root.querySelectorAll(".ta-zoom button").forEach(b => b.addEventListener("click", () => st.zoom(b.dataset.z === "in" ? 1 / 1.5 : 1.5)));
-    const box = st.box, frac = x => Math.max(0, Math.min(1, (x - box.getBoundingClientRect().left) / st.geom.PW));
-    // a trackpad pinch arrives as many small Ctrl+wheel steps: add them up until they move a whole bar
-    let wheelZoom = 0;
-    box.addEventListener("wheel", e => {
-      if (!(e.ctrlKey || e.metaKey) || !st.geom) return;      // a plain wheel keeps scrolling the page
-      e.preventDefault();
-      const dy = e.deltaY * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1);
-      wheelZoom += Math.max(-1, Math.min(1, dy / 100)) * 0.35;
-      const v = currentView(st), c = v.i1 - v.i0 + 1;
-      if (Math.round(c * Math.exp(wheelZoom)) === c) return;
-      st.zoom(Math.exp(wheelZoom), frac(e.clientX));
-      wheelZoom = 0;
-    }, { passive: false });
-    // the mouse or one finger drags sideways to pan (a vertical swipe still scrolls the page); two fingers pinch
-    const pts = new Map();
-    let drag = null, pinch = null, frame = 0;
-    const later = fn => { cancelAnimationFrame(frame); frame = requestAnimationFrame(fn); };
-    const gap = () => { const [a, b] = [...pts.values()]; return Math.hypot(a.x - b.x, a.y - b.y) || 1; };
-    box.addEventListener("pointerdown", e => {
-      if (!st.geom || e.button !== 0) return;
-      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      const v = currentView(st), c = v.i1 - v.i0 + 1;
-      drag = null; pinch = null;
-      if (pts.size === 1) drag = { x: e.clientX, i0: v.i0, c, per: st.geom.PW / c, moved: false };
-      else if (pts.size === 2) {
-        pts.forEach((_, id) => box.setPointerCapture(id));   // keeps both fingers through redraws
-        const [a, b] = [...pts.values()];
-        pinch = { d: gap(), i0: v.i0, c, f: frac((a.x + b.x) / 2) };
-      }
-    });
-    box.addEventListener("pointermove", e => {
-      if (!pts.has(e.pointerId)) return;
-      if (e.pointerType === "mouse" && !(e.buttons & 1)) { endDrag(e); return; }
-      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      if (pinch && pts.size === 2) {
-        const nc = Math.round(pinch.c * pinch.d / gap());
-        later(() => { if (pinch) zoomTo(pinch.i0, pinch.c, nc, pinch.f); });
-        return;
-      }
-      if (!drag) return;
-      const k = Math.round((drag.x - e.clientX) / drag.per);
-      if (!drag.moved && Math.abs(drag.x - e.clientX) < 4) return;
-      if (!drag.moved) { drag.moved = true; box.setPointerCapture(e.pointerId); box.classList.add("dragging"); }
-      later(() => { if (drag && drag.i0 + k !== currentView(st).i0) setView(drag.i0 + k, drag.c); });
-    });
-    const endDrag = e => {
-      pts.delete(e.pointerId);
-      drag = null; pinch = null;
-      box.classList.remove("dragging");
+    // every chart pans and zooms the same window; geom() gives that chart's plot width
+    const bindNav = (box, geom) => {
+      const frac = x => Math.max(0, Math.min(1, (x - box.getBoundingClientRect().left) / geom().PW));
+      // a trackpad pinch arrives as many small Ctrl+wheel steps: add them up until they move a whole bar
+      let wheelZoom = 0;
+      box.addEventListener("wheel", e => {
+        if (!(e.ctrlKey || e.metaKey) || !geom()) return;      // a plain wheel keeps scrolling the page
+        e.preventDefault();
+        const dy = e.deltaY * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1);
+        wheelZoom += Math.max(-1, Math.min(1, dy / 100)) * 0.35;
+        const v = currentView(st), c = v.i1 - v.i0 + 1;
+        if (Math.round(c * Math.exp(wheelZoom)) === c) return;
+        st.zoom(Math.exp(wheelZoom), frac(e.clientX));
+        wheelZoom = 0;
+      }, { passive: false });
+      // the mouse or one finger drags sideways to pan (a vertical swipe still scrolls the page); two fingers pinch
+      const pts = new Map();
+      let drag = null, pinch = null, frame = 0;
+      const later = fn => { cancelAnimationFrame(frame); frame = requestAnimationFrame(fn); };
+      const gap = () => { const [a, b] = [...pts.values()]; return Math.hypot(a.x - b.x, a.y - b.y) || 1; };
+      box.addEventListener("pointerdown", e => {
+        if (!geom() || e.button !== 0) return;
+        pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        const v = currentView(st), c = v.i1 - v.i0 + 1;
+        drag = null; pinch = null;
+        if (pts.size === 1) drag = { x: e.clientX, i0: v.i0, c, per: geom().PW / c, moved: false };
+        else if (pts.size === 2) {
+          pts.forEach((_, id) => box.setPointerCapture(id));   // keeps both fingers through redraws
+          const [a, b] = [...pts.values()];
+          pinch = { d: gap(), i0: v.i0, c, f: frac((a.x + b.x) / 2) };
+        }
+      });
+      box.addEventListener("pointermove", e => {
+        if (!pts.has(e.pointerId)) return;
+        if (e.pointerType === "mouse" && !(e.buttons & 1)) { endDrag(e); return; }
+        pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pinch && pts.size === 2) {
+          const nc = Math.round(pinch.c * pinch.d / gap());
+          later(() => { if (pinch) zoomTo(pinch.i0, pinch.c, nc, pinch.f); });
+          return;
+        }
+        if (!drag) return;
+        const k = Math.round((drag.x - e.clientX) / drag.per);
+        if (!drag.moved && Math.abs(drag.x - e.clientX) < 4) return;
+        if (!drag.moved) { drag.moved = true; box.setPointerCapture(e.pointerId); box.classList.add("dragging"); }
+        later(() => { if (drag && drag.i0 + k !== currentView(st).i0) setView(drag.i0 + k, drag.c); });
+      });
+      const endDrag = e => {
+        pts.delete(e.pointerId);
+        drag = null; pinch = null;
+        box.classList.remove("dragging");
+      };
+      box.addEventListener("pointerup", endDrag);
+      box.addEventListener("pointercancel", endDrag);
+      box.addEventListener("dblclick", () => { st.view = null; redraw(); });
     };
-    box.addEventListener("pointerup", endDrag);
-    box.addEventListener("pointercancel", endDrag);
-    box.addEventListener("dblclick", () => { st.view = null; redraw(); });
+    bindNav(st.box, () => st.geom);
+    for (const kind of ["pa", "cs"]) if (st.pboxes[kind]) bindNav(st.pboxes[kind], () => st.geoms[kind]);
     const fsBtn = root.querySelector(".ta-fs"), card = root.querySelector(".ta-main");
     fsBtn.addEventListener("click", () => {
       if (global.document.fullscreenElement) global.document.exitFullscreen?.();
@@ -742,16 +1121,17 @@
     if (st.onFs) global.document.removeEventListener("fullscreenchange", st.onFs);
     st.onFs = () => { fsLabel(); requestAnimationFrame(() => st.onSize && st.onSize(true)); };
     global.document.addEventListener("fullscreenchange", st.onFs);
-    let width = 0, height = 0;
+    let width = "", height = 0;
     // a height-only change on a touch screen outside full screen is the browser toolbar showing or hiding
     // during a scroll: redrawing then would make the page jump
     const coarse = global.matchMedia?.("(pointer: coarse)").matches;
+    const boxes = [st.box, ...Object.values(st.pboxes).filter(Boolean)];
     const onSize = force => {
-      const w = Math.floor(st.box.clientWidth), h = global.innerHeight;
+      const w = boxes.map(b => Math.floor(b.clientWidth)).join(","), h = global.innerHeight;
       const newH = h !== height && (!coarse || global.document.fullscreenElement);
-      if (w && (force === true || w !== width || newH)) { width = w; height = h; redraw(); }
+      if (st.box.clientWidth && (force === true || w !== width || newH)) { width = w; height = h; redraw(); }
     };
-    if (global.ResizeObserver) { st.ro = new ResizeObserver(onSize); st.ro.observe(st.box); }
+    if (global.ResizeObserver) { st.ro = new ResizeObserver(onSize); boxes.forEach(b => st.ro.observe(b)); }
     if (!st.onWin) { st.onWin = () => st.onSize && st.onSize(); global.addEventListener("resize", st.onWin); }
     st.onSize = onSize;
     onSize();

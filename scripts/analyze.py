@@ -35,10 +35,12 @@ import pandas as pd
 import chart
 import config as C
 import fetch
+import candlesticks as CS
 import fmp_client
 import indicators as I
 import levels
 import modules as M
+import price_action as PA
 import regime as R
 import scorecard as SC
 import signal_stats as SS
@@ -56,6 +58,8 @@ BUILDERS = (
     ("multi_timeframe", R.build_multi_timeframe),
     ("event_risk", M.build_event_risk),
     ("signals", SS.build_signal_stats),
+    ("price_action", PA.build_price_action),
+    ("candlesticks", CS.build_candlesticks),
 )
 MODULE_KEYS = tuple(name for name, _ in BUILDERS) + ("scorecard", "scenarios", "risk")
 TOP_KEYS = ("ticker", "as_of", "data_source", "horizon", "snapshot", "data_quality",
@@ -151,11 +155,13 @@ def config_snapshot(horizon: str) -> dict:
         "regime": {"adx_trend": C.ADX_TREND, "adx_range": C.ADX_RANGE, "vol_low_pctl": C.VOL_LOW_PCTL,
                    "vol_high_pctl": C.VOL_HIGH_PCTL, "vol_extreme_pctl": C.VOL_EXTREME_PCTL,
                    "compression_bw_pctl": C.COMPRESSION_BW_PCTL},
-        "levels": {"fractal_k": C.FRACTAL_K, "profile_bins": C.PROFILE_BINS, "value_area": C.VALUE_AREA_SHARE,
-                   "merge_atr": C.LEVEL_MERGE_ATR, "touch_atr": C.TOUCH_ATR, "per_side": C.LEVELS_PER_SIDE},
+        "levels": {"swing_atr": C.SWING_ATR, "profile_bins": C.PROFILE_BINS, "value_area": C.VALUE_AREA_SHARE,
+                   "kde_bandwidth_atr": C.KDE_BANDWIDTH_ATR, "reaction_atr": C.REACTION_ATR, "per_side": C.LEVELS_PER_SIDE},
         "signals": {"active_bars": C.SIGNAL_ACTIVE_BARS, "params": dict(C.SIGNAL_PARAMS),
                     "confidence_n_normal": C.CONFIDENCE_N_NORMAL, "confidence_n_low": C.CONFIDENCE_N_LOW,
                     "edge_min": C.SIGNAL_EDGE_MIN, "hit_edge_min": C.SIGNAL_HIT_EDGE_MIN},
+        "price_action": {k[3:].lower(): getattr(C, k) for k in dir(C) if k.startswith("PA_")},
+        "candlesticks": {k[3:].lower(): getattr(C, k) for k in dir(C) if k.startswith("CS_")},
         "scorecard": {"bias_steps": [{"label": label, "bound": bound} for bound, label in C.BIAS_STEPS],
                       "position_weight_shift": dict(C.POSITION_WEIGHT_SHIFT),
                       "conf_agreement_high": C.CONF_AGREEMENT_HIGH, "conf_agreement_low": C.CONF_AGREEMENT_LOW},

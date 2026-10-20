@@ -60,13 +60,46 @@
       bars_ago: n => n === 0 ? "今日" : `${n} 根前`,
       sc_normal: "正常", sc_low: "偏少", sc_insufficient: "不足",
       edge_note: "超额 = 信号中位数 − 同状态基准中位数（括号内为胜率差）；样本不足（n < 15）的信号不计入评分。",
-      th_level: "价位", th_dist: "距离", th_src: "来源", touches: n => `触及 ${n} 次`,
+      th_level: "价位", th_dist: "距离", th_src: "来源", touches: (n, h, b) => `测试 ${n} 次 · 守住 ${h ?? 0} · 击穿 ${b ?? 0}`,
       lv_none: "没有可用的关键价位。",
       dn_partial: "未完成 K 线已排除", dn_stale: "数据可能过期", dn_illiquid: "流动性提示", dn_skipped: "已跳过的模块",
       dn_notes: "其他说明", dn_approx: "近似方法",
       stale_txt: (a, b, n) => `最新 K 线 ${a}，比预期交易日 ${b} 晚 ${n} 个交易日`,
       unavailable: "不可用", none: "无", disclaimer: "仅供信息参考的技术分析，不构成投资建议。",
       no_data: "没有可绘制的 K 线数据。",
+      // charts 2 (price action) and 3 (candlestick patterns)
+      t_pa: "价格行为（Al Brooks 方法的日线近似）", t_cs: "K 线形态",
+      lg_ema: n => `EMA${n}`, lg_pa_counts: "H/L 计数", lg_pa_wedges: "楔形三推", lg_pa_ranges: "交易区间",
+      lg_pa_fb: "区间假突破", lg_pa_g20: "20 根缺口棒", lg_pa_mm: "测量目标位",
+      lg_cs_bull: "看涨形态", lg_cs_bear: "看跌形态", lg_cs_doji: "十字星",
+      last_seen: d => `上次出现 ${d}`, never_seen: "本股历史上未出现",
+      lib_title: h => `全部形态的历史表现（${h} 日，本股自身历史）`, th_pattern: "形态", th_edge_all: "超额",
+      lib_note: "超额 = 形态中位数 − 全部交易日中位数（括号内为胜率差）；n < 15 的样本不足以作为证据。看跌形态的超额为负才支持其看法。",
+      mm_leg: "等距运动（腿）", mm_range: "等距运动（区间高度）", mm_reached: "已到达",
+      wedge_top: "楔形顶", wedge_bottom: "楔形底", fb_up: "向上假突破", fb_down: "向下假突破",
+      gap_bull: n => `连续 ${n} 根 K 线最低价高于 EMA`, gap_bear: n => `连续 ${n} 根 K 线最高价低于 EMA`,
+      state_tight_bull_channel: "紧密上升通道", state_bull_channel: "上升通道（宽）", state_trading_range: "交易区间",
+      state_bear_channel: "下降通道（宽）", state_tight_bear_channel: "紧密下降通道",
+      pa_since: "持续", n_bars: n => `${n} 根 K 线`, pa_ai: "Always-in 方向", ai_long: "多头", ai_short: "空头", ai_none: "未定",
+      since: d => `自 ${d}`, slope_rising: "上行", slope_falling: "下行", slope_flat: "走平",
+      vs_ema: x => `收盘距 EMA ${x} ATR`, pa_bar: "最新 K 线",
+      bt_bull_trend_bar: "阳线趋势棒", bt_weak_bull_bar: "弱阳线", bt_doji: "十字/小实体", bt_weak_bear_bar: "弱阴线", bt_bear_trend_bar: "阴线趋势棒",
+      pa_range: "交易区间", pa_gap: "EMA 缺口棒", pa_hcount: "最近 H 计数", pa_lcount: "最近 L 计数", pa_wedge: "最近楔形",
+      pa_fb: "最近区间假突破", pa_mm: "测量目标位",
+      last_doji: (d, n) => `最近一根十字星：${d}（${n === 0 ? "今日" : n + " 根前"}）`,
+      cs_recent: "最近出现的形态", cs_none_recent: "近期没有识别到形态。",
+      setups_active: "近 3 根 K 线触发的形态", not_scored: "这些形态只作为辅助参考，不计入评分卡。",
+      pa_note: "K 线颜色：实心 = 趋势棒（实体 ≥ 一半振幅），浅色 = 弱棒，灰色 = 十字/小实体。下方色条：市场状态与 Always-in 方向。全部为日线规则近似，统计来自本股自身历史。时间范围与上方主图同步。",
+      cs_note: "实心 K 线为形态所在的 K 线；“前期下跌/上涨”按形态前一根收盘与 5 根前比较。统计来自本股自身历史，时间范围与上方主图同步。",
+      tr_title: (a, b, s, e) => `交易区间 ${a}–${b}（${s} ~ ${e}）`,
+      wedge_title: (side, k, d) => `${side} 第 ${k} 推（${d} 确认）`,
+      mk_h2: "H2：靠近上行 EMA 的第二次回调入场", mk_l2: "L2：靠近下行 EMA 的第二次反弹入场", mk_count: k => `${k} 计数`,
+      mk_fb_up: (lv, d) => `向上假突破：${d} 突破区间上沿 ${lv} 后收回`, mk_fb_down: (lv, d) => `向下假突破：${d} 跌破区间下沿 ${lv} 后收回`,
+      mk_g20_bull: "20 根缺口棒后首次回踩 EMA", mk_g20_bear: "20 根缺口棒后首次反抽 EMA",
+      mm_title: (k, px, d) => `${k} 目标 ${px}（自 ${d}）`,
+      strip_state: "状态", strip_ai: "AI",
+      pa_aria: "价格行为图：按 Brooks 棒型着色的 K 线、EMA20、H/L 计数、楔形、交易区间、假突破与测量目标位",
+      cs_aria: "K 线形态图：标出吞没、锤子线、晨星等经典形态",
     },
     en: {
       app_title: "Technical Analysis", lang_button: "中文", lang_hint: "切换到中文",
@@ -119,13 +152,45 @@
       bars_ago: n => n === 0 ? "today" : n === 1 ? "1 bar ago" : `${n} bars ago`,
       sc_normal: "normal", sc_low: "low", sc_insufficient: "insufficient",
       edge_note: "Edge = signal median − same-regime baseline median (hit-rate difference in brackets); signals with n < 15 are not scored.",
-      th_level: "Level", th_dist: "Distance", th_src: "Sources", touches: n => `${n} touch${n === 1 ? "" : "es"}`,
+      th_level: "Level", th_dist: "Distance", th_src: "Sources", touches: (n, h, b) => `${n} test${n === 1 ? "" : "s"} · ${h ?? 0} held · ${b ?? 0} broken`,
       lv_none: "No key levels available.",
       dn_partial: "Partial bar excluded", dn_stale: "Possibly stale data", dn_illiquid: "Liquidity warning", dn_skipped: "Skipped modules",
       dn_notes: "Other notes", dn_approx: "Approximations",
       stale_txt: (a, b, n) => `last bar ${a} is ${n} sessions behind the expected session ${b}`,
       unavailable: "unavailable", none: "none", disclaimer: "Technical analysis for information only, not investment advice.",
       no_data: "No bars to chart.",
+      t_pa: "Price action (daily approximation of Al Brooks' methods)", t_cs: "Candlestick patterns",
+      lg_ema: n => `EMA${n}`, lg_pa_counts: "H/L counts", lg_pa_wedges: "Wedges", lg_pa_ranges: "Trading ranges",
+      lg_pa_fb: "Failed breakouts", lg_pa_g20: "20 gap bars", lg_pa_mm: "Measured moves",
+      lg_cs_bull: "Bullish", lg_cs_bear: "Bearish", lg_cs_doji: "Doji",
+      last_seen: d => `last seen ${d}`, never_seen: "never seen on this stock",
+      lib_title: h => `Every pattern's record (${h} days, this stock's own history)`, th_pattern: "Pattern", th_edge_all: "Edge",
+      lib_note: "Edge = pattern median − all-days median (hit-rate difference below); n < 15 is not evidence. A bearish pattern is supported by a negative edge.",
+      mm_leg: "Measured move (leg)", mm_range: "Measured move (range height)", mm_reached: "reached",
+      wedge_top: "Wedge top", wedge_bottom: "Wedge bottom", fb_up: "Failed breakout up", fb_down: "Failed breakdown",
+      gap_bull: n => `${n} bars in a row with the low above the EMA`, gap_bear: n => `${n} bars in a row with the high below the EMA`,
+      state_tight_bull_channel: "Tight bull channel", state_bull_channel: "Bull channel (broad)", state_trading_range: "Trading range",
+      state_bear_channel: "Bear channel (broad)", state_tight_bear_channel: "Tight bear channel",
+      pa_since: "Since", n_bars: n => `${n} bars`, pa_ai: "Always-in", ai_long: "long", ai_short: "short", ai_none: "none",
+      since: d => `since ${d}`, slope_rising: "rising", slope_falling: "falling", slope_flat: "flat",
+      vs_ema: x => `close ${x} ATR from the EMA`, pa_bar: "Last bar",
+      bt_bull_trend_bar: "Bull trend bar", bt_weak_bull_bar: "Weak bull bar", bt_doji: "Doji / small body", bt_weak_bear_bar: "Weak bear bar", bt_bear_trend_bar: "Bear trend bar",
+      pa_range: "Trading range", pa_gap: "EMA gap bars", pa_hcount: "Last high count", pa_lcount: "Last low count", pa_wedge: "Last wedge",
+      pa_fb: "Last failed breakout", pa_mm: "Measured moves",
+      last_doji: (d, n) => `Last doji: ${d} (${n === 0 ? "today" : n + " bars ago"})`,
+      cs_recent: "Recent patterns", cs_none_recent: "No recent patterns.",
+      setups_active: "Fired in the last 3 bars", not_scored: "Context only: these patterns do not change the scorecard.",
+      pa_note: "Candle colours: solid = trend bar (body at least half the range), pale = weak bar, grey = doji / small body. Strips below: market state and always-in direction. All rules are daily-bar approximations, measured on this stock's own history. The date range follows the main chart.",
+      cs_note: "Solid candles belong to a pattern; the prior decline / advance compares the close before the pattern with the close 5 bars earlier. Statistics come from this stock's own history; the date range follows the main chart.",
+      tr_title: (a, b, s, e) => `Trading range ${a}–${b} (${s} to ${e})`,
+      wedge_title: (side, k, d) => `${side}, push ${k} (confirmed ${d})`,
+      mk_h2: "H2: second pullback entry near the rising EMA", mk_l2: "L2: second rally entry near the falling EMA", mk_count: k => `${k} count`,
+      mk_fb_up: (lv, d) => `Failed breakout: broke above the range high ${lv} on ${d}, closed back inside`, mk_fb_down: (lv, d) => `Failed breakdown: broke below the range low ${lv} on ${d}, closed back inside`,
+      mk_g20_bull: "First EMA test after 20 bull gap bars", mk_g20_bear: "First EMA test after 20 bear gap bars",
+      mm_title: (k, px, d) => `${k} target ${px} (from ${d})`,
+      strip_state: "State", strip_ai: "AI",
+      pa_aria: "Price-action chart: candles coloured by Brooks bar type, EMA20, H/L counts, wedges, trading ranges, failed breakouts and measured moves",
+      cs_aria: "Candlestick-pattern chart: engulfing, hammer, stars and other classic patterns",
     },
   };
 
@@ -144,6 +209,34 @@
     gap_down_atr: "放量跳空低开 > 1 ATR",
     macd_bull_cross_below_zero: "MACD 零轴下方金叉",
     macd_bear_cross_above_zero: "MACD 零轴上方死叉",
+    pa_h2_ema: "H2 回调（靠近上行 EMA20）",
+    pa_l2_ema: "L2 反弹（靠近下行 EMA20）",
+    pa_wedge_bottom: "楔形底（三推下跌）",
+    pa_wedge_top: "楔形顶（三推上涨）",
+    pa_failed_breakdown: "交易区间向下假突破",
+    pa_failed_breakout: "交易区间向上假突破",
+    pa_gap20_bull_test: "20 根多头缺口棒后首次回踩 EMA",
+    pa_gap20_bear_test: "20 根空头缺口棒后首次反抽 EMA",
+    cs_bullish_engulfing: "看涨吞没", cs_bearish_engulfing: "看跌吞没", cs_hammer: "锤子线", cs_shooting_star: "射击之星",
+    cs_morning_star: "晨星", cs_evening_star: "暮星", cs_piercing_line: "刺透形态", cs_dark_cloud_cover: "乌云盖顶",
+    cs_bullish_harami: "看涨孕线", cs_bearish_harami: "看跌孕线", cs_three_white_soldiers: "红三兵", cs_three_black_crows: "三只乌鸦",
+    doji: "十字星",
+  };
+  const SIGNALS_EN = {
+    cs_bullish_engulfing: "Bullish engulfing", cs_bearish_engulfing: "Bearish engulfing", cs_hammer: "Hammer",
+    cs_shooting_star: "Shooting star", cs_morning_star: "Morning star", cs_evening_star: "Evening star",
+    cs_piercing_line: "Piercing line", cs_dark_cloud_cover: "Dark cloud cover", cs_bullish_harami: "Bullish harami",
+    cs_bearish_harami: "Bearish harami", cs_three_white_soldiers: "Three white soldiers", cs_three_black_crows: "Three black crows",
+    doji: "Doji",
+  };
+  // chart 3 marker labels
+  const PATTERN_SHORT = {
+    zh: { cs_bullish_engulfing: "吞没", cs_bearish_engulfing: "吞没", cs_hammer: "锤子", cs_shooting_star: "流星",
+      cs_morning_star: "晨星", cs_evening_star: "暮星", cs_piercing_line: "刺透", cs_dark_cloud_cover: "乌云",
+      cs_bullish_harami: "孕线", cs_bearish_harami: "孕线", cs_three_white_soldiers: "三兵", cs_three_black_crows: "三鸦", doji: "十字" },
+    en: { cs_bullish_engulfing: "Eng", cs_bearish_engulfing: "Eng", cs_hammer: "Ham", cs_shooting_star: "SS",
+      cs_morning_star: "MS", cs_evening_star: "ES", cs_piercing_line: "PL", cs_dark_cloud_cover: "DC",
+      cs_bullish_harami: "Har", cs_bearish_harami: "Har", cs_three_white_soldiers: "3WS", cs_three_black_crows: "3BC", doji: "Doji" },
   };
 
   const BIAS_ZH = { "Bearish": "看空", "Moderately bearish": "偏空", "Neutral": "中性",
@@ -161,11 +254,13 @@
   const SOURCE_ZH = {
     pivot_high: "摆动高点", pivot_low: "摆动低点", poc: "POC", value_area_low: "VAL", value_area_high: "VAH",
     hvn: "HVN", high_52w: "52周高", low_52w: "52周低", sma50: "SMA50", sma200: "SMA200",
+    demand: "需求区", supply: "供给区", gap_up: "向上缺口", gap_down: "向下缺口",
     gap_up_top: "向上缺口上沿", gap_up_bottom: "向上缺口下沿", gap_down_top: "向下缺口上沿", gap_down_bottom: "向下缺口下沿",
   };
   const SOURCE_EN = {
     pivot_high: "pivot high", pivot_low: "pivot low", poc: "POC", value_area_low: "VAL", value_area_high: "VAH",
     hvn: "HVN", high_52w: "52w high", low_52w: "52w low", sma50: "SMA50", sma200: "SMA200",
+    demand: "demand zone", supply: "supply zone", gap_up: "gap up", gap_down: "gap down",
     gap_up_top: "gap-up top", gap_up_bottom: "gap-up bottom", gap_down_top: "gap-down top", gap_down_bottom: "gap-down bottom",
   };
 
@@ -219,7 +314,8 @@
     return out;
   }
 
-  const signalName = (id, fallback) => lang === "zh" ? (SIGNALS_ZH[id] ?? fallback ?? id) : (fallback ?? id);
+  const signalName = (id, fallback) => lang === "zh" ? (SIGNALS_ZH[id] ?? fallback ?? id) : (SIGNALS_EN[id] ?? fallback ?? id);
+  const patternShort = id => PATTERN_SHORT[lang][id] ?? id;
   const biasLabel = s => lang === "zh" ? (BIAS_ZH[s] ?? s) : s;
 
   function sourceLabel(src) {
@@ -228,7 +324,7 @@
   }
 
   global.TA_I18N = {
-    t, tv, setLang, applyStatic, bindToggle, regimeLabel, signalName, biasLabel, sourceLabel,
+    t, tv, setLang, applyStatic, bindToggle, regimeLabel, signalName, patternShort, biasLabel, sourceLabel,
     lang: () => lang,
     onChange: fn => listeners.push(fn),
   };

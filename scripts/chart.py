@@ -21,8 +21,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+import candlesticks as CS
 import config as C
 import indicators as I
+import price_action as PA
 
 UI_DIR = Path(__file__).resolve().parents[1] / "ui"
 
@@ -30,11 +32,13 @@ VWAP_NOTE = ("Anchored VWAPs are a daily-bar approximation: typical price (H+L+C
              "cumulated from the anchor bar; not intraday VWAP.")
 PROFILE_NOTE = ("Volume profile is a daily-bar approximation: each bar's volume is spread evenly across "
                 "its high-low range.")
-LEVEL_KEYS = ("price", "zone_low", "zone_high", "sources", "touches", "volume_share", "score",
-              "distance_pct", "distance_atr")
+LEVEL_KEYS = ("price", "zone_low", "zone_high", "sources", "touches", "holds", "breaks", "flips", "fresh",
+              "volume_share", "score", "distance_pct", "distance_atr")
 MODULE_NAMES = ("market_context", "regime", "trend_momentum", "relative_strength", "mean_reversion",
                 "volume_flow", "volatility", "levels", "multi_timeframe", "event_risk", "signals",
-                "scorecard", "scenarios", "risk")
+                "price_action", "candlesticks", "scorecard", "scenarios", "risk")
+LIBRARY_KEYS = ("id", "name", "bias", "last_fired", "fires_total", "horizon", "n", "hit_rate", "median",
+                "confidence", "base_median", "base_hit_rate", "edge_median", "edge_hit_rate")
 
 
 # ---------------------------------------------------------------------------- value helpers
@@ -283,11 +287,8 @@ def _scorecard(modules: dict) -> dict:
     }
 
 
-def _signals(modules: dict, primary: int) -> dict:
-    sg = modules.get("signals") or {}
-    if not sg.get("available"):
-        return {"available": False, "reason": sg.get("reason") or "signal statistics unavailable",
-                "primary_horizon": primary, "active": []}
+def _active_table(sg: dict, primary: int) -> list[dict]:
+    """Rows for an active-signal table (indicator signals, price-action setups, candlestick patterns)."""
     ph = int(sg.get("primary_horizon") or primary)
     rows = []
     for a in sg.get("active") or []:
@@ -302,7 +303,35 @@ def _signals(modules: dict, primary: int) -> dict:
             "edge_median": _get(h, "edge", "median"), "edge_hit_rate": _get(h, "edge", "hit_rate"),
             "confidence": a.get("confidence") or h.get("confidence"),
         })
-    return {"available": True, "primary_horizon": ph, "active": rows, "history": sg.get("history")}
+    return rows
+
+
+def _signals(modules: dict, primary: int) -> dict:
+    sg = modules.get("signals") or {}
+    if not sg.get("available"):
+        return {"available": False, "reason": sg.get("reason") or "signal statistics unavailable",
+                "primary_horizon": primary, "active": []}
+    ph = int(sg.get("primary_horizon") or primary)
+    return {"available": True, "primary_horizon": ph, "active": _active_table(sg, primary), "history": sg.get("history")}
+
+
+def _pattern_block(name: str, payload, ctx, modules: dict, win: pd.DataFrame, primary: int, notes: list) -> dict:
+    """Chart 2 / chart 3 payload: the module's chart series plus its active and library tables."""
+    mod = modules.get(name) or {}
+    try:
+        out = payload(ctx, modules, win.index)
+    except Exception as exc:  # the main chart stands without this one
+        notes.append(f"{name} chart data failed ({type(exc).__name__}: {exc})")
+        return {"available": False, "reason": f"chart data failed: {type(exc).__name__}"}
+    if not out.get("available"):
+        return out
+    out["primary_horizon"] = int(mod.get("primary_horizon") or primary)
+    out["active"] = _active_table(mod, primary)
+    out["library"] = [{k: r.get(k) for k in LIBRARY_KEYS} for r in mod.get("library") or []]
+    for key in ("recent", "last_doji"):
+        if key in mod:
+            out[key] = mod[key]
+    return out
 
 
 def _key_numbers(bars: pd.DataFrame, ind: pd.DataFrame, modules: dict, levels: dict, earnings: list) -> dict:
@@ -401,6 +430,8 @@ def build_chart_data(ctx, modules: dict) -> dict:
         "regime": _regime(modules),
         "scorecard": _scorecard(modules),
         "signals": _signals(modules, primary),
+        "price_action": _pattern_block("price_action", PA.chart_payload, ctx, modules, win, primary, notes),
+        "candlesticks": _pattern_block("candlesticks", CS.chart_payload, ctx, modules, win, primary, notes),
         "key_numbers": _key_numbers(bars, ind, modules, levels, earnings),
     }
     data["data_notes"] = _data_notes(ctx, modules, notes)

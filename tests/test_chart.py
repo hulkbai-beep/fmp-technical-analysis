@@ -162,6 +162,8 @@ def test_chart_data_from_the_real_module_builders():
         import levels
         import modules
         import regime
+        import candlesticks
+        import price_action
         import scorecard
         import signal_stats
     except ImportError as exc:
@@ -172,7 +174,8 @@ def test_chart_data_from_the_real_module_builders():
          "mean_reversion": modules.build_mean_reversion(ctx), "volume_flow": modules.build_volume_flow(ctx),
          "volatility": modules.build_volatility(ctx), "levels": levels.build_levels(ctx),
          "multi_timeframe": regime.build_multi_timeframe(ctx), "event_risk": modules.build_event_risk(ctx),
-         "signals": signal_stats.build_signal_stats(ctx)}
+         "signals": signal_stats.build_signal_stats(ctx), "price_action": price_action.build_price_action(ctx),
+         "candlesticks": candlesticks.build_candlesticks(ctx)}
     m["scorecard"] = scorecard.build_scorecard(ctx, m)
     m["scenarios"] = scorecard.build_scenarios(ctx, m, m["scorecard"])
     d = chart.build_chart_data(ctx, m)
@@ -192,6 +195,21 @@ def test_chart_data_from_the_real_module_builders():
     assert d["signals"]["primary_horizon"] == C.HORIZONS["swing"]["primary"]
     for row in d["signals"]["active"]:
         assert row["n"] is not None and row["confidence"] in ("normal", "low", "insufficient")
+    pa, cs = d["price_action"], d["candlesticks"]
+    assert pa["available"] and cs["available"]
+    assert len(pa["bar_types"]) == len(pa["states"]) == len(pa["always_in"]) == len(d["candles"])
+    assert pa["summary"]["state"] == m["price_action"]["state"]
+    assert [r["id"] for r in pa["library"]] == [r["id"] for r in m["price_action"]["library"]]
+    assert [r["id"] for r in cs["library"]] == [r["id"] for r in m["candlesticks"]["library"]]
+    assert {r["id"] for r in pa["active"]} == {a["id"] for a in m["price_action"]["active"]}
+    first = d["candles"][0][0]
+    assert all(mk["date"] >= first for mk in pa["markers"] + cs["markers"])
+
+
+def test_pattern_charts_without_their_modules():
+    _, d = _data()
+    assert d["price_action"]["available"] is False and d["price_action"]["reason"]
+    assert d["candlesticks"]["available"] is False
 
 
 def test_bars_after_as_of_are_not_charted():
