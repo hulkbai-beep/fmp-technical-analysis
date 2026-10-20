@@ -71,6 +71,23 @@ def test_swing_pivots_ignore_moves_smaller_than_the_threshold():
     assert L.swing_pivots(df, flat_atr(df, np.nan), mult=0.1) == {"highs": [], "lows": []}   # no ATR yet
 
 
+def test_swing_pivots_are_confirmed_only_by_a_later_bar():
+    highs = [10, 11, 12, 13, 14, 13, 12, 11.5, 12.5, 13.5, 14.5, 13.0, 12.5]
+    df = frame(highs + [12.8], [h - 0.5 for h in highs] + [11.0])     # last bar: new low, own range 1.8 ATR
+    piv = L.swing_pivots(df, flat_atr(df), mult=1.5)
+    d = [x.strftime("%Y-%m-%d") for x in df.index]
+    assert [p["date"] for p in piv["lows"]] == [d[7]]                  # the 11.0 low at bar 7 only
+    assert [p["date"] for p in piv["highs"]] == [d[4], d[10]]
+
+
+def test_swing_pivots_do_not_repeat_a_pivot_bar_as_the_opposite_extreme():
+    df = frame([100.0, 100.8, 100.9, 99.8, 98.9], [98.9, 98.2, 98.2, 99.2, 98.4])
+    piv = L.swing_pivots(df, flat_atr(df), mult=1.5)
+    d = [x.strftime("%Y-%m-%d") for x in df.index]
+    assert [(p["date"], p["price"]) for p in piv["highs"]] == [(d[2], 100.9)]
+    assert [(p["date"], p["price"]) for p in piv["lows"]] == [(d[1], 98.2)]
+
+
 # ---------------------------------------------------------------------------- supply / demand
 def ohlc(rows, start="2024-01-01"):
     idx = pd.bdate_range(start, periods=len(rows), name="date")
@@ -191,6 +208,17 @@ def test_density_zones_bound_and_candidate_zones():
     (clipped,) = L.density_zones([{"price": 99.9, "source": "pivot_low"}], atr=1.0, bound=(-np.inf, 99.95))
     assert clipped["zone_high"] == 99.95 and clipped["price"] == pytest.approx(99.9)
     assert L.density_zones([{"price": float("nan"), "source": "x"}], 1.0) == []
+
+
+def test_zone_sources_name_only_candidates_inside_the_band():
+    # the 52-week low sits 0.6 ATR below the pivot low: in the same density region, outside the band
+    cands = [{"price": 99.10, "source": "pivot_low", "weight": 2.5},
+             {"price": 98.50, "source": "low_52w", "weight": 1.0}]
+    (z,) = L.density_zones(cands, atr=1.0)
+    assert z["sources"] == ["pivot_low"] and z["source_types"] == ["pivot"]
+    weak = {"sources": z["sources"], "score": 0.9}
+    assert L.qualifies(weak) is False                                  # no 52-week exemption for it
+    assert L.qualifies({"sources": ["low_52w"], "score": 0.0}) is True
 
 
 TEST_BARS = [(12, 11), (11.2, 10.3), (11.8, 10.8), (12, 11.2), (11, 9.8), (9.6, 9.0), (9.5, 8.8),
