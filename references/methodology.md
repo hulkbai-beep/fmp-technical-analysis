@@ -361,7 +361,9 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   - listed nearest first, each with its score, `distance_pct` and `distance_atr` (negative below the close).
 - **Walk-forward check** (`scripts/levels_backtest.py`): builds the levels every 5 bars from past bars only
   and records whether each zone held (price trades 1 ATR beyond its near edge before a close beyond its far
-  edge) within 20 bars, against the same zone shape moved to other dates. On six large-cap stocks
+  edge). A zone counts if it is touched within 20 bars of the build date; the outcome is then read over the
+  next 20 bars from that touch, so it can end up to 39 bars after the build. Each zone is compared with the
+  same zone shape moved to other dates. On six large-cap stocks
   (1995-2018 daily bars) neither these zones nor the earlier fractal-pivot clusters held more often than
   the moved ones (edge within about ±2 percentage points), while zones at levels planted in synthetic data
   showed about +23 points. Read the zones as where price has reacted before, not as predictions.

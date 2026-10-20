@@ -82,16 +82,17 @@ def swing_pivots(df: pd.DataFrame, atr: pd.Series, mult: float = C.SWING_ATR) ->
         thr = mult * a[i]
         if not np.isfinite(thr):
             continue
-        top = direction >= 0 and low[i] <= high[hi_i] - thr
-        bottom = direction <= 0 and high[i] >= low[lo_i] + thr
+        # a pivot is confirmed by a later bar only: the extreme must sit strictly before bar i
+        top = direction >= 0 and hi_i < i and low[i] <= high[hi_i] - thr
+        bottom = direction <= 0 and lo_i < i and high[i] >= low[lo_i] + thr
         if top and bottom:                       # undecided start: the earlier extreme came first
             top, bottom = hi_i < lo_i, hi_i >= lo_i
         if top:
             piv.append((hi_i, +1, high[hi_i]))
-            direction, lo_i = -1, hi_i + int(np.nanargmin(low[hi_i:i + 1]))
+            direction, lo_i = -1, hi_i + 1 + int(np.nanargmin(low[hi_i + 1:i + 1]))
         elif bottom:
             piv.append((lo_i, -1, low[lo_i]))
-            direction, hi_i = +1, lo_i + int(np.nanargmax(high[lo_i:i + 1]))
+            direction, hi_i = +1, lo_i + 1 + int(np.nanargmax(high[lo_i + 1:i + 1]))
     if direction > 0:                            # unconfirmed latest swing: the leg out of the last pivot
         tail = high[hi_i]
     elif direction < 0:
@@ -310,7 +311,8 @@ def density_zones(candidates: list[dict], atr: float, bound: tuple[float, float]
     the peak, without crossing the lowest point between it and a neighbouring peak, clamped to
     C.ZONE_MIN_ATR..C.ZONE_MAX_ATR ATRs around the peak and to `bound` (lo, hi). Its members are
     the candidates between those lowest points; price = weighted mean of the members inside the
-    zone (the peak if none); weight = summed member weight.
+    zone (the peak if none); weight = summed member weight; sources = the sources of the members
+    inside the zone.
     """
     pts = [c for c in candidates if _num(c.get("price")) is not None and float(c.get("weight", 1.0)) > 0]
     if not pts:
@@ -357,7 +359,8 @@ def density_zones(candidates: list[dict], atr: float, bound: tuple[float, float]
         inside = [c for c in members if lo <= c["price"] <= hi]
         price = (sum(c["price"] * c.get("weight", 1.0) for c in inside) / sum(c.get("weight", 1.0) for c in inside)
                  if inside else min(max(peak, lo), hi))
-        sources = list(dict.fromkeys(m["source"] for m in members))
+        # sources name only the candidates inside the band, so a 52-week extreme outside it does not count
+        sources = list(dict.fromkeys(m["source"] for m in inside))
         out.append({"price": float(price), "zone_low": float(lo), "zone_high": float(hi),
                     "sources": sources, "source_types": list(dict.fromkeys(map(source_type, sources))),
                     "n_candidates": len(members),

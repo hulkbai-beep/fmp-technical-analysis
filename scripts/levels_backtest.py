@@ -10,12 +10,14 @@ Each CSV holds daily bars with Date, Open, High, Low, Close and Volume columns (
 columns such as Adj Close are ignored), split-adjusted like the rest of the skill.
 
 Every `step` bars, levels are built as of that bar from bars <= it only. For each S1-S3 and R1-R3
-zone, the next `forward` bars are scanned:
-  - touched: a later bar trades into the zone (low <= zone_high for a support, high >= zone_low
-    for a resistance);
-  - from the first touching bar on, the zone is held once price trades 1 ATR beyond its near edge
-    (zone_high + ATR for a support) before any close beyond its far edge (below zone_low), and
-    broken once such a close comes first; touches that resolve neither way are left out.
+zone:
+  - touched: a bar within the next `forward` bars trades into the zone (low <= zone_high for a
+    support, high >= zone_low for a resistance);
+  - from the first touching bar on, the outcome is read over `forward` more bars: the zone is held
+    once price trades 1 ATR beyond its near edge (zone_high + ATR for a support) before any close
+    beyond its far edge (below zone_low), and broken once such a close comes first; outcomes that
+    resolve neither way are left out. The outcome can therefore end up to 2 x `forward` - 1 bars
+    after the build bar.
 The placebo keeps each zone's shape, its width and distance from the close in ATRs, but moves it
 to other as-of bars of the same series (PLACEBO_OFFSETS steps later, wrapping around), where it
 marks no level; it is scored the same way. Hold rates rise with the distance from the close
