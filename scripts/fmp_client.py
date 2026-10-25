@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Minimal client for the Financial Modeling Prep (FMP) *stable* API, used by the
-technical-analysis skill (a trimmed copy of the fundamental skill's client).
+fmp-technical-analysis skill (a trimmed copy of the fundamental skill's client).
 
 - Standard library only; works on Windows, macOS and Linux.
 - The API key is read from the FMP_API_KEY environment variable. It never appears
@@ -59,7 +59,7 @@ OFFICIAL_BASE = "https://financialmodelingprep.com"
 OFFICIAL_HOSTS = {"financialmodelingprep.com", "www.financialmodelingprep.com"}
 AUTH_STYLES = ("header", "bearer", "x-api-key", "query")
 PREFIX_CANDIDATES = ("stable", "")
-USER_AGENT = "technical-analysis-skill/1.0"
+USER_AGENT = "fmp-technical-analysis-skill/1.0"
 
 DAY = 86400
 TTL_BY_ENDPOINT = {"profile": DAY}
