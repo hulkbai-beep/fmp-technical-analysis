@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-The ta-1.0 contract: a small, versioned summary of one stock's swing and position runs for other tools.
+The ta-1.1 contract: a small, versioned summary of one stock's swing and position runs for other tools.
 
 metrics.json is internal and may change between versions. The contract is the public interface: fields are only
 ever added, and renaming or removing one means a new major version (ta-2.0). It selects and normalises facts and
-judges nothing (no "buy", no target of its own). contracts/ta-1.0.schema.json describes every field;
+judges nothing (no "buy", no target of its own). contracts/ta-1.1.schema.json describes every field;
 tests/test_contract.py checks both.
 
 Blocks that do not depend on the horizon (data quality, market, event, volatility, extension, trend, regime, RS,
@@ -27,7 +27,7 @@ from pathlib import Path
 
 import scorecard as SC
 
-CONTRACT = "ta-1.0"
+CONTRACT = "ta-1.1"   # 1.1 adds event.last_earnings*, targets' kind; 1.x versions only add fields
 HORIZONS = ("swing", "position")
 # Modules computed the same way for both horizons; the contract takes them from the swing run.
 SHARED = ("snapshot", "data_quality", "market_context", "regime", "trend_momentum", "relative_strength",
@@ -131,14 +131,18 @@ def _market(mc):
 
 
 def _event(er):
-    """The next report and past reactions. Whether it falls inside a horizon is under horizons.*."""
+    """The next and the latest report, and past reactions. Whether the next one falls inside a horizon is under
+    horizons.*. The latest report date lets a caller tell when fundamentals predate the newest statements."""
     if not er:
         return {"available": False, "reason": None, "next_earnings": None, "calendar_days": None,
-                "trading_days_to": None, "eps_estimated": None, "reactions_n": None, "median_abs_move": None,
-                "mean_abs_move": None}
-    ne, rx = er.get("next_earnings") or {}, er.get("reactions") or {}
+                "trading_days_to": None, "eps_estimated": None, "last_earnings": None,
+                "days_since_last_earnings": None, "last_earnings_move": None, "reactions_n": None,
+                "median_abs_move": None, "mean_abs_move": None}
+    ne, le, rx = er.get("next_earnings") or {}, er.get("last_earnings") or {}, er.get("reactions") or {}
     return {"available": True, "reason": None, "next_earnings": ne.get("date"), "calendar_days": ne.get("calendar_days"),
             "trading_days_to": ne.get("trading_days_est"), "eps_estimated": _num(ne.get("eps_estimated")),
+            "last_earnings": le.get("date"), "days_since_last_earnings": le.get("calendar_days_ago"),
+            "last_earnings_move": _num(le.get("move")),
             "reactions_n": rx.get("n"), "median_abs_move": _num(rx.get("median_abs_move")),
             "mean_abs_move": _num(rx.get("mean_abs_move"))}
 
@@ -242,8 +246,11 @@ def _scenario(s):
     t, inv = s.get("trigger") or {}, s.get("invalidation") or {}
     return {"trigger": _num(t.get("level")), "condition": t.get("condition"), "volume": t.get("volume"),
             "trigger_distance_pct": _num(t.get("distance_pct")), "trigger_basis": t.get("basis"),
-            "targets": [{"price": _num(x.get("price")), "low": _num(x.get("zone_low")), "high": _num(x.get("zone_high")),
-                         "label": x.get("label"), "distance_pct": _num(x.get("distance_pct"))}
+            # kind "level" = an actual support/resistance zone; "projection" = no level beyond the trigger, so the
+            # target is the trigger +- a multiple of ATR (a caller may prefer a valuation range or a wider projection)
+            "targets": [{"kind": x.get("kind"), "price": _num(x.get("price")), "low": _num(x.get("zone_low")),
+                         "high": _num(x.get("zone_high")), "label": x.get("label"),
+                         "distance_pct": _num(x.get("distance_pct"))}
                         for x in s.get("targets") or []],
             "invalidation": _num(inv.get("level")), "invalidation_condition": inv.get("condition")}
 
@@ -324,7 +331,7 @@ def _check_pair(swing, position):
 
 
 def build(swing: dict, position: dict) -> dict:
-    """The ta-1.0 contract from one stock's swing and position metrics (same ticker, same last bar)."""
+    """The ta-1.1 contract from one stock's swing and position metrics (same ticker, same last bar)."""
     _check_pair(swing, position)
     m = swing
     snap = m.get("snapshot") or {}

@@ -1,4 +1,4 @@
-"""The ta-1.0 contract (scripts/contract.py, contracts/ta-1.0.schema.json) on a fake FMP (no network).
+"""The ta-1.1 contract (scripts/contract.py, contracts/ta-1.1.schema.json) on a fake FMP (no network).
 
 Every contract must match the schema, and its numbers must be the metrics' numbers. A small JSON Schema checker
 lives here so the tests need nothing beyond pandas, numpy and pytest.
@@ -77,7 +77,7 @@ def test_schema_version_matches_the_module():
 
 
 def test_the_checker_catches_drift():
-    assert validate({"contract": "ta-1.0"}, SCHEMA)
+    assert validate({"contract": "ta-1.1"}, SCHEMA)
     assert validate({"state": "sideways", "zone": None}, SCHEMA["$defs"]["horizon"]["properties"]["price_location"])
     assert validate(True, SCHEMA["$defs"]["num"])
     assert validate(2, SCHEMA["$defs"]["sign"])
@@ -138,6 +138,27 @@ def test_inputs_must_pair_up(stock):
         contract.build(swing, later)
 
 
+def test_last_earnings_is_the_latest_report_before_the_last_bar(stock):
+    swing, _, c = stock
+    ev = c["event"]
+    reports = sorted(r["date"] for r in earnings_history("ACME") if r["date"] <= c["as_of"])
+    assert ev["last_earnings"] == swing["event_risk"]["last_earnings"]["date"] == reports[-1]
+    assert ev["days_since_last_earnings"] == (pd.Timestamp(c["as_of"]) - pd.Timestamp(reports[-1])).days
+    assert ev["next_earnings"] == "2026-10-29" and ev["last_earnings"] < c["as_of"] < ev["next_earnings"]
+    assert isinstance(ev["last_earnings_move"], float)
+
+
+def test_targets_say_whether_they_are_levels_or_projections(stock):
+    _, _, c = stock
+    kinds = [t["kind"] for h in c["horizons"].values() for side in ("bull", "bear") if h[side]
+             for t in h[side]["targets"]]
+    assert kinds and set(kinds) <= {"level", "projection"}
+    for h in c["horizons"].values():
+        for side in ("bull", "bear"):
+            for t in (h[side] or {}).get("targets", []):
+                assert (t["kind"] == "projection") == t["label"].startswith("projection")
+
+
 def test_position_sizing_stays_out(stock):
     text = json.dumps(stock[2])
     assert "position_size" not in text and "shares" not in text
@@ -179,6 +200,7 @@ def test_spy_contract():
     assert c["event"]["available"] is False and "ETF" in c["event"]["reason"]
     assert c["rs"]["vs_spy"] is None and c["market"]["sector"] is None
     assert c["horizons"]["swing"]["earnings_within_horizon"] is None
+    assert c["event"]["last_earnings"] is None and c["event"]["days_since_last_earnings"] is None
     assert set(c["skipped"]) == {"earnings", "sector"}
 
 
@@ -219,6 +241,15 @@ def test_cli_writes_the_contract(cli, tmp_path, capsys):
     assert c["horizons"]["position"]["horizon_days"] == 60
     assert (tmp_path / "run" / "metrics.json").is_file()
     assert "contract     :" in capsys.readouterr().out
+
+
+def test_cli_normalises_the_ticker(cli, tmp_path, capsys):
+    path = tmp_path / "acme.json"
+    assert analyze.main(["$acme", "--out", str(tmp_path / "run"), "--contract", str(path)]) == 0
+    assert json.loads(path.read_text(encoding="utf-8"))["ticker"] == "ACME"
+    assert analyze.main(["SHOP.TO", "--out", str(tmp_path / "x")]) == 1
+    assert "non-US listing" in capsys.readouterr().err
+    assert not (tmp_path / "x").exists()                                # refused before any work
 
 
 def test_contract_script_matches_build(stock, tmp_path, capsys):

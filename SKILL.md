@@ -42,13 +42,15 @@ does the explaining. The output describes conditions and historical base rates. 
 
 ## Workflow
 
-1. **Pick the ticker and horizon.** US listings only; share classes use a dot (`BRK.B`).
+1. **Pick the ticker and horizon.** US listings only. Share classes may be typed `BRK.B`, `BRK/B`, `brk b`
+   or `$BRK.B`; the scripts turn them into FMP's `BRK-B` (the run and the contract show `BRK-B`). A foreign
+   suffix such as `SHOP.TO`, `0700.HK` or `VOD.L` is refused with a hint: suggest the US ticker or ADR.
    `swing` (default) is days to weeks, with a 10-day primary horizon. `position` is months, with a
    60-day horizon and a weekly chart. 短线 / 波段 → swing; 中线 / 中长线 → position.
 2. **Run** from the skill folder:
    `python scripts/analyze.py TICKER --horizon swing|position [--out DIR] [--refresh] [--history-start YYYY-MM-DD] [--contract PATH]`.
    - Output goes to `./ta-output/<TICKER>_<as_of>/` by default.
-   - Add `--contract PATH` only when another tool needs the ta-1.0 contract: the other horizon also runs,
+   - Add `--contract PATH` only when another tool needs the ta-1.1 contract: the other horizon also runs,
      from the cache, and the contract covers both (see "Contract for other tools").
    - An uncached run makes 10 API calls for a stock, 8 for an ETF and 7 for SPY. A same-day
      re-run makes 0.
@@ -113,12 +115,12 @@ does the explaining. The output describes conditions and historical base rates. 
 
 | Option | Values | Default | Effect |
 |---|---|---|---|
-| `TICKER` | e.g. `AAPL`, `BRK.B`, `SPY` | required | US stock or ETF |
+| `TICKER` | e.g. `AAPL`, `BRK.B` (read as `BRK-B`), `SPY` | required | US stock or ETF |
 | `--horizon` | `swing`, `position` | `swing` | stats horizons 5/10/20 vs 20/60 days; levels window 126 vs 504 bars; daily vs weekly chart |
 | `--out` | folder | `./ta-output/<TICKER>_<as_of>/` | where `metrics.json` and `chart.html` go |
 | `--refresh` | flag | off | ignore the cache and fetch everything again |
 | `--history-start` | `YYYY-MM-DD` | IPO date | ignore the symbol's history before this date (e.g. a pre-merger SPAC shell) |
-| `--contract` | file path | off | also write the ta-1.0 contract for another tool (both horizons; see below) |
+| `--contract` | file path | off | also write the ta-1.1 contract for another tool (both horizons; see below) |
 | `FMP_BASE_URL` | URL | unset (official FMP) | only for a third-party proxy |
 | `FMP_TLS_VERIFY` | `0` / `1` | `1` | `0` only per process, only for a proxy; ignored for the official host |
 | `FMP_CACHE_DIR` | folder | `~/.cache/fmp-technical` | response cache (never contains the key) |
@@ -127,20 +129,24 @@ does the explaining. The output describes conditions and historical base rates. 
 All analysis thresholds live in `scripts/config.py`, and each run records them in
 `meta.config_snapshot`.
 
-## Contract for other tools (ta-1.0)
+## Contract for other tools (ta-1.1)
 
-Tools that build on this skill (a decision engine, a screener) read the **ta-1.0 contract**, not
+Tools that build on this skill (a decision engine, a screener) read the **ta-1.1 contract**, not
 `metrics.json`, whose layout is internal and may change.
 - `python scripts/analyze.py TICKER --contract out.json` writes it: the requested horizon runs as usual and
   the other one runs from the same-day cache, so it costs no extra API calls.
 - `python scripts/contract.py SWING/metrics.json POSITION/metrics.json [-o out.json]` builds it from two saved
   runs of the same ticker and day. Give each run its own `--out`: by default both horizons write to the same
   folder.
-- `contracts/ta-1.0.schema.json` describes every field. Horizon-independent blocks (data quality, market,
+- `contracts/ta-1.1.schema.json` describes every field. Horizon-independent blocks (data quality, market,
   earnings, volatility, extension, trend, regime, RS, flow, weekly, price-action context) sit at the top;
   the scorecard, zones (`low` / `high`), `price_location`, scenarios, reference stops, earnings inside the
   horizon and signal and pattern statistics (with `confirmed`, the scorecard's same-regime edge test) sit
   under `horizons.swing` and `horizons.position`.
+- 1.1 adds `event.last_earnings` (the latest report on or before `as_of`, with the days since and its
+  two-day move), so a caller can tell when fundamentals predate the newest statements, and the `kind` of each
+  scenario target: `level` for a support/resistance zone, `projection` when no level lies beyond the trigger
+  and the target is the trigger plus or minus a multiple of ATR.
 - It selects facts and judges nothing; position sizing is left to the caller. Fields are only ever added;
   renaming or removing one means ta-2.0, and `tests/test_contract.py` checks the output against the schema.
 
@@ -161,7 +167,8 @@ Tools that build on this skill (a decision engine, a screener) read the **ta-1.0
 - **Module failure:** a failing module shows `available: false`,
   `reason: "internal error: ..."` and an entry in `meta.errors`. The rest of the report still
   stands. Name the gap.
-- **Unknown or non-US symbol:** exit 1 with a hint. Ask the user to confirm the symbol.
+- **Unknown or non-US symbol:** exit 1 with a hint. Ask the user to confirm the symbol. Share classes need
+  no fixing by hand (`BRK.B` works); a foreign exchange suffix is refused before any API call.
 
 ## Troubleshooting
 

@@ -9,7 +9,7 @@ metrics.json (every computed number) and a self-contained chart.html.
               position (weekly emphasis, 20/60-day stats, ~2-year levels)
   --out       output folder (default ./ta-output/<TICKER>_<as_of>/)
   --refresh   ignore the local cache and fetch everything again
-  --contract  also write the ta-1.0 contract (both horizons; the other one runs from the cache;
+  --contract  also write the ta-1.1 contract (both horizons; the other one runs from the cache;
               see contract.py)
 
 Exit codes: 0 done; 1 the analysis could not run (unknown ticker, no data, FMP or network
@@ -47,6 +47,7 @@ import price_action as PA
 import regime as R
 import scorecard as SC
 import signal_stats as SS
+from symbols import normalize_symbol
 
 # Module builders that take ctx only, in metrics.json order (scorecard, scenarios, risk follow).
 BUILDERS = (
@@ -215,9 +216,7 @@ def run_analysis(ticker: str, horizon: str = C.DEFAULT_HORIZON, client=None, now
     Raises ValueError for an unknown horizon or a symbol without price data, and lets
     fmp_client.FMPError / InvalidKey propagate.
     """
-    symbol = (ticker or "").strip().upper()
-    if not symbol:
-        raise ValueError("no ticker given")
+    symbol = normalize_symbol(ticker)       # BRK.B -> BRK-B; refuses foreign listings
     if horizon not in C.HORIZONS:
         raise ValueError(f"unknown horizon {horizon!r}: use {' or '.join(C.HORIZONS)}")
     started = time.time()
@@ -348,7 +347,7 @@ def main(argv=None) -> int:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(description="Technical analysis of one US stock or ETF from FMP data.")
-    ap.add_argument("ticker", help="e.g. AAPL, BRK.B, SPY")
+    ap.add_argument("ticker", help="e.g. AAPL, BRK.B (read as BRK-B), SPY")
     ap.add_argument("--horizon", choices=tuple(C.HORIZONS), default=C.DEFAULT_HORIZON)
     ap.add_argument("--out", help="output folder (default ./ta-output/<TICKER>_<as_of>/)")
     ap.add_argument("--refresh", action="store_true", help="ignore the cache and fetch everything again")
@@ -357,7 +356,11 @@ def main(argv=None) -> int:
     ap.add_argument("--contract", metavar="PATH",
                     help=f"also write the {contract.CONTRACT} contract for both horizons (the other one runs from the cache)")
     args = ap.parse_args(argv)
-    symbol = args.ticker.strip().upper()
+    try:
+        symbol = normalize_symbol(args.ticker)
+    except ValueError as e:
+        print(f"Cannot analyse {args.ticker!r}: {e}", file=sys.stderr)
+        return 1
     try:
         metrics, chart_data = run_analysis(symbol, args.horizon, refresh=args.refresh,
                                            history_start=args.history_start)
@@ -376,7 +379,7 @@ def main(argv=None) -> int:
         msg = _redact(str(e))
         hint = ("Run `python scripts/fmp_client.py check` to test the connection and your plan."
                 if "error:" in msg or "restricted:" in msg else
-                "Check the symbol: a US-listed stock or ETF; share classes use a dot, e.g. BRK.B.")
+                "Check the symbol: a US-listed stock or ETF; share classes such as BRK.B are read as BRK-B.")
         print(f"Cannot analyse {symbol}: {msg}\n{hint}", file=sys.stderr)
         return 1
     except Exception as e:  # unexpected: show where, never the key

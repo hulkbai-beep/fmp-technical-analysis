@@ -38,7 +38,6 @@ DEFAULT_PORT = 8876
 ENV_NAMES = ("FMP_API_KEY", "FMP_BASE_URL", "FMP_PATH_PREFIX", "FMP_AUTH_STYLE", "FMP_TLS_VERIFY",
              "FMP_MAX_PER_MIN", "FMP_TIMEOUT", "FMP_CACHE_DIR")
 SKIP_TLS_HOSTS = {"54.236.92.205"}   # third-party FMP proxy with a self-signed certificate
-SYMBOL_RE = re.compile(r"^[A-Z0-9.^-]{1,10}$")
 HORIZONS = ("swing", "position")
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 STATIC_TYPES = {
@@ -126,9 +125,11 @@ def _error(exc: Exception) -> tuple[int, dict]:
 
 def analyze_request(query: dict) -> tuple[int, dict]:
     """Validate the query, run the analysis and return (HTTP status, JSON payload)."""
-    symbol = (query.get("symbol") or "").strip().upper()
-    if not SYMBOL_RE.match(symbol):
-        return 400, {"error": "Invalid symbol: use 1-10 characters A-Z, 0-9, '.', '^' or '-' (e.g. AAPL, BRK.B, ^VIX)."}
+    from symbols import normalize_symbol
+    try:
+        symbol = normalize_symbol(query.get("symbol"))   # BRK.B -> BRK-B; refuses foreign listings
+    except ValueError as e:
+        return 400, {"error": f"Invalid symbol: {e}."}
     horizon = (query.get("horizon") or "swing").strip().lower()
     if horizon not in HORIZONS:
         return 400, {"error": f"Invalid horizon: use {' or '.join(HORIZONS)}."}
