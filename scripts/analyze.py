@@ -3,12 +3,14 @@
 Technical analysis of one US-listed stock or ETF: fetch FMP data, run every module, write
 metrics.json (every computed number) and a self-contained chart.html.
 
-  python scripts/analyze.py TICKER [--horizon swing|position] [--out DIR] [--refresh]
+  python scripts/analyze.py TICKER [--horizon swing|position] [--out DIR] [--refresh] [--contract PATH]
 
   --horizon   swing (default: daily focus, 5/10/20-day stats, ~6-month levels) or
               position (weekly emphasis, 20/60-day stats, ~2-year levels)
   --out       output folder (default ./ta-output/<TICKER>_<as_of>/)
   --refresh   ignore the local cache and fetch everything again
+  --contract  also write the ta-1.0 contract (both horizons; the other one runs from the cache;
+              see contract.py)
 
 Exit codes: 0 done; 1 the analysis could not run (unknown ticker, no data, FMP or network
 error); 2 configuration or usage problem (missing or rejected API key, bad arguments).
@@ -34,6 +36,7 @@ import pandas as pd
 
 import chart
 import config as C
+import contract
 import fetch
 import candlesticks as CS
 import fmp_client
@@ -261,6 +264,7 @@ def run_analysis(ticker: str, horizon: str = C.DEFAULT_HORIZON, client=None, now
         "notes": list(data["notes"]),
         "connection": data["connection"],
         "fetched_at": data.get("fetched_at"),
+        "generated_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
         "runtime_seconds": round(time.time() - started, 2),
         "versions": {"python": platform.python_version(), "pandas": pd.__version__, "numpy": np.__version__},
         "config_snapshot": config_snapshot(horizon),
@@ -350,11 +354,17 @@ def main(argv=None) -> int:
     ap.add_argument("--refresh", action="store_true", help="ignore the cache and fetch everything again")
     ap.add_argument("--history-start", metavar="YYYY-MM-DD",
                     help="ignore the symbol's history before this date (e.g. a pre-merger SPAC shell)")
+    ap.add_argument("--contract", metavar="PATH",
+                    help=f"also write the {contract.CONTRACT} contract for both horizons (the other one runs from the cache)")
     args = ap.parse_args(argv)
     symbol = args.ticker.strip().upper()
     try:
         metrics, chart_data = run_analysis(symbol, args.horizon, refresh=args.refresh,
                                            history_start=args.history_start)
+        runs = {args.horizon: metrics}
+        if args.contract:
+            other = "position" if args.horizon == "swing" else "swing"
+            runs[other], _ = run_analysis(symbol, other, history_start=args.history_start)  # cache: no new calls
     except fmp_client.InvalidKey as e:
         print(f"API key problem: {_redact(str(e))}", file=sys.stderr)
         return 2
@@ -375,6 +385,15 @@ def main(argv=None) -> int:
         return 1
     paths = write_outputs(metrics, chart_data, args.out or default_out_dir(symbol, metrics["as_of"]))
     print(summary(metrics, paths))
+    if args.contract:
+        try:
+            text = contract.dumps(contract.build(runs["swing"], runs["position"]))
+        except ValueError as e:  # e.g. a new bar arrived between the two runs
+            print(f"Contract not written: {e}. Run again.", file=sys.stderr)
+            return 1
+        Path(args.contract).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.contract).write_text(text + "\n", encoding="utf-8")
+        print(f"  contract     : {args.contract} ({contract.CONTRACT}, swing + position)")
     return 0
 
 

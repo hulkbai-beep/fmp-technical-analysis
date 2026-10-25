@@ -1,0 +1,326 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ta-1.0",
+  "title": "Technical analysis contract ta-1.0",
+  "description": "The stable summary of one stock's swing and position runs that other tools read, built by scripts/contract.py. Fields are only ever added; renaming or removing one means ta-2.0. Horizon-independent blocks sit at the top, the rest under horizons.swing / horizons.position. Prices are split-adjusted closes; fractions are decimals (0.05 = 5%); null means missing, never estimated.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract", "config_hash", "ticker", "generated_at", "as_of", "as_of_basis", "data_source", "last_close",
+               "quote", "atr14", "company", "data_quality", "market", "event", "volatility", "extension", "trend",
+               "regime", "rs", "flow", "weekly", "context_only", "horizons", "skipped", "modules_unavailable",
+               "restricted", "warnings", "errors", "disclaimer"],
+  "properties": {
+    "contract": {"const": "ta-1.0"},
+    "config_hash": {"type": "string", "description": "hash of both runs' meta.config_snapshot"},
+    "ticker": {"type": "string"},
+    "generated_at": {"type": "string"},
+    "as_of": {"type": "string", "description": "last complete daily bar (YYYY-MM-DD)"},
+    "as_of_basis": {"const": "last_close"},
+    "data_source": {"$ref": "#/$defs/str"},
+    "last_close": {"$ref": "#/$defs/num"},
+    "quote": {
+      "type": "object", "additionalProperties": false, "required": ["price", "time"],
+      "properties": {"price": {"$ref": "#/$defs/num"}, "time": {"$ref": "#/$defs/str", "description": "may be intraday"}}
+    },
+    "atr14": {"$ref": "#/$defs/num"},
+    "company": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "exchange", "sector", "industry", "currency", "is_etf", "sector_etf", "benchmark",
+                   "history_first_date", "history_bars"],
+      "properties": {
+        "name": {"$ref": "#/$defs/str"}, "exchange": {"$ref": "#/$defs/str"}, "sector": {"$ref": "#/$defs/str"},
+        "industry": {"$ref": "#/$defs/str"}, "currency": {"$ref": "#/$defs/str"}, "is_etf": {"type": "boolean"},
+        "sector_etf": {"$ref": "#/$defs/str"}, "benchmark": {"$ref": "#/$defs/str"},
+        "history_first_date": {"$ref": "#/$defs/str"}, "history_bars": {"type": ["integer", "null"]}
+      }
+    },
+    "data_quality": {
+      "type": "object", "additionalProperties": false,
+      "required": ["stale", "business_days_behind", "partial_bar_excluded", "adj_coverage", "illiquid", "illiquid_reason",
+                   "avg_volume", "avg_dollar_volume", "spac_like_start", "history_start_override", "warnings"],
+      "properties": {
+        "stale": {"type": "boolean"},
+        "business_days_behind": {"type": ["integer", "null"]},
+        "partial_bar_excluded": {"$ref": "#/$defs/str", "description": "date of today's bar when it was dropped"},
+        "adj_coverage": {"$ref": "#/$defs/num"},
+        "illiquid": {"type": "boolean"},
+        "illiquid_reason": {"$ref": "#/$defs/str"},
+        "avg_volume": {"$ref": "#/$defs/num"},
+        "avg_dollar_volume": {"$ref": "#/$defs/num"},
+        "spac_like_start": {"type": ["object", "null"]},
+        "history_start_override": {"$ref": "#/$defs/str"},
+        "warnings": {"$ref": "#/$defs/strings"}
+      }
+    },
+    "market": {
+      "type": "object", "additionalProperties": false, "required": ["spy", "vix", "sector"],
+      "properties": {
+        "spy": {"type": ["object", "null"], "additionalProperties": false,
+                "required": ["date", "above_sma200", "vs_sma200", "sma200_slope_20d"],
+                "properties": {"date": {"$ref": "#/$defs/str"}, "above_sma200": {"type": ["boolean", "null"]},
+                               "vs_sma200": {"$ref": "#/$defs/num"}, "sma200_slope_20d": {"$ref": "#/$defs/num"}}},
+        "vix": {"type": ["object", "null"], "additionalProperties": false, "required": ["date", "level", "pctl_1y"],
+                "properties": {"date": {"$ref": "#/$defs/str"}, "level": {"$ref": "#/$defs/num"}, "pctl_1y": {"$ref": "#/$defs/num"}}},
+        "sector": {"type": ["object", "null"], "additionalProperties": false,
+                   "required": ["etf", "trend", "trend_sign", "vs_sma50", "vs_sma200", "rs_3m", "rs_6m"],
+                   "properties": {"etf": {"$ref": "#/$defs/str"}, "trend": {"$ref": "#/$defs/str"},
+                                  "trend_sign": {"$ref": "#/$defs/sign"}, "vs_sma50": {"$ref": "#/$defs/num"},
+                                  "vs_sma200": {"$ref": "#/$defs/num"}, "rs_3m": {"$ref": "#/$defs/num"},
+                                  "rs_6m": {"$ref": "#/$defs/num"}}}
+      }
+    },
+    "event": {
+      "type": "object", "additionalProperties": false,
+      "required": ["available", "reason", "next_earnings", "calendar_days", "trading_days_to", "eps_estimated",
+                   "reactions_n", "median_abs_move", "mean_abs_move"],
+      "properties": {
+        "available": {"type": "boolean"},
+        "reason": {"$ref": "#/$defs/str", "description": "why not, e.g. an ETF or a restricted plan"},
+        "next_earnings": {"$ref": "#/$defs/str"},
+        "calendar_days": {"type": ["integer", "null"]},
+        "trading_days_to": {"type": ["integer", "null"], "description": "estimate; US holidays not excluded"},
+        "eps_estimated": {"$ref": "#/$defs/num"},
+        "reactions_n": {"type": ["integer", "null"]},
+        "median_abs_move": {"$ref": "#/$defs/num", "description": "median absolute two-day move around past reports"},
+        "mean_abs_move": {"$ref": "#/$defs/num"}
+      }
+    },
+    "volatility": {
+      "type": ["object", "null"], "additionalProperties": false,
+      "required": ["atr14", "atr_pct", "atr_pct_pctl", "rv20", "rv20_pctl", "bb_width_pctl", "squeeze_on", "squeeze_bars"],
+      "properties": {
+        "atr14": {"$ref": "#/$defs/num"}, "atr_pct": {"$ref": "#/$defs/num"}, "atr_pct_pctl": {"$ref": "#/$defs/num"},
+        "rv20": {"$ref": "#/$defs/num"}, "rv20_pctl": {"$ref": "#/$defs/num"}, "bb_width_pctl": {"$ref": "#/$defs/num"},
+        "squeeze_on": {"type": ["boolean", "null"]}, "squeeze_bars": {"type": ["integer", "null"]}
+      }
+    },
+    "extension": {
+      "type": ["object", "null"], "additionalProperties": false,
+      "description": "how stretched the price is (overbought / oversold inputs)",
+      "required": ["rsi14", "rsi14_state", "rsi2", "rsi2_state", "z20", "z20_state", "bb_pct_b", "dist_sma50_atr"],
+      "properties": {
+        "rsi14": {"$ref": "#/$defs/num"}, "rsi14_state": {"$ref": "#/$defs/str"},
+        "rsi2": {"$ref": "#/$defs/num"}, "rsi2_state": {"$ref": "#/$defs/str"},
+        "z20": {"$ref": "#/$defs/num"}, "z20_state": {"$ref": "#/$defs/str"},
+        "bb_pct_b": {"$ref": "#/$defs/num"}, "dist_sma50_atr": {"$ref": "#/$defs/num"}
+      }
+    },
+    "trend": {
+      "type": ["object", "null"], "additionalProperties": false,
+      "required": ["sma20", "sma50", "sma200", "slopes", "close_vs", "stack", "stack_state", "mom_12_1", "returns", "macd",
+                   "high_52w", "high_52w_date", "from_52w_high", "low_52w", "low_52w_date"],
+      "properties": {
+        "sma20": {"$ref": "#/$defs/num"}, "sma50": {"$ref": "#/$defs/num"}, "sma200": {"$ref": "#/$defs/num"},
+        "slopes": {"type": ["object", "null"]}, "close_vs": {"type": ["object", "null"]},
+        "stack": {"$ref": "#/$defs/str"}, "stack_state": {"$ref": "#/$defs/str"},
+        "mom_12_1": {"$ref": "#/$defs/num"}, "returns": {"type": ["object", "null"]},
+        "macd": {
+          "type": "object", "additionalProperties": false, "required": ["macd", "signal", "hist", "last_cross"],
+          "properties": {
+            "macd": {"$ref": "#/$defs/num"}, "signal": {"$ref": "#/$defs/num"}, "hist": {"$ref": "#/$defs/num"},
+            "last_cross": {"type": ["object", "null"], "additionalProperties": false,
+                           "required": ["type", "date", "bars_ago", "zero_side"],
+                           "properties": {"type": {"$ref": "#/$defs/str"}, "date": {"$ref": "#/$defs/str"},
+                                          "bars_ago": {"type": ["integer", "null"]}, "zero_side": {"$ref": "#/$defs/str"}}}
+          }
+        },
+        "high_52w": {"$ref": "#/$defs/num"}, "high_52w_date": {"$ref": "#/$defs/str"},
+        "from_52w_high": {"$ref": "#/$defs/num"},
+        "low_52w": {"$ref": "#/$defs/num"}, "low_52w_date": {"$ref": "#/$defs/str"}
+      }
+    },
+    "regime": {
+      "type": ["object", "null"], "additionalProperties": false,
+      "required": ["state", "type", "label", "direction", "direction_sign", "adx", "strength", "vol", "vol_pctl", "compression"],
+      "properties": {
+        "state": {"enum": ["uptrend", "downtrend", "range", "transitional", "vol_extreme", null],
+                  "description": "a trend with a direction is uptrend / downtrend; a trend without one is transitional"},
+        "type": {"enum": ["trend", "range", "transitional", "vol_extreme", null]},
+        "label": {"$ref": "#/$defs/str"},
+        "direction": {"$ref": "#/$defs/str"},
+        "direction_sign": {"$ref": "#/$defs/sign"},
+        "adx": {"$ref": "#/$defs/num"},
+        "strength": {"enum": ["trending", "range", "transitional", null]},
+        "vol": {"enum": ["low", "normal", "high", "extreme", null]},
+        "vol_pctl": {"$ref": "#/$defs/num"},
+        "compression": {"type": ["boolean", "null"]}
+      }
+    },
+    "rs": {
+      "type": "object", "additionalProperties": false, "required": ["vs_spy", "vs_sector", "beta_1y", "corr_1y"],
+      "properties": {
+        "vs_spy": {"$ref": "#/$defs/rs_side"}, "vs_sector": {"$ref": "#/$defs/rs_side"},
+        "beta_1y": {"$ref": "#/$defs/num"}, "corr_1y": {"$ref": "#/$defs/num"}
+      }
+    },
+    "flow": {
+      "type": ["object", "null"], "additionalProperties": false,
+      "required": ["volume", "avg_volume_50d", "rvol", "updown_volume_ratio_50d", "obv", "ad", "anchored_vwaps"],
+      "properties": {
+        "volume": {"$ref": "#/$defs/num"}, "avg_volume_50d": {"$ref": "#/$defs/num"}, "rvol": {"$ref": "#/$defs/num"},
+        "updown_volume_ratio_50d": {"$ref": "#/$defs/num"},
+        "obv": {"$ref": "#/$defs/flow_line"}, "ad": {"$ref": "#/$defs/flow_line"},
+        "anchored_vwaps": {"type": "array", "items": {
+          "type": "object", "additionalProperties": false, "required": ["anchor", "date", "vwap", "price_vs_vwap_pct"],
+          "properties": {"anchor": {"$ref": "#/$defs/str"}, "date": {"$ref": "#/$defs/str"},
+                         "vwap": {"$ref": "#/$defs/num"}, "price_vs_vwap_pct": {"$ref": "#/$defs/num"}}}}
+      }
+    },
+    "weekly": {
+      "type": ["object", "null"], "additionalProperties": false,
+      "required": ["direction", "sign", "sma10w", "sma40w", "rsi14w", "daily_sign", "alignment"],
+      "properties": {
+        "direction": {"$ref": "#/$defs/str"}, "sign": {"$ref": "#/$defs/sign"},
+        "sma10w": {"$ref": "#/$defs/num"}, "sma40w": {"$ref": "#/$defs/num"}, "rsi14w": {"$ref": "#/$defs/num"},
+        "daily_sign": {"$ref": "#/$defs/sign"}, "alignment": {"$ref": "#/$defs/str"}
+      }
+    },
+    "context_only": {
+      "type": "object", "additionalProperties": false,
+      "description": "price-action state and recent candlesticks: context next to the scorecard, never part of it",
+      "required": ["scored", "pa_state", "pa_state_since", "always_in", "always_in_since", "last_failed_breakout",
+                   "measured_moves", "recent_candles"],
+      "properties": {
+        "scored": {"const": false},
+        "pa_state": {"$ref": "#/$defs/str"}, "pa_state_since": {"$ref": "#/$defs/str"},
+        "always_in": {"enum": ["long", "short", null]}, "always_in_since": {"$ref": "#/$defs/str"},
+        "last_failed_breakout": {"type": ["object", "null"]},
+        "measured_moves": {"type": "array", "items": {"type": ["object", "null"]}},
+        "recent_candles": {"type": "array", "items": {"type": ["object", "null"]}}
+      }
+    },
+    "horizons": {
+      "type": "object", "additionalProperties": false, "required": ["swing", "position"],
+      "properties": {"swing": {"$ref": "#/$defs/horizon"}, "position": {"$ref": "#/$defs/horizon"}}
+    },
+    "skipped": {"type": "object", "description": "data the run did not fetch (e.g. earnings and sector for SPY)"},
+    "modules_unavailable": {"type": "object", "description": "module (or module.part) -> reason, from both runs"},
+    "restricted": {"$ref": "#/$defs/strings"},
+    "warnings": {"$ref": "#/$defs/strings"},
+    "errors": {"$ref": "#/$defs/strings"},
+    "disclaimer": {"$ref": "#/$defs/str"}
+  },
+  "$defs": {
+    "num": {"type": ["number", "null"]},
+    "str": {"type": ["string", "null"]},
+    "strings": {"type": "array", "items": {"type": "string"}},
+    "sign": {"enum": [-1, 0, 1, null]},
+    "label": {"enum": ["Bullish", "Moderately bullish", "Neutral", "Moderately bearish", "Bearish", null]},
+    "rs_side": {
+      "type": ["object", "null"], "additionalProperties": false,
+      "required": ["benchmark", "rel_return_3m", "rel_return_6m", "ratio_change_3m", "ratio_change_6m", "rs_line_slope",
+                   "rs_new_high", "rs_new_low"],
+      "properties": {
+        "benchmark": {"$ref": "#/$defs/str"}, "rel_return_3m": {"$ref": "#/$defs/num"}, "rel_return_6m": {"$ref": "#/$defs/num"},
+        "ratio_change_3m": {"$ref": "#/$defs/num"}, "ratio_change_6m": {"$ref": "#/$defs/num"},
+        "rs_line_slope": {"$ref": "#/$defs/num"}, "rs_new_high": {"type": ["boolean", "null"]},
+        "rs_new_low": {"type": ["boolean", "null"]}
+      }
+    },
+    "flow_line": {
+      "type": ["object", "null"], "additionalProperties": false,
+      "required": ["slope_sign", "divergence", "divergence_bars_ago"],
+      "properties": {"slope_sign": {"$ref": "#/$defs/sign"}, "divergence": {"$ref": "#/$defs/str"},
+                     "divergence_bars_ago": {"type": ["integer", "null"]}}
+    },
+    "zone": {
+      "type": "object", "additionalProperties": false,
+      "required": ["price", "low", "high", "score", "touches", "holds", "breaks", "flips", "fresh", "last_test",
+                   "reaction_score", "sources", "distance_pct", "distance_atr"],
+      "properties": {
+        "price": {"$ref": "#/$defs/num"}, "low": {"$ref": "#/$defs/num"}, "high": {"$ref": "#/$defs/num"},
+        "score": {"$ref": "#/$defs/num"}, "touches": {"type": ["integer", "null"]}, "holds": {"type": ["integer", "null"]},
+        "breaks": {"type": ["integer", "null"]}, "flips": {"type": ["integer", "null"]}, "fresh": {"type": ["boolean", "null"]},
+        "last_test": {"$ref": "#/$defs/str"}, "reaction_score": {"$ref": "#/$defs/num"},
+        "sources": {"$ref": "#/$defs/strings"}, "distance_pct": {"$ref": "#/$defs/num"}, "distance_atr": {"$ref": "#/$defs/num"}
+      }
+    },
+    "scenario": {
+      "type": ["object", "null"], "additionalProperties": false,
+      "required": ["trigger", "condition", "volume", "trigger_distance_pct", "trigger_basis", "targets", "invalidation",
+                   "invalidation_condition"],
+      "properties": {
+        "trigger": {"$ref": "#/$defs/num"}, "condition": {"$ref": "#/$defs/str"}, "volume": {"$ref": "#/$defs/str"},
+        "trigger_distance_pct": {"$ref": "#/$defs/num"}, "trigger_basis": {"$ref": "#/$defs/str"},
+        "targets": {"type": "array", "items": {
+          "type": "object", "additionalProperties": false, "required": ["price", "low", "high", "label", "distance_pct"],
+          "properties": {"price": {"$ref": "#/$defs/num"}, "low": {"$ref": "#/$defs/num"}, "high": {"$ref": "#/$defs/num"},
+                         "label": {"$ref": "#/$defs/str"}, "distance_pct": {"$ref": "#/$defs/num"}}}},
+        "invalidation": {"$ref": "#/$defs/num"}, "invalidation_condition": {"$ref": "#/$defs/str"}
+      }
+    },
+    "stops": {
+      "type": ["object", "null"], "additionalProperties": false,
+      "required": ["structural", "structural_distance_pct", "atr", "atr_distance_pct"],
+      "properties": {"structural": {"$ref": "#/$defs/num"}, "structural_distance_pct": {"$ref": "#/$defs/num"},
+                     "atr": {"$ref": "#/$defs/num"}, "atr_distance_pct": {"$ref": "#/$defs/num"}}
+    },
+    "evidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "name", "bias", "pillar", "fired_date", "bars_ago", "n", "confidence", "hit_rate", "median",
+                   "same_regime_median", "edge_median", "edge_hit_rate", "confirmed"],
+      "properties": {
+        "id": {"$ref": "#/$defs/str"}, "name": {"$ref": "#/$defs/str"}, "bias": {"$ref": "#/$defs/sign"},
+        "pillar": {"$ref": "#/$defs/str"}, "fired_date": {"$ref": "#/$defs/str"}, "bars_ago": {"type": ["integer", "null"]},
+        "n": {"$ref": "#/$defs/num"},
+        "confidence": {"enum": ["normal", "low", "insufficient"]},
+        "hit_rate": {"$ref": "#/$defs/num"}, "median": {"$ref": "#/$defs/num"},
+        "same_regime_median": {"$ref": "#/$defs/num"},
+        "edge_median": {"$ref": "#/$defs/num", "description": "median return minus the same-regime baseline"},
+        "edge_hit_rate": {"$ref": "#/$defs/num"},
+        "confirmed": {"type": "boolean", "description": "sample-backed edge over the same-regime baseline in the signal's direction"},
+        "source": {"enum": ["price_action", "candlesticks"]}
+      }
+    },
+    "horizon": {
+      "type": "object", "additionalProperties": false,
+      "required": ["horizon_days", "stat_horizons", "bias", "pillars", "weights_used", "conflicts", "price_location",
+                   "supports", "resistances", "levels_window", "bull", "bear", "range_1sd", "stops_ref",
+                   "earnings_within_horizon", "signals", "patterns"],
+      "properties": {
+        "horizon_days": {"type": ["integer", "null"], "description": "primary statistics horizon in trading days"},
+        "stat_horizons": {"type": ["array", "null"], "items": {"type": "integer"}},
+        "bias": {
+          "type": ["object", "null"], "additionalProperties": false,
+          "required": ["score", "label", "sign", "bias_confidence", "agreement", "mtf_alignment", "signal_support"],
+          "properties": {
+            "score": {"$ref": "#/$defs/num", "description": "-2..+2"},
+            "label": {"$ref": "#/$defs/label"},
+            "sign": {"$ref": "#/$defs/sign"},
+            "bias_confidence": {"enum": ["high", "medium", "low", null],
+                                "description": "how reliable the label is; Neutral + high means confidently no direction"},
+            "agreement": {"$ref": "#/$defs/num"},
+            "mtf_alignment": {"$ref": "#/$defs/str"},
+            "signal_support": {"type": ["object", "null"]}
+          }
+        },
+        "pillars": {"type": ["object", "null"], "additionalProperties": {
+          "type": "object", "additionalProperties": false, "required": ["score", "available", "weight"],
+          "properties": {"score": {"type": ["integer", "number", "null"]}, "available": {"type": "boolean"},
+                         "weight": {"$ref": "#/$defs/num"}}}},
+        "weights_used": {"$ref": "#/$defs/str"},
+        "conflicts": {"type": "array", "items": {"type": "object"}},
+        "price_location": {
+          "type": ["object", "null"], "additionalProperties": false, "required": ["state", "zone"],
+          "properties": {"state": {"enum": ["inside_support", "inside_resistance", "between", "above_all", "below_all"]},
+                         "zone": {"type": ["integer", "null"], "description": "index into supports / resistances"}}
+        },
+        "supports": {"type": "array", "items": {"$ref": "#/$defs/zone"}, "description": "nearest first"},
+        "resistances": {"type": "array", "items": {"$ref": "#/$defs/zone"}, "description": "nearest first"},
+        "levels_window": {"type": ["object", "null"]},
+        "bull": {"$ref": "#/$defs/scenario"},
+        "bear": {"$ref": "#/$defs/scenario"},
+        "range_1sd": {"type": ["object", "null"], "additionalProperties": false,
+                      "required": ["low", "high", "move_pct", "earnings_caveat"],
+                      "properties": {"low": {"$ref": "#/$defs/num"}, "high": {"$ref": "#/$defs/num"},
+                                     "move_pct": {"$ref": "#/$defs/num"}, "earnings_caveat": {"$ref": "#/$defs/str"}}},
+        "stops_ref": {"type": ["object", "null"], "additionalProperties": false, "required": ["long", "short"],
+                      "description": "reference stops from the risk module; position sizing is the caller's job",
+                      "properties": {"long": {"$ref": "#/$defs/stops"}, "short": {"$ref": "#/$defs/stops"}}},
+        "earnings_within_horizon": {"type": ["boolean", "null"]},
+        "signals": {"type": "array", "items": {"$ref": "#/$defs/evidence"}},
+        "patterns": {"type": "array", "items": {"$ref": "#/$defs/evidence"}, "description": "context only, not scored"}
+      }
+    }
+  }
+}
