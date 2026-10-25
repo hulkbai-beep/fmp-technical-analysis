@@ -1,5 +1,5 @@
 """
-Every parameter, threshold and weight the technical-analysis skill uses.
+Every parameter, threshold and weight the fmp-technical-analysis skill uses.
 
 Change values here, never inline in the other scripts. references/methodology.md explains
 the reasoning behind the defaults.

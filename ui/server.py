@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Local web UI for the technical-analysis skill. Standard library only; listens on 127.0.0.1.
+Local web UI for the fmp-technical-analysis skill. Standard library only; listens on 127.0.0.1.
 
   python ui/server.py                    # http://127.0.0.1:8876 and opens the browser
   python ui/server.py --port 9000 --no-browser
@@ -203,7 +203,7 @@ def make_server(port: int = DEFAULT_PORT, host: str = "127.0.0.1") -> ThreadingH
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Local UI for the technical-analysis skill")
+    ap = argparse.ArgumentParser(description="Local UI for the fmp-technical-analysis skill")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"port on 127.0.0.1 (default {DEFAULT_PORT})")
     ap.add_argument("--no-browser", action="store_true", help="do not open the browser")
     args = ap.parse_args(argv)

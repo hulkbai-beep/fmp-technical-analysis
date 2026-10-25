@@ -1,4 +1,4 @@
-// Chinese (default) / English text for the technical-analysis chart (ui/chart.js), chart.html and
+// Chinese (default) / English text for the fmp-technical-analysis chart (ui/chart.js), chart.html and
 // the local app (ui/index.html). Indicator names (SMA, RSI, MACD, ATR, ADX, RVOL, VWAP, POC ...)
 // stay in English in both languages. Labels that come from metrics.json (regime label, bias,
 // signal ids, level sources) are translated here; free-text reasons and notes stay as written.

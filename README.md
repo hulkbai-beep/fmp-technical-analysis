@@ -1,4 +1,4 @@
-# technical-analysis skill
+# fmp-technical-analysis skill
 
 A Claude skill for technical analysis of one US stock or ETF from Financial Modeling Prep (FMP) daily
 data. Python computes every number; Claude writes the report from `metrics.json`. `SKILL.md` is the
