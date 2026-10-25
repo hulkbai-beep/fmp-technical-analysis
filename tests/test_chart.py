@@ -302,9 +302,9 @@ def test_server_analyze_returns_metrics_and_chart(server):
     code, ctype, body = _get(server.port, "/api/analyze?symbol=brk.b&horizon=position")
     data = json.loads(body)
     assert code == 200 and ctype.startswith("application/json")
-    assert data["metrics"]["ticker"] == "BRK.B" and data["metrics"]["x"] is None
-    assert data["chart"]["meta"]["ticker"] == "BRK.B"
-    assert server.calls[-1] == ("BRK.B", "position", {})
+    assert data["metrics"]["ticker"] == "BRK-B" and data["metrics"]["x"] is None   # FMP's share-class form
+    assert data["chart"]["meta"]["ticker"] == "BRK-B"
+    assert server.calls[-1] == ("BRK-B", "position", {})
     _get(server.port, "/api/analyze?symbol=%5EVIX&refresh=1")
     assert server.calls[-1] == ("^VIX", "swing", {"refresh": True})
 
@@ -314,8 +314,8 @@ def test_server_reports_a_missing_chart_as_an_error(server):
     assert code == 500 and "chart could not be built" in json.loads(body)["error"]
 
 
-@pytest.mark.parametrize("query", ["symbol=", "symbol=AAPL;rm", "symbol=TOOLONGSYMBOL", "symbol=A%20B",
-                                   "symbol=AAPL&horizon=daily", "symbol=%3Cscript%3E"])
+@pytest.mark.parametrize("query", ["symbol=", "symbol=AAPL;rm", "symbol=TOOLONGSYMBOL", "symbol=A%20B%20C",
+                                   "symbol=SHOP.TO", "symbol=AAPL&horizon=daily", "symbol=%3Cscript%3E"])
 def test_server_rejects_bad_input(server, query):
     code, _, body = _get(server.port, "/api/analyze?" + query)
     assert code == 400 and "error" in json.loads(body)

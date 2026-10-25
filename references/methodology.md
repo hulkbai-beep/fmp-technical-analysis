@@ -388,6 +388,9 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   - Estimated trading days: numpy business days, with no holiday calendar.
   - `within_horizon`: trading days ≤ the primary horizon. `within_stat_horizons` gives the same flag
     for each stat horizon.
+- **Last earnings:** the latest report on or before `as_of` (`last_earnings`: date, calendar days ago and
+  its two-day move, `null` while the bar after the report is missing). A caller compares it with the
+  fundamental skill's latest statement period to tell when the fundamentals are out of date.
 - **Reactions** (approximation, section 7): the two-day move, adj close of the first bar after the
   report date / adj close of the last bar before it - 1.
   - Up to `EARNINGS_REACTIONS_MAX` = 12 latest reports, giving n, median and mean absolute move.

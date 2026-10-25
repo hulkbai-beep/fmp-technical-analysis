@@ -14,6 +14,7 @@ import pandas as pd
 
 import config as C
 import fmp_client
+from symbols import normalize_symbol
 
 FULL = "historical-price-eod/full"
 ADJUSTED = "historical-price-eod/dividend-adjusted"
@@ -358,7 +359,7 @@ def load_all(client, ticker, now=None, start=None) -> dict:
     `start` (a date) cuts the history requested for the symbol, e.g. to drop a pre-merger SPAC shell.
     Raises ValueError when the symbol has no usable price history."""
     now = to_ny(now)
-    symbol = ticker.strip().upper()
+    symbol = normalize_symbol(ticker)
     today = pd.Timestamp(now.date())
     calls_before = client.stats["network_calls"]
     notes, skipped = [], {}

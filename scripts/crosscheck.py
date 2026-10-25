@@ -22,6 +22,7 @@ import pandas as pd
 import config as C
 import fetch
 import fmp_client
+from symbols import normalize_symbol
 import indicators
 
 # key, endpoint, request params, FMP value field, compute_all column, label
@@ -83,7 +84,7 @@ def crosscheck(client, ticker, now=None) -> dict:
     status: "ok" (at least one indicator compared), "restricted" (plan lacks both endpoints)
     or "unavailable" (other failures)."""
     now = fetch.to_ny(now)
-    symbol = ticker.strip().upper()
+    symbol = normalize_symbol(ticker)
     calls_before = client.stats["network_calls"]
     result = {"ticker": symbol, "status": "unavailable", "as_of": None, "window": C.CROSSCHECK_WINDOW,
               "indicators": {}, "notes": list(NOTES), "calls": 0}

@@ -416,12 +416,18 @@ def build_event_risk(ctx) -> dict:
 
     items = _reactions(ctx["bars"], past)
     moves = np.abs([it["move"] for it in items if it["move"] is not None])
+    last_e = None
+    if past:  # the latest report on or before the last bar; its reaction may still be missing (no bar after it yet)
+        d = past[-1]
+        last_e = {"date": iso(d), "calendar_days_ago": (as_of - d).days,
+                  "move": next((it["move"] for it in items if it["date"] == iso(d)), None)}
     if len(items) < C.EARNINGS_REACTIONS_MIN:
         notes.append(f"only {len(items)} past earnings reactions with bars on both sides "
                      f"(fewer than {C.EARNINGS_REACTIONS_MIN}): treat the median move as a small-sample estimate")
     return {
         "available": True,
         "next_earnings": next_e,
+        "last_earnings": last_e,
         "within_horizon": within,
         "within_stat_horizons": per_h,
         "horizon_days": hz["primary"],

@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "ta-1.0",
-  "title": "Technical analysis contract ta-1.0",
-  "description": "The stable summary of one stock's swing and position runs that other tools read, built by scripts/contract.py. Fields are only ever added; renaming or removing one means ta-2.0. Horizon-independent blocks sit at the top, the rest under horizons.swing / horizons.position. Prices are split-adjusted closes; fractions are decimals (0.05 = 5%); null means missing, never estimated.",
+  "$id": "ta-1.1",
+  "title": "Technical analysis contract ta-1.1",
+  "description": "The stable summary of one stock's swing and position runs that other tools read, built by scripts/contract.py. Fields are only ever added; renaming or removing one means ta-2.0. 1.1 adds event.last_earnings, event.days_since_last_earnings, event.last_earnings_move and the kind of each scenario target. Horizon-independent blocks sit at the top, the rest under horizons.swing / horizons.position. Prices are split-adjusted closes; fractions are decimals (0.05 = 5%); null means missing, never estimated.",
   "type": "object",
   "additionalProperties": false,
   "required": ["contract", "config_hash", "ticker", "generated_at", "as_of", "as_of_basis", "data_source", "last_close",
@@ -10,7 +10,7 @@
                "regime", "rs", "flow", "weekly", "context_only", "horizons", "skipped", "modules_unavailable",
                "restricted", "warnings", "errors", "disclaimer"],
   "properties": {
-    "contract": {"const": "ta-1.0"},
+    "contract": {"const": "ta-1.1"},
     "config_hash": {"type": "string", "description": "hash of both runs' meta.config_snapshot"},
     "ticker": {"type": "string"},
     "generated_at": {"type": "string"},
@@ -72,6 +72,7 @@
     "event": {
       "type": "object", "additionalProperties": false,
       "required": ["available", "reason", "next_earnings", "calendar_days", "trading_days_to", "eps_estimated",
+                   "last_earnings", "days_since_last_earnings", "last_earnings_move",
                    "reactions_n", "median_abs_move", "mean_abs_move"],
       "properties": {
         "available": {"type": "boolean"},
@@ -80,6 +81,9 @@
         "calendar_days": {"type": ["integer", "null"]},
         "trading_days_to": {"type": ["integer", "null"], "description": "estimate; US holidays not excluded"},
         "eps_estimated": {"$ref": "#/$defs/num"},
+        "last_earnings": {"$ref": "#/$defs/str", "description": "latest report on or before as_of (YYYY-MM-DD); compare with fa statements_through to tell when fundamentals predate the newest statements"},
+        "days_since_last_earnings": {"type": ["integer", "null"], "description": "calendar days from last_earnings to as_of"},
+        "last_earnings_move": {"$ref": "#/$defs/num", "description": "two-day move around the latest report; null while the bar after it is missing"},
         "reactions_n": {"type": ["integer", "null"]},
         "median_abs_move": {"$ref": "#/$defs/num", "description": "median absolute two-day move around past reports"},
         "mean_abs_move": {"$ref": "#/$defs/num"}
@@ -243,8 +247,9 @@
         "trigger": {"$ref": "#/$defs/num"}, "condition": {"$ref": "#/$defs/str"}, "volume": {"$ref": "#/$defs/str"},
         "trigger_distance_pct": {"$ref": "#/$defs/num"}, "trigger_basis": {"$ref": "#/$defs/str"},
         "targets": {"type": "array", "items": {
-          "type": "object", "additionalProperties": false, "required": ["price", "low", "high", "label", "distance_pct"],
-          "properties": {"price": {"$ref": "#/$defs/num"}, "low": {"$ref": "#/$defs/num"}, "high": {"$ref": "#/$defs/num"},
+          "type": "object", "additionalProperties": false, "required": ["kind", "price", "low", "high", "label", "distance_pct"],
+          "properties": {"kind": {"enum": ["level", "projection", null], "description": "level = a support/resistance zone; projection = no level beyond the trigger, so trigger +- k ATR"},
+                         "price": {"$ref": "#/$defs/num"}, "low": {"$ref": "#/$defs/num"}, "high": {"$ref": "#/$defs/num"},
                          "label": {"$ref": "#/$defs/str"}, "distance_pct": {"$ref": "#/$defs/num"}}}},
         "invalidation": {"$ref": "#/$defs/num"}, "invalidation_condition": {"$ref": "#/$defs/str"}
       }

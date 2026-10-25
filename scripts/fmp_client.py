@@ -565,7 +565,8 @@ def main(argv):
     cmd = argv[0]
     try:
         if cmd == "check":
-            return _cmd_check((argv[1] if len(argv) > 1 else "AAPL").upper())
+            from symbols import normalize_symbol
+            return _cmd_check(normalize_symbol(argv[1] if len(argv) > 1 else "AAPL"))
         if cmd == "get" and len(argv) >= 2:
             return _cmd_get(argv[1], argv[2:])
         if cmd == "clear-cache":
