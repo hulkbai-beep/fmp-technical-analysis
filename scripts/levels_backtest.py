@@ -5,7 +5,10 @@ zone of the same width a little further away have done as well?
 
   python scripts/levels_backtest.py BARS.csv [BARS.csv ...] [--horizon swing|position]
                                     [--step 5] [--forward 20] [--split 2017-01-01 2022-01-01]
-                                    [--jobs 4] [--out DIR]
+                                    [--source levels|boxes] [--jobs 4] [--out DIR]
+
+--source boxes tests the edges of the active trading-range box (trading_ranges.py) instead: its
+lower band while the close is above it, its upper band while the close is below it.
 
 Each CSV holds daily bars with Date, Open, High, Low, Close and Volume columns (any case; extra
 columns such as Adj Close are ignored), split-adjusted like the rest of the skill. The file name
@@ -216,9 +219,38 @@ def periods(dates: pd.Series, split: list[str]) -> pd.Series:
     return pd.Series([names[i] for i in idx], index=dates.index)
 
 
+def box_build(bars: pd.DataFrame):
+    """A `build` for walk() that offers the edges of the active trading-range box (trading_ranges.py)
+    instead of the key levels: the lower band as a support while the close is above it, the upper
+    band as a resistance while the close is below it; no zones without an active box or while a
+    breakout is pending. Boxes are detected on the whole series up to each as-of bar (the
+    detector's pivots are causal), not on walk()'s shorter context window."""
+    import trading_ranges as T
+    atr = I.atr(bars)
+    piv = T.pivot_rows(bars, atr)
+
+    def build(ctx: dict) -> dict:
+        close = float(ctx["bars"]["close"].iloc[-1])
+        a = float(ctx["ind"]["atr14"].iloc[-1])
+        if not (np.isfinite(a) and a > 0):
+            return {"available": False}
+        box = T.detect_trading_ranges(bars, atr, as_of=ctx["as_of"], pivots=piv).get("active_box")
+        sup, res = [], []
+        if box and box["status"] == "active":
+            lz, uz = box["lower_zone"], box["upper_zone"]
+            if close > lz["high"]:
+                sup.append({"price": (lz["low"] + lz["high"]) / 2, "zone_low": lz["low"], "zone_high": lz["high"]})
+            if close < uz["low"]:
+                res.append({"price": (uz["low"] + uz["high"]) / 2, "zone_low": uz["low"], "zone_high": uz["high"]})
+        return {"available": True, "last_close": close, "atr": a, "supports": sup, "resistances": res}
+    return build
+
+
 def _run(args: tuple) -> pd.DataFrame:
-    path, horizon, step, forward = args
-    return walk(load_csv(path), horizon, step, forward, symbol=Path(path).stem.upper())
+    path, horizon, step, forward, source = args
+    bars = load_csv(path)
+    build = box_build(bars) if source == "boxes" else L.build_levels
+    return walk(bars, horizon, step, forward, build=build, symbol=Path(path).stem.upper())
 
 
 def report(rows: pd.DataFrame, meta: dict) -> str:
@@ -232,7 +264,7 @@ def report(rows: pd.DataFrame, meta: dict) -> str:
                                                           else f"{v:.3f}")
         return head + "".join(f"| {k} | " + " | ".join(fmt(c, r[c]) for c in cols) + " |\n" for k, r in df.iterrows())
 
-    out = ["# Levels walk-forward baseline", ""]
+    out = [f"# Walk-forward check: {meta.get('source', 'levels')}", ""]
     out += [f"- {k}: {v}" for k, v in meta.items()]
     out += ["", f"Edge interval: {BOOT_CI:.0%} cluster bootstrap over (symbol, year) blocks, {BOOT_REPS} resamples.", ""]
     sections = [("By rank", None), ("By daily direction at the build bar", "direction")]
@@ -252,10 +284,12 @@ def main(argv=None) -> int:
     ap.add_argument("--forward", type=int, default=20)
     ap.add_argument("--split", nargs="*", default=[], metavar="DATE",
                     help="period boundaries by build date; two dates give train / validation / test")
+    ap.add_argument("--source", default="levels", choices=["levels", "boxes"],
+                    help="zones to test: the key levels, or the edges of the active trading-range box")
     ap.add_argument("--jobs", type=int, default=1, help="files run in parallel")
     ap.add_argument("--out", help="directory for rows.csv and report.md")
     a = ap.parse_args(argv)
-    tasks = [(p, a.horizon, a.step, a.forward) for p in a.csv]
+    tasks = [(p, a.horizon, a.step, a.forward, a.source) for p in a.csv]
     if a.jobs > 1:
         with ProcessPoolExecutor(a.jobs) as ex:
             results = list(ex.map(_run, tasks))
@@ -276,7 +310,7 @@ def main(argv=None) -> int:
         out.mkdir(parents=True, exist_ok=True)
         rows.assign(placebo=rows["placebo"].map(lambda ps: ";".join(str(x) for x in ps))) \
             .drop(columns=["n_asof"]).to_csv(out / "rows.csv", index=False)
-        meta = {"horizon": a.horizon, "step": a.step, "forward": a.forward, "files": len(a.csv),
+        meta = {"source": a.source, "horizon": a.horizon, "step": a.step, "forward": a.forward, "files": len(a.csv),
                 "first build": rows["date"].min().strftime("%Y-%m-%d"),
                 "last build": rows["date"].max().strftime("%Y-%m-%d"),
                 "split": ", ".join(a.split) or "none"}

@@ -65,12 +65,14 @@ def swing_pivots(df: pd.DataFrame, atr: pd.Series, mult: float = C.SWING_ATR) ->
     latest swing is never confirmed by the data, so it is not a pivot, and neither is the first
     bar (no left side; it only starts the count). Each pivot carries
     swing_atr: the smaller of the legs into and out of it (the one available at either end), in
-    ATRs at the pivot bar. Returns {"highs": [{date, price, swing_atr}], "lows": [...]}.
+    ATRs at the pivot bar, and confirmed: the date of the bar that confirmed it. Bar i's pivots
+    depend on bars <= their confirmation only, so cutting the series later keeps them. Returns
+    {"highs": [{date, price, swing_atr, confirmed}], "lows": [...]}.
     """
     high = df["high"].to_numpy(dtype=float, na_value=np.nan)
     low = df["low"].to_numpy(dtype=float, na_value=np.nan)
     a = atr.reindex(df.index).to_numpy(dtype=float, na_value=np.nan)
-    piv: list[tuple[int, int, float]] = []          # (bar, +1 high / -1 low, price)
+    piv: list[tuple[int, int, float, int]] = []     # (bar, +1 high / -1 low, price, confirming bar)
     direction, hi_i, lo_i = 0, 0, 0
     for i in range(len(df)):
         if not (np.isfinite(high[i]) and np.isfinite(low[i])):
@@ -88,10 +90,10 @@ def swing_pivots(df: pd.DataFrame, atr: pd.Series, mult: float = C.SWING_ATR) ->
         if top and bottom:                       # undecided start: the earlier extreme came first
             top, bottom = hi_i < lo_i, hi_i >= lo_i
         if top:
-            piv.append((hi_i, +1, high[hi_i]))
+            piv.append((hi_i, +1, high[hi_i], i))
             direction, lo_i = -1, hi_i + 1 + int(np.nanargmin(low[hi_i + 1:i + 1]))
         elif bottom:
-            piv.append((lo_i, -1, low[lo_i]))
+            piv.append((lo_i, -1, low[lo_i], i))
             direction, hi_i = +1, lo_i + 1 + int(np.nanargmax(high[lo_i + 1:i + 1]))
     if direction > 0:                            # unconfirmed latest swing: the leg out of the last pivot
         tail = high[hi_i]
@@ -100,7 +102,7 @@ def swing_pivots(df: pd.DataFrame, atr: pd.Series, mult: float = C.SWING_ATR) ->
     else:
         tail = np.nan
     out = {"highs": [], "lows": []}
-    for j, (i, kind, price) in enumerate(piv):
+    for j, (i, kind, price, conf) in enumerate(piv):
         if i == 0:
             continue
         legs = [abs(price - piv[j - 1][2])] if j > 0 else []
@@ -108,7 +110,8 @@ def swing_pivots(df: pd.DataFrame, atr: pd.Series, mult: float = C.SWING_ATR) ->
         legs = [x for x in legs if np.isfinite(x)]
         swing = min(legs) / a[i] if legs and np.isfinite(a[i]) and a[i] > 0 else np.nan
         out["highs" if kind > 0 else "lows"].append(
-            {"date": _iso(df.index[i]), "price": float(price), "swing_atr": _num(swing)})
+            {"date": _iso(df.index[i]), "price": float(price), "swing_atr": _num(swing),
+             "confirmed": _iso(df.index[conf])})
     return out
 
 

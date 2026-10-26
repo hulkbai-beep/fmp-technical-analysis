@@ -122,3 +122,14 @@ def test_main_writes_report(tmp_path):
     assert set(rows["symbol"]) == {"XYZ"} and {"direction", "period", "placebo"} <= set(rows.columns)
     text = (out / "report.md").read_text(encoding="utf-8")
     assert "## By symbol" in text and "## By period" in text and "| XYZ |" in text
+
+
+def test_box_source_offers_only_active_box_edges(tmp_path):
+    from test_trading_ranges import path, RANGE
+    bars = path(RANGE + [105] * 30, leg=10, start="2020-01-02")
+    bars = pd.concat([synthetic_bars(n=300, start="2018-11-01").iloc[:, :5].iloc[:-1]
+                      .loc[lambda d: d.index < bars.index[0]], bars])
+    rows = B.walk(bars, "swing", step=5, forward=10, build=B.box_build(bars), symbol="BOX")
+    assert not rows.empty and set(rows["rank"]) == {1}
+    assert (rows["side"] == "support").any() and (rows["side"] == "resistance").any()
+    assert (rows["width_atr"] < 1).all()

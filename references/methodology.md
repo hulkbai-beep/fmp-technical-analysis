@@ -374,6 +374,18 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   these zones nor the earlier fractal-pivot clusters held more often than the moved ones (edge within about
   ±2 percentage points), while zones at levels planted in synthetic data showed about +23 points. Read the
   zones as where price has reacted before, not as predictions.
+- **Trading-range boxes V2** (`scripts/trading_ranges.py`, experimental, not yet in the analysis output): a box
+  is a run of alternating ATR ZigZag pivots (`TR_SWING_ATR` = 1 ATR) with at least 2 highs in one band and
+  2 lows in another, each band at most 1 ATR wide, 2-8 ATR apart (ATR at confirmation). It is confirmed on
+  the bar that confirms its last pivot and its edges are frozen there; two closes in a row more than 0.25
+  ATR beyond a band break it, a breach that closes back inside is a failed breakout, and 120 bars without a
+  new test expire it. Boxes are searched from the start of the series, so the boxes known at a date never
+  change later. `levels_backtest.py --source boxes` scores the active box's edges like the key levels.
+- **Baseline (2026-10-26, swing, 32 symbols, 2005-2026 daily bars, `scripts/fetch_csv.py` universe):**
+  key levels held 46.7% vs 47.0% for the moved zones, edge -0.3 points (90% interval -0.7 to +0.1,
+  ~157,000 zones); S2/S3 were below the placebo (-1.4 and -2.3 points). Active-box edges (box active on
+  ~20% of build dates) held 42.8% vs 43.7%, edge -0.9 points (-2.7 to +0.8, 10,000 zones). Neither is a
+  better place for a reaction than a zone of the same shape elsewhere.
 - **Short side:** if a side has fewer than 3 levels, a note says so, naming an all-time or 52-week
   extreme when price is at one.
 
