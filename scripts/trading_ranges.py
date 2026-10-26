@@ -148,20 +148,10 @@ def _lifecycle(k: int, j: int, geo: dict, piv: list, close: np.ndarray, index: p
     }
 
 
-def detect_trading_ranges(bars: pd.DataFrame, atr: pd.Series, *, as_of=None, pivots: list | None = None) -> dict:
-    """Active box, last box, recent completed boxes and notes as of `as_of` (default: the last bar),
-    from bars <= as_of only. `pivots` may hold pivot_rows() of a longer series with the same start:
-    the ZigZag is causal, so the rows confirmed by as_of are the ones bars[:as_of] would give."""
-    if as_of is not None:
-        bars = bars.loc[bars.index <= pd.Timestamp(as_of)]
-    out = {"available": False, "method": METHOD, "params": params(), "notes": []}
-    if len(bars) < MIN_BARS:
-        return {**out, "reason": f"{len(bars)} bars, fewer than {MIN_BARS}"}
-    a = atr.reindex(bars.index).to_numpy(dtype=float, na_value=np.nan)
-    if not np.isfinite(a).any():
-        return {**out, "reason": "no ATR"}
-    t = len(bars) - 1
-    piv = [p for p in (pivot_rows(bars, atr) if pivots is None else pivots) if p[3] <= t]
+def scan_boxes(bars: pd.DataFrame, a: np.ndarray, pivots: list, t: int) -> list[dict]:
+    """Every box known at bar t, oldest first: searched from the first pivot, the next box only
+    from pivots after the previous box ended. a: ATR per bar of `bars`."""
+    piv = [p for p in pivots if p[3] <= t]
     close = bars["close"].to_numpy(dtype=float, na_value=np.nan)
     boxes, k, after = [], 0, -1
     while k < len(piv):
@@ -180,6 +170,23 @@ def detect_trading_ranges(bars: pd.DataFrame, atr: pd.Series, *, as_of=None, piv
         after, k = box["_end"], j + 1
     for b in boxes:
         b.pop("_end")
+    return boxes
+
+
+def detect_trading_ranges(bars: pd.DataFrame, atr: pd.Series, *, as_of=None, pivots: list | None = None) -> dict:
+    """Active box, last box, recent completed boxes and notes as of `as_of` (default: the last bar),
+    from bars <= as_of only. `pivots` may hold pivot_rows() of a longer series with the same start:
+    the ZigZag is causal, so the rows confirmed by as_of are the ones bars[:as_of] would give."""
+    if as_of is not None:
+        bars = bars.loc[bars.index <= pd.Timestamp(as_of)]
+    out = {"available": False, "method": METHOD, "params": params(), "notes": []}
+    if len(bars) < MIN_BARS:
+        return {**out, "reason": f"{len(bars)} bars, fewer than {MIN_BARS}"}
+    a = atr.reindex(bars.index).to_numpy(dtype=float, na_value=np.nan)
+    if not np.isfinite(a).any():
+        return {**out, "reason": "no ATR"}
+    t = len(bars) - 1
+    boxes = scan_boxes(bars, a, pivot_rows(bars, atr) if pivots is None else pivots, t)
     last = boxes[-1] if boxes else None
     active = last if last and last["status"] in ("active", "breakout_pending") else None
     done = [b for b in boxes if b is not active]

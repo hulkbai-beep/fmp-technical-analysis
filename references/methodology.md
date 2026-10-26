@@ -386,6 +386,12 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   ~157,000 zones); S2/S3 were below the placebo (-1.4 and -2.3 points). Active-box edges (box active on
   ~20% of build dates) held 42.8% vs 43.7%, edge -0.9 points (-2.7 to +0.8, 10,000 zones). Neither is a
   better place for a reaction than a zone of the same shape elsewhere.
+- **Breakout follow-through** (`scripts/breakout_backtest.py`, same data): from the close that confirms a box
+  breakout, the first of +-2 ATR hit within 20 bars in the breakout's direction 50.3% of the time vs 50.8%
+  for the same barriers on other dates (edge -0.5 points, 90% interval -2.7 to +1.7, 2,233 resolved); the
+  measured-move target before the box midline 56.2% vs 58.4% (-2.2, interval -4.2 to 0.0). A plain
+  20-bar-extreme breakout did about the same (+0.6, interval -0.6 to +1.9). Up breakouts continue more often
+  than down ones only because prices drift up; the placebo shows the same split.
 - **Short side:** if a side has fewer than 3 levels, a note says so, naming an all-time or 52-week
   extreme when price is at one.
 
