@@ -361,12 +361,19 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   - listed nearest first, each with its score, `distance_pct` and `distance_atr` (negative below the close).
 - **Walk-forward check** (`scripts/levels_backtest.py`): builds the levels every 5 bars from past bars only
   and records whether each zone held (price trades 1 ATR beyond its near edge before a close beyond its far
-  edge). A zone counts if it is touched within 20 bars of the build date; the outcome is then read over the
-  next 20 bars from that touch, so it can end up to 39 bars after the build. Each zone is compared with the
-  same zone shape moved to other dates. On six large-cap stocks
-  (1995-2018 daily bars) neither these zones nor the earlier fractal-pivot clusters held more often than
-  the moved ones (edge within about ±2 percentage points), while zones at levels planted in synthetic data
-  showed about +23 points. Read the zones as where price has reacted before, not as predictions.
+  edge). A zone counts as touched when a bar's range overlaps it within 20 bars of the build date; a zone
+  that price skips past without trading in it is a `gap`, counted on its own. The outcome is then read over
+  the next 20 bars from that touch, so it can end up to 39 bars after the build. A bar that reaches the
+  reaction and closes beyond the far edge counts as held (the close is the bar's last print); on the
+  touching bar itself the reaction counts only if the bar opened in or beyond the zone, otherwise the
+  outcome is `ambiguous` and left out. Each zone is compared with the same zone shape moved to other
+  dates; the edge gets a 90% cluster-bootstrap interval over (symbol, year) blocks, and tables are split
+  by rank, symbol, daily direction at the build bar and period (`--split`). `scripts/fetch_csv.py` saves
+  the 32-symbol baseline universe (trending, declining, sideways, high-volatility stocks and ETFs) as CSVs
+  for it. On six large-cap stocks (1995-2018 daily bars, with the earlier one-sided touch rule) neither
+  these zones nor the earlier fractal-pivot clusters held more often than the moved ones (edge within about
+  ±2 percentage points), while zones at levels planted in synthetic data showed about +23 points. Read the
+  zones as where price has reacted before, not as predictions.
 - **Short side:** if a side has fewer than 3 levels, a note says so, naming an all-time or 52-week
   extreme when price is at one.
 
