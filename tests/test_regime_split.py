@@ -92,3 +92,48 @@ def test_fetch_intraday_chunks_and_dedupes():
     assert [x[1] for x in c.calls] == ["2024-01-02", "2024-03-03"] and c.calls[0][0] == "historical-chart/1hour"
     assert not problems and list(df.columns) == ["Open", "High", "Low", "Close", "Volume"]
     assert df.index.is_monotonic_increasing and not df.index.duplicated().any() and len(df) == 4
+
+
+def hourly_bars(days=120, seed=5):
+    """Synthetic regular-session hourly bars, 7 per business day (09:30 .. 15:30)."""
+    b = synthetic_bars(n=days * 7, seed=seed, vol=0.004)[["open", "high", "low", "close", "volume"]]
+    stamps = [d + pd.Timedelta(hours=9, minutes=30) + pd.Timedelta(hours=h)
+              for d in pd.bdate_range("2021-01-04", periods=days) for h in range(7)]
+    b.index = pd.DatetimeIndex(stamps, name="date")
+    return b
+
+
+def test_intraday_candidates_and_alignment():
+    import intraday_levels as IL
+    bars = hourly_bars(days=5)
+    si = IL.session_info(bars)
+    assert list(si["pos"].iloc[:8]) == [1, 2, 3, 4, 5, 6, 7, 1]
+    t = 8                                                     # second bar of session 2
+    c = IL.intraday_candidates(bars, si, t)
+    prev = bars.iloc[:7]
+    assert c["prev_high"] == [prev["high"].max()] and c["prev_close"] == [prev["close"].iloc[-1]]
+    assert c["opening_range"] == [bars["high"].iat[7], bars["low"].iat[7]]
+    cur = bars.iloc[7:9]
+    tp = (cur["high"] + cur["low"] + cur["close"]) / 3
+    assert abs(c["session_vwap"][0] - (tp * cur["volume"]).sum() / cur["volume"].sum()) < 1e-9
+    # a 2:1 split not applied to sessions 3..5 of the hourly data
+    daily = bars.groupby(bars.index.normalize()).agg({"open": "first", "high": "max", "low": "min",
+                                                      "close": "last", "volume": "sum"})
+    raw = bars.copy()
+    late = raw.index.normalize() >= daily.index[2]
+    raw.loc[late, ["open", "high", "low", "close"]] *= 2
+    fixed, share = IL.align_to_daily(raw, daily)
+    assert abs(share - 0.6) < 1e-9 and np.allclose(fixed["close"], bars["close"])
+
+
+def test_intraday_main_report(tmp_path):
+    import intraday_levels as IL
+    p = tmp_path / "Q.csv"
+    hourly_bars(days=160).rename_axis("Date").to_csv(p)
+    assert IL.main([str(p), "--split", "2021-05-01", "--exclude", "2021-04-01:2021-04-09",
+                    "--out", str(tmp_path / "o")]) == 0
+    rows = pd.read_csv(tmp_path / "o" / "rows.csv.gz")
+    assert {"source", "level"} == set(rows["kind"])
+    assert {"prev_high", "opening_range", "session_vwap"} <= set(rows["source"])
+    assert rows["excluded"].any()
+    assert "## Key levels S1-S3" in (tmp_path / "o" / "report.md").read_text(encoding="utf-8")
