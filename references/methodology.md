@@ -392,6 +392,12 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   measured-move target before the box midline 56.2% vs 58.4% (-2.2, interval -4.2 to 0.0). A plain
   20-bar-extreme breakout did about the same (+0.6, interval -0.6 to +1.9). Up breakouts continue more often
   than down ones only because prices drift up; the placebo shows the same split.
+- **Source screen and stop test** (`scripts/sr_screen.py`, same data): each candidate source alone (nearest
+  candidate per side as a fixed 0.5-ATR zone within 4 ATR) against its moved-zone placebo. In the train
+  period (2005-2016) no source's 90% interval lay above 0: pivots +0.2 points, weekly pivots +0.6, POC
+  +1.2, unfilled gaps +0.8, 52-week high/low -1.5, SMA50 -0.8, SMA200 -1.1 (all intervals include 0).
+  The scorecard's structural stop (S1 zone_low - 0.5 ATR) was hit within 20 bars as often as a stop at the
+  same ATR distance on other dates (edge 0.0 points, -0.2 to +0.3, ~61,000 stops).
 - **Short side:** if a side has fewer than 3 levels, a note says so, naming an all-time or 52-week
   extreme when price is at one.
 
