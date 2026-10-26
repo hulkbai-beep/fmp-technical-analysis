@@ -202,6 +202,21 @@ PA_WEDGE_MIN_SPACING = 3          # bars between consecutive pushes, at least
 PA_MM_MAX_AGE = 120               # measured moves only from swings whose first point is at most this many bars old
 PA_ALWAYS_IN_BARS = 2             # consecutive strong trend bars that flip the always-in direction
 
+# ---------------------------------------------------------------------------- trading ranges V2 (trading_ranges.py)
+# A box = alternating ATR ZigZag pivots whose highs and lows each sit in one narrow band. Starting
+# values for experiments, not validated settings; trading_range_backtest.py measures them.
+TR_SWING_ATR = 1.0                # ZigZag reversal for box pivots (smaller than SWING_ATR: boxes are 2-8 ATR tall)
+TR_EDGE_ATR = 1.0                 # a box edge's pivots span at most this many ATRs (ATR at confirmation) ...
+TR_MIN_TESTS = 2                  # ... and each edge needs at least this many pivots
+TR_MIN_HEIGHT_ATR = 2.0           # box height (upper - lower) in ATRs, at least ...
+TR_MAX_HEIGHT_ATR = 8.0           # ... and at most this many
+TR_MIN_BAND_ATR = 0.25            # an edge band is widened to at least this many ATRs
+TR_TEST_ATR = 0.5                 # a later pivot within this many ATRs of an edge band is another test of it
+TR_BREAK_ATR = 0.25               # a close this many ATRs beyond an edge band breaches it ...
+TR_BREAK_CLOSES = 2               # ... this many breaching closes in a row break the box; fewer, then back inside: failed
+TR_EXPIRE_BARS = 120              # an active box with no new test for this many bars expires
+TR_RECENT_BOXES = 3               # completed boxes listed besides the active one
+
 # ---------------------------------------------------------------------------- candlestick patterns (candlesticks.py, chart 3)
 CS_TREND_BARS = 5                 # prior trend: close[t-k-1] vs close[t-k-1-this] before a k-bar pattern
 CS_LONG_BODY_ATR = 0.6            # long body: body >= this many ATRs (ATR of the bar before the pattern)
