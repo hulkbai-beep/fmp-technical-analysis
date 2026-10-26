@@ -137,3 +137,25 @@ def test_intraday_main_report(tmp_path):
     assert {"prev_high", "opening_range", "session_vwap"} <= set(rows["source"])
     assert rows["excluded"].any()
     assert "## Key levels S1-S3" in (tmp_path / "o" / "report.md").read_text(encoding="utf-8")
+
+
+def test_confluence_counts_and_classes(tmp_path):
+    import confluence_test as CT
+    assert CT.round_step(19.9) == 1.0 and CT.round_step(150) == 10.0 and CT.round_step(2500) == 50.0
+    assert CT.round_numbers(99.0, 1.0) == [95.0, 100.0] and CT.round_numbers(101.0, 1.0) == [100.0]
+    pts = [(100.0, "pivot"), (100.1, "pivot"), (100.2, "volume_profile"), (99.9, "round_number"), (103, "gap")]
+    assert CT.confluence(pts, 99.75, 100.25) == 3 and CT.cls(3) == "3+" and CT.cls(5) == "3+"
+    lv = {"last_close": 103.5, "atr": 1.0, "supports": [], "resistances": [], "candidates": []}
+    base = {"symbol": "X", "date": pd.Timestamp("2024-01-01"), "t": 0, "excluded": False, "n_asof": 0}
+    bars = synthetic_bars(n=30)
+    rows = CT.build_rows(lv, pts, base, bars, 0, 10)
+    sup = {r["conf"]: r for r in rows if r["side"] == "support"}
+    assert set(sup) == {"1", "2", "3+"}                  # 103 (gap alone) is the nearest class-1 zone
+    assert sup["2"]["families"] == "pivot+volume_profile"  # centred on 100.2: 99.9 falls outside
+    assert abs(sup["1"]["lo_atr"] - (102.75 - 103.5)) < 1e-9 and sup["3+"]["families"] == \
+        "pivot+round_number+volume_profile"
+    p = tmp_path / "q.csv"
+    synthetic_bars(n=420)[["open", "high", "low", "close", "volume"]].rename_axis("Date").to_csv(p)
+    assert CT.main([str(p), "--step", "20", "--split", "2021-01-01", "--out", str(tmp_path / "o")]) == 0
+    text = (tmp_path / "o" / "report.md").read_text(encoding="utf-8")
+    assert "Pre-registered verdict" in text and "## Key levels S1-S3 / R1-R3 by confluence class" in text
