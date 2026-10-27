@@ -165,7 +165,8 @@ Do not invent conflicts, and do not drop any.
   `price_vs_vwap_pct`, `price_vs_vwap_atr`;
 - ~3-year node zones: `levels.node_zones` with `available` (else `reason`), `lookback_bars`,
   `window_start`, `at_close` (the zone holding the close, or null), `above[*]` and `below[*]` (nearest
-  first), each with `zone_low`, `zone_high`, `grade`, `share`, `distance_pct`, `distance_atr`; and
+  first), each with `zone_low`, `zone_high`, `side` (`resistance` for the zones above the close, `support`
+  for the one holding it and those below), `grade`, `share`, `distance_pct`, `distance_atr`; and
   `evidence.note`, `notes`.
 
 **Layout:**
@@ -176,8 +177,9 @@ Do not invent conflicts, and do not drop any.
 3. A small anchored-VWAP table.
 4. A small node-zone table under its own line, "~3-year node zones (reference only)" (Chinese: 约 3 年
    成交密集区（仅供参考，回测无优势）), top to bottom: `above` farthest first, the `at_close` zone with
-   "holds the close" as its distance, then `below`. Columns: Zone | Distance (% / ATR, to the near edge) |
-   Volume density | Volume share. Show `grade` as a density, never as a strength: weak → low, medium →
+   "holds the close" as its distance (or a **Close** row when it is null), then `below`. Columns: Side |
+   Zone | Distance (% / ATR, to the near edge) | Volume density | Volume share. Side is `side`: Resistance
+   (压力) above the close, Support (支撑) for the zone holding it and those below. Show `grade` as a density, never as a strength: weak → low, medium →
    medium, strong → high, very_strong → very high (Chinese column 成交密度: 低 / 中 / 高 / 很高; the sample
    table these zones come from called them 弱 / 中 / 强 / 超强, which may be named once in the note, never
    as the label). Quote `levels.node_zones.notes` (e.g. no zone above the close). When it is not
@@ -407,11 +409,11 @@ to other prices.
 POC 3,540.12; value area 3,402.55-3,781.20 (daily-bar approximation, last 126 bars).
 
 ~3-year node zones (reference only), 756 bars from 2023-10-19:
-| Zone | Distance | Volume density | Volume share |
-|---|---|---|---|
-| 4,610.00-4,688.20 | +3.0% / +1.4 ATR | low | 2.1% |
-| 4,402.70-4,521.30 | holds the close | high | 9.4% |
-| 4,120.50-4,236.80 | -5.3% / -2.5 ATR | very high | 6.8% |
+| Side | Zone | Distance | Volume density | Volume share |
+|---|---|---|---|---|
+| Resistance | 4,610.00-4,688.20 | +3.0% / +1.4 ATR | low | 2.1% |
+| Support | 4,402.70-4,521.30 | holds the close | high | 9.4% |
+| Support | 4,120.50-4,236.80 | -5.3% / -2.5 ATR | very high | 6.8% |
 
 Density shows how much volume traded in the zone, not how likely it is to hold: in tests these zones did
 no better than the same zones at other prices.

@@ -56,8 +56,22 @@ def test_reference_block_splits_zones_around_the_close():
     assert up["zone_low"] > close and down["zone_high"] < close
     assert up["distance_pct"] == up["zone_low"] / close - 1 and up["distance_atr"] == (up["zone_low"] - close) / 2.0
     assert down["distance_pct"] == down["zone_high"] / close - 1 < 0
-    assert {"zone_low", "zone_high", "grade", "density", "share"} <= up.keys()
+    assert {"zone_low", "zone_high", "side", "grade", "density", "share"} <= up.keys()
+    # above the close = resistance; holding it or below = support
+    assert (up["side"], at["side"], down["side"]) == ("resistance", "support", "support")
     assert out["evidence"] == {"backtested_edge": False, "note": NZ.NOTE} and out["notes"] == []
+
+
+def test_a_zone_holding_the_close_is_support_even_above_its_midpoint():
+    # the last bars trade near the bottom of the upper band, so its midpoint is above the close
+    bars = band_bars([(100, 110, 1e6), (130, 140, 3e6)])
+    bars.iloc[-20:] = [131.0, 132.0, 130.5, 131.5, 3e6]
+    zones = NZ.node_zones(bars, lookback=len(bars))
+    close = bars["close"].iloc[-1]
+    (held,) = [z for z in zones if z["zone_low"] <= close <= z["zone_high"]]
+    assert (held["zone_low"] + held["zone_high"]) / 2 > close and held["side"] == "support"
+    out = NZ.reference_block(bars, atr=1.0, lookback=len(bars))
+    assert out["at_close"]["side"] == "support" and all(z["side"] == "resistance" for z in out["above"])
 
 
 def test_reference_block_nearest_first_per_side_and_notes():

@@ -413,7 +413,8 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
 - **Node zones (reference):** `levels.node_zones` adds the ~3-year node zones of H.2 (`scripts/node_zones.py`,
   the last 756 daily bars whatever the horizon): the zone holding the close (`at_close`) and the nearest
   `PER_SIDE` = 3 zones wholly above and wholly below it, each with its grade, volume share and the distance
-  of its near edge from the close (% and ATRs). It carries its own `evidence` (`node_zones.NOTE`, for the
+  of its near edge from the close (% and ATRs). The zones above the close are resistance; the one holding
+  the close and those below are support. It carries its own `evidence` (`node_zones.NOTE`, for the
   reasons in H.2), feeds nothing else (scorecard, scenarios, stops) and is not in the contract; an error
   there leaves the key levels as they are, with a note.
 
@@ -804,6 +805,9 @@ borrow are modelled. A gap can fill a stop well beyond its level.
   split-adjusted candles, with:
   - SMA20/50/200 and the anchored VWAPs;
   - the nearest 3 supports and resistances as zones;
+  - the ~3-year node zones (`node_zones` in the chart data, from `levels.node_zones`) as fainter bands with
+    dashed edges, red above the close and green holding it or below, shaded by density; they do not set
+    the price scale, can be switched off from the legend, and are listed in a card under the key levels;
   - earnings markers;
   - a volume-profile sidebar (POC, value area);
   - volume with RVOL, RSI(14) with 30/70 lines, and the RS line vs SPY rebased to 100 at the window start.

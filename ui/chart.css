@@ -6,6 +6,7 @@
   --border: #dde2e8; --grid: #edf0f4; --row: #f2f4f7; --accent: #2563eb; --on-accent: #ffffff;
   --up: #15803d; --down: #c62828; --up-zone: rgba(34, 197, 94, .2); --down-zone: rgba(239, 68, 68, .16);
   --up-edge: rgba(21, 128, 61, .35); --down-edge: rgba(198, 40, 40, .3);
+  --nz-s: rgba(21, 128, 61, .1); --nz-r: rgba(198, 40, 40, .1); --nz-s-edge: rgba(21, 128, 61, .55); --nz-r-edge: rgba(198, 40, 40, .55);
   --warn-bg: #fff7e6; --warn-text: #7a4f00;
   --sma20: #2a78d6; --sma50: #eb6834; --sma200: #6250d6;
   --av-last_earnings: #c0397a; --av-high_52w: #b07800; --av-low_52w: #13866a;
@@ -21,6 +22,7 @@
     --border: #2a313a; --grid: #20262e; --row: #1e242c; --accent: #6ea0ff; --on-accent: #0f1216;
     --up: #34c77b; --down: #f06262; --up-zone: rgba(52, 199, 123, .18); --down-zone: rgba(240, 98, 98, .17);
     --up-edge: rgba(52, 199, 123, .4); --down-edge: rgba(240, 98, 98, .4);
+    --nz-s: rgba(52, 199, 123, .1); --nz-r: rgba(240, 98, 98, .1); --nz-s-edge: rgba(52, 199, 123, .55); --nz-r-edge: rgba(240, 98, 98, .55);
     --warn-bg: #2b2210; --warn-text: #f5c56b;
     --sma20: #3987e5; --sma50: #d95926; --sma200: #9085e9;
     --av-last_earnings: #d55181; --av-high_52w: #c98500; --av-low_52w: #199e70;
@@ -36,6 +38,7 @@
   --border: #2a313a; --grid: #20262e; --row: #1e242c; --accent: #6ea0ff; --on-accent: #0f1216;
   --up: #34c77b; --down: #f06262; --up-zone: rgba(52, 199, 123, .18); --down-zone: rgba(240, 98, 98, .17);
   --up-edge: rgba(52, 199, 123, .4); --down-edge: rgba(240, 98, 98, .4);
+  --nz-s: rgba(52, 199, 123, .1); --nz-r: rgba(240, 98, 98, .1); --nz-s-edge: rgba(52, 199, 123, .55); --nz-r-edge: rgba(240, 98, 98, .55);
   --warn-bg: #2b2210; --warn-text: #f5c56b;
   --sma20: #3987e5; --sma50: #d95926; --sma200: #9085e9;
   --av-last_earnings: #d55181; --av-high_52w: #c98500; --av-low_52w: #199e70;
@@ -78,8 +81,9 @@ button { font: inherit; }
   grid-template-areas: "main main" "pa pa" "cs cs" "below side"; gap: 14px; margin-top: 14px; align-items: start; }
 .ta-main { grid-area: main; } .ta-side { grid-area: side; } .ta-below { grid-area: below; }
 .ta-pa { grid-area: pa; } .ta-cs { grid-area: cs; }
-.ta-side, .ta-below { display: grid; gap: 14px; min-width: 0; align-items: start; }
+.ta-side, .ta-below, .ta-stack { display: grid; gap: 14px; min-width: 0; align-items: start; }
 .ta-below { grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); }
+.ta-stack { align-content: start; }   /* key levels with the ~3-year node zones under them */
 @media (max-width: 1080px) {
   .ta-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; grid-template-areas: "main" "pa" "cs" "side" "below"; }
 }
@@ -113,6 +117,7 @@ button { font: inherit; }
 .ta-chip .sw { width: 16px; height: 0; border-top: 2px solid currentColor; flex: none; }
 .ta-chip .sw.dash { border-top-style: dashed; }
 .ta-chip .sw.box { height: 9px; border: 1px solid currentColor; border-radius: 2px; opacity: .8; }
+.ta-chip .sw.box.dash { border-style: dashed; }
 .ta-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; flex: none; }
 .ta-seg button { background: transparent; color: var(--muted); border: 0; padding: 3px 11px; font-size: 12px; cursor: pointer; }
 .ta-seg button + button { border-left: 1px solid var(--border); }
@@ -143,6 +148,8 @@ button { font: inherit; }
 .ta-chartbox text.chip { fill: var(--on-accent); font-weight: 650; }
 .ta-chartbox text.lvl { font-size: 11px; font-weight: 650; }
 .ta-chartbox text.lvl.s { fill: var(--up); } .ta-chartbox text.lvl.r { fill: var(--down); }
+.ta-chartbox text.nz { font-size: 10.5px; font-weight: 600; }
+.ta-chartbox text.nz.s { fill: var(--up); } .ta-chartbox text.nz.r { fill: var(--down); }
 .ta-chartbox text.e { fill: var(--text); font-size: 10px; font-weight: 700; }
 .ta-chartbox text.halo { paint-order: stroke; stroke: var(--card); stroke-width: 3px; stroke-linejoin: round; }
 .ta-chartbox .xh { stroke: var(--muted); stroke-width: 1; pointer-events: none; }
@@ -176,6 +183,8 @@ button { font: inherit; }
 .ta-table th:first-child, .ta-table td:first-child, .ta-table .l { text-align: left; }
 .ta-table td.wrap { white-space: normal; min-width: 120px; }
 .ta-table tr.price td { background: var(--row); font-weight: 650; }
+/* node-zone card: zone and distance may wrap (after the dash) so the table fits a phone */
+.ta-nz td:nth-child(2), .ta-nz td:nth-child(3) { white-space: normal; }
 .ta-table tr.dim :is(td, .pos, .neg) { color: var(--muted); }
 .ta-sig th, .ta-sig td { padding: 5px 4px; }
 .ta-sig td:first-child { width: 100%; min-width: 0; }
