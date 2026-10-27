@@ -441,38 +441,62 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
 
 ### H.2 Long-window node zones for 1-3 month holds (2026-10-27)
 - **Where they come from:** a sample table of 71 support/resistance zones (12 symbols, 2026-10-23/26) was
-  reverse-engineered. `scripts/node_zones.py` rebuilds it: a ~3-year (756-bar) daily volume profile with
-  bins 0.25% of the close, smoothed (Gaussian, 2 bins) and cut at its local minima; each node's zone is
-  its run of bins at ≥ 30% of its peak; the grade (weak / medium / strong / very_strong) is the zone's
-  volume density in multiples of the window's average (cuts 0.5, 0.8, 1.9). Mean overlap (IoU) with the
-  table 0.61, 50 of 71 zones at ≥ 0.5, against about 0.43 for the table's zones moved 2-8% at random;
-  64% of matched zones get the table's grade, 98% within one grade.
+  reverse-engineered. `scripts/node_zones.py` rebuilds it: a ~3-year (756-bar) daily profile with bins
+  0.25% of the close, each bar's volume spread over its high-low range, smoothed (Gaussian, 2 bins) and
+  cut at its local minima; each node's zone is its run of bins at ≥ 30% of its peak.
+  - Locations: mean overlap (IoU) with the table 0.61, 50 of 71 zones at ≥ 0.5, against about 0.43 for
+    the table's zones moved 2-8% at random (still clear after allowing for the 648-setting search). A
+    time-at-price profile without volume matches as well (0.60-0.61), so the locations show "where price
+    traded, each bar spread over its range", not volume as such; close-only histograms (0.51-0.53) and
+    swing-pivot densities (below their own null) do worse. Windows of 630-1260 bars fit about equally.
+  - Grades (weak / medium / strong / very_strong): the zone's volume density in multiples of the
+    window's average (cuts 0.5, 0.8, 1.9). Spearman with the table's grades 0.75 (time-at-price density
+    0.65; volume detached from price at most 0.71), so the grades are where volume shows. The cuts were
+    fitted on the 50 matched zones (64% exact in sample); refitted leaving one symbol out, 58-60% exact
+    against 42% for always "strong", and very strong zones are under-called (30-40% recall). Windows of
+    3-10 years rank the grades about equally well.
+  - The rest of the table: 36% of its integer edges are multiples of 5 (about 20% by chance), so some
+    edges were rounded by hand. Merging neighbouring nodes or adding short windows raises the random
+    baseline as much as the fit, so those explanations are not supported.
 - **Test** (`scripts/node_zones_backtest.py`, 32 symbols, daily 2008-2026, same exclusions, split
   2017/2022, 8 hypotheses written before the run): buy at the nearest support zone wholly below the
   close (S1) on the first touch within 21 bars, hold 21 or 63 bars, no stop; short the nearest resistance
-  (R1) the same way. Edge = mean return in ATRs (after 0.05% per side) − the same trade at the moved-zone
-  placebo; drawdown edge = placebo depth − zone depth.
-- **Result: no edge on returns.** S1, 21 bars: +0.01 ATR per trade (90% interval −0.10 to +0.11); 63 bars:
-  +0.04 (−0.18 to +0.28; zone +1.78 ATR vs placebo +1.74, 61% winners); S1 graded strong or very strong,
-  63 bars: +0.04 (−0.23 to +0.34). R1 shorts: −0.03 and +0.09. Hold rates: S1 +0.2 points, R1 −1.2.
+  (R1) the same way. Edge = mean return in ATRs (after 0.05% per side) − the same trade at the same ATR
+  offsets on other dates of the symbol; drawdown edge = placebo depth − zone depth. Nodes cover about 85%
+  of the window's range, so the placebo usually lies on another node: the test asks whether the nearest
+  node's exact edges matter. The zone holding the close (90% of dates) is not traded.
+- **Result: no edge on returns.** S1, 21 bars: +0.01 ATR per trade; 63 bars: +0.04 (zone +1.78 ATR vs
+  placebo +1.74, 61% winners); S1 graded strong or very strong, 63 bars: +0.04. R1 shorts: −0.03 and
+  +0.09. Hold rates: S1 +0.2 points, R1 −1.2. Every interval includes 0. A same-date check (fixed 1- and
+  2-ATR slabs wholly on a node vs wholly off one, date and distance fixed effects) also found no
+  difference (S1 63 bars +0.02 and +0.05 ATR, intervals including 0).
+- **Intervals:** the reports' (symbol, year) bootstrap treats symbols in the same year as independent,
+  but zone and placebo come from different dates, so market-wide moves stay in the edge. Clustered by
+  calendar month the intervals are 1.5-2 times wider: S1 ret21 −0.19 to +0.21, ret63 −0.32 to +0.42. So
+  "no edge" rules out edges above about 0.4 ATR (about 0.8% of price) per 63-bar trade, not smaller ones.
 - **Drawdown:** after an S1 buy the 63-bar drawdown was 3.97 ATR vs 4.10 at the placebo, edge +0.13
-  (+0.01 to +0.25), positive in each period, so it passed the screen but not the multiple-testing gate
-  (98.75% interval from −0.05). With 504- or 1008-bar windows it was +0.08 with intervals including 0.
+  (about 0.25% of price). The (symbol, year) interval (+0.01 to +0.25) put it through the screen, but by
+  month it is −0.17 to +0.41, about half of it is a calendar effect shared by other symbols, and with
+  504- or 1008-bar windows it is +0.08 (intervals including 0). It is not a result.
 - **Grades do not sort outcomes:** S1 63-bar return edge weak +0.06, medium +0.02, strong −0.01, very
-  strong +0.25 (−0.37 to +0.90).
-- **Reading:** the zones describe where volume traded, as the sample table does, but buying them for one to
-  three months did no better than buying a zone of the same shape at another price. At most they trim the
-  drawdown slightly. The skill's levels stay reference only.
+  strong +0.25 (−0.37 to +0.90); at 21 bars weak is best. Rank correlations of density with each edge are
+  about 0. Raw hold rates do rise with grade, because higher grades are wider zones; the same-shape
+  placebo rises the same way.
 - **Tranche buying** (`scripts/tranche_backtest.py`, same data, 23,177 dates, 3 hypotheses written before
   the run): a third bought at the close, two limit orders over the next 63 bars, unfilled parts bought at
   bar 63's close, so plans differ only in average cost. Node ladder (tops of S1 and S2, median 2.6% and
-  7.5% below the close) vs the same offsets on other dates: −0.07% (−0.25 to +0.12). It was cheaper than
-  a 5% / 10% ladder by +0.21% (+0.14 to +0.28) and a 2 / 4 ATR ladder by +0.19% (+0.08 to +0.31),
-  positive in each period but under the 0.25% bar, and the placebo does as well: the gain comes from the
-  nearer first limit (1.14 limits filled vs 0.86 for 5% / 10%), not from the node prices; a fixed
-  2.5% / 7.5% ladder, run afterwards as a check, matched it (node −0.01%, −0.06 to +0.05). Every ladder
-  cost more than buying it all at once (node −0.58%, monthly purchases −0.77%; the price rose 2.9% over
-  the window on average) while being cheaper on 56% of dates.
+  7.5% below the close) vs the same offsets on other dates: −0.07% (−0.25 to +0.12). Its raw lead over a
+  5% / 10% ladder (+0.21%) and a 2 / 4 ATR ladder (+0.19%) is exposure: its nearer limits keep it
+  invested 63% of the window vs 54% and 58% in a sample that rose 2.9% per window (+0.93% vs 5/10% in
+  rising windows, −0.91% in falling ones). With each symbol's drift removed the three ladders tie
+  (+0.01% and −0.03%, intervals including 0); a fixed 2.5% / 7.5% ladder matches the node ladder in every
+  version. Against buying it all at once every ladder cost 0.6-0.8% on average, which is the same drift:
+  with it removed the ladders were 0.26-0.30% cheaper, and they cut the bad tail (5th-percentile 63-bar
+  return −13.6% for the node ladder vs −17.9%).
+- **Reading:** the zones describe where price traded over about three years, and their grades how much
+  volume traded there. Buying them for one to three months did no better than the same zone at another
+  price, the grades did not help, and as tranche prices they behave like a fixed ladder of the same
+  depth. The skill's levels stay reference only.
 
 ### I. Multi-timeframe (`multi_timeframe`)
 - **Weekly bars:** W-FRI, with SMA10w, SMA40w and Wilder RSI(14) on weekly closes.

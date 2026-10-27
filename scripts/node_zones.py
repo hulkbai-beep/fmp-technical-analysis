@@ -14,14 +14,16 @@ From the last `lookback` bars (about 3 years of daily bars):
      the run of its bins whose smoothed volume is at least CORE_SHARE of the node's peak;
   4. density = the zone's share of the window's volume / its width as a share of the window's
      price range, i.e. how many times the window's average volume per unit of price; the grade is
-     weak / medium / strong / very_strong at the GRADE_CUTS of the density (fitted to the sample:
-     65% of its zones get the same grade, 99% within one grade);
+     weak / medium / strong / very_strong at the GRADE_CUTS of the density (fitted to the sample's
+     50 matched zones: 64% exact there; refitted leaving one symbol out, about 58% against 42% for
+     always 'strong'; very_strong is under-called);
   5. side: support when the zone's midpoint is below the last close, else resistance (67 of the
      sample's 71 zones; the other 4 contain the close).
 
-On the sample, with daily bars, the zones overlap the table's by a mean IoU of about 0.6 (51 of 71
-at 0.5 or more); the table's zones moved 2-8% at random reach about 0.43. The table also merges
-neighbouring nodes and rounds some edges by hand, which this does not copy.
+On the sample, with daily bars, the zones overlap the table's by a mean IoU of about 0.6 (50 of 71
+at 0.5 or more); the table's zones moved 2-8% at random reach about 0.43. A time-at-price profile
+(volume set to 1 per bar) places the zones as well; volume shows in the grades (Spearman 0.75 vs
+0.65). Some of the table's edges are rounded by hand, which this does not copy.
 """
 from __future__ import annotations
 

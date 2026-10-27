@@ -24,9 +24,12 @@ contains the close is not used. Per zone:
 
 The placebo keeps each zone's shape (its edges' offsets from the close in ATRs) and moves it to
 other as-of bars of the same series (levels_backtest.PLACEBO_OFFSETS steps on, never excluded
-ones), where it marks no node; it is scored the same way. Edge = zone - placebo: hold rate, mean
-ret, and for mae placebo depth - zone depth (positive when the zone limits the drawdown). Its 90%
-interval is a cluster bootstrap over (symbol, year) blocks.
+ones), and is scored the same way. Nodes cover most of the window's range, so the moved zone usually
+lies on another node: the test asks whether the nearest node's exact edges matter. Edge = zone -
+placebo: hold rate, mean ret, and for mae placebo depth - zone depth (positive when the zone limits
+the drawdown). Its 90% interval is a cluster bootstrap over (symbol, year) blocks; zone and placebo
+come from different dates, so market-wide moves stay in the edge, and clustering by calendar month
+widens the intervals 1.5-2 times (methodology.md H.2).
 
 Pre-registered hypotheses (written before the first run):
   s1_ret21, s1_ret63: S1 trades, ret edge, holds 21 and 63;
