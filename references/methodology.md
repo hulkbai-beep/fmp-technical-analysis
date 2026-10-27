@@ -400,6 +400,44 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   same ATR distance on other dates (edge 0.0 points, -0.2 to +0.3, ~61,000 stops).
 - **Short side:** if a side has fewer than 3 levels, a note says so, naming an all-time or 52-week
   extreme when price is at one.
+- **Reference only:** `levels.evidence` = `{backtested_edge: false, note}` (`LEVELS_EVIDENCE_NOTE`), for the
+  reasons in H.1. The report, the chart and the contract (`levels_note`) carry the note.
+
+### H.1 Do the levels hold? (test plan V2, 2026-10-27)
+- **Data:** the 32-symbol universe, daily bars 2005-2026 and regular-session hourly bars 2010-2026 (no pre- or
+  post-market), cleaned by `scripts/clean_data.py`:
+  - each hourly session is put on the daily bars' price basis (a centred 11-session median of daily close /
+    last hourly close; volume is rescaled only when that ratio is a split fraction n/m with m ≤ 4), which
+    fixed spin-off and dividend basis steps (MMM, PFE, VZ, XLU);
+  - sessions whose last close or range disagrees with the daily bar, or with fewer than 4 bars, are excluded;
+  - daily placeholders are dropped, moves over 50% must be confirmed by the hourly bars, and windows where
+    more than half of 20 bars traded under $10M are flagged illiquid;
+  - every exclusion is a row of `exclusions.csv` (symbol, applies, start, end, reason), read with
+    `--exclusions`; the 2020 crash (2020-02-20 to 2020-04-30) is excluded everywhere with `--exclude`.
+- **Gates, written before the run:** edge ≥ 2 points, 90% cluster-bootstrap interval above 0 and a
+  positive edge in each of three periods; a Bonferroni 99.5% interval for the 20 daily hypotheses. Edge =
+  hold rate − the moved-zone placebo (Fibonacci ratios: − the other ratios of the same swings).
+- **Daily** (`scripts/sr_methods.py`, 13 hypotheses): fresh vs tested once, twice or 3+ times; role
+  flips; confirmation by a close or a wick back out of the zone; Fibonacci retracements (0.382, 0.5, 0.618)
+  vs 0.30 / 0.45 / 0.70 of the same swings; Fibonacci extensions (1.272, 1.618) vs 1.15 / 1.45 / 1.80;
+  weekly and monthly floor pivots and Camarilla levels; the Ichimoku cloud and Kijun. **None passed.**
+  Fibonacci retracements did slightly worse than the other ratios (−1.1 points, interval −1.9 to −0.3);
+  extensions +1.4 (−0.6 to +3.5). A limit-order trade at each zone (stop 0.5 ATR beyond, target 1 ATR,
+  0.05% cost per side) lost 0.03-0.09 ATR per trade in every family, about as much as the same trade at
+  the moved zones.
+- **Hourly, 2010-2021** (39 items; `intraday_levels.py`, `sr_methods.py --hourly`, `round_cross.py`,
+  `confluence_test.py`): prior-day and overnight levels, the session VWAP, the opening gap, daily pivots
+  and Camarilla, the daily methods on hourly bars, round-number crosses and confluence. **None passed**;
+  the best edge was about +0.6 points. The session VWAP was −6.6, the opening gap −1.4 and zones where 3+
+  families agree −1.4. After crossing a round number, price continued 49.4% of the time, the same as after
+  crossing a non-round price.
+- **Holdout:** hourly bars from 2022 on were kept out of every screen. Since nothing passed, they were
+  never read.
+- **Earlier baselines** (key levels, boxes, breakouts, sources, structural stop, regimes) moved by less
+  than 0.5 points on the cleaned data.
+- **Reading:** 52 method variants, none better than the same zone at other prices. The zones are kept as
+  reference prices (where price has traded and reacted before), not as places likely to hold. Stops and
+  targets come from the calibrated volatility bands in section 6.
 
 ### I. Multi-timeframe (`multi_timeframe`)
 - **Weekly bars:** W-FRI, with SMA10w, SMA40w and Wilder RSI(14) on weekly closes.
@@ -593,30 +631,61 @@ split-adjusted, and ATR is ATR(14).
 **Bear scenario.** The mirror image, built from supports.
 
 **Base case.**
-- 1σ move = close × `rv20` × √(h/252). The output gives it in %, in price and in ATRs, plus the range
-  close ± move.
-- It assumes zero drift and that recent volatility persists. About 68% of outcomes fall inside under a
-  normal approximation; real tails are fatter.
+- σ_h = `rv20` × √(h/252); 1σ move = close × σ_h. The output gives it in %, in price and in ATRs, plus the
+  range close ± move.
+- The 95% band is close × (1 ± `VOL_BAND_K95` × σ_h) with `VOL_BAND_K95` = 2.4, not 2: returns have fat
+  tails, and ±2σ held only 92-93% of closes. `range_95_low` is null when the band reaches zero.
+- It assumes zero drift and that recent volatility persists. `coverage` gives each band's calibrated share
+  (below).
 - If earnings fall inside the horizon, `earnings_caveat` gives the date and the median two-day reaction.
+
+**Volatility-band calibration** (`scripts/vol_bands.py`, the skill-bands tables; 32 symbols, daily bars
+2005-2026 cleaned as in H.1, the 2020 crash and flagged windows excluded, a start every 5 bars, up and down
+moves pooled; ~29,000 starts per horizon). Cover = share of h-day closes inside close × (1 ± kσ_h); touch =
+share of paths whose high (low) reached the upper (lower) edge within h days.
+
+| k | cover 10 d | touch 10 d | cover 60 d | touch 60 d | normal model (cover / touch) |
+|---|---|---|---|---|---|
+| 1 | 68.2% | 31.5% | 65.9% | 33.8% | 68.3% / 31.7% |
+| 1.5 | 84.7% | 15.5% | 82.9% | 17.6% | 86.6% / 13.4% |
+| 2 | 92.6% | 7.6% | 91.6% | 8.9% | 95.4% / 4.6% |
+| 2.4 | 95.8% | 4.3% | 94.9% | 5.3% | 98.4% / 1.6% |
+| 3 | 98.0% | 2.0% | 97.6% | 2.5% | 99.7% / 0.3% |
+
+- `VOL_BAND_COVER`, `VOL_TOUCH` (k from 0.25 to 4) and `VOL_PAIR_ODDS` in `config.py` hold these numbers for
+  h = 5, 10, 20 and 60; the scorecard uses the calibrated horizon nearest h and interpolates touch rates in k
+  on a log scale.
+- Up moves reached their edge more often than down moves (10 days, k = 1: 34.0% vs 29.0%; 60 days 40.0% vs
+  27.5%): the sample's upward drift. The pooled number assumes no drift, like the base case.
+- For comparison, the old 2 ATR stop was touched within 10 days in 34% of cases and within 60 days in 71%.
 
 **Wording.** Each scenario carries a conditional `text`, e.g. "If X closes above Y (basis) on
 RVOL ≥ 1.5, the next zones are …; the scenario is invalidated by a close back below Z." `leaning`
-records which scenario the bias points toward; it is a description, not a forecast.
+records which scenario the bias points toward; it is a description, not a forecast. The triggers and level
+targets come from the key levels, so `scenarios.notes` says they are reference only.
 
 **Risk framing (illustrative arithmetic, not a recommendation).**
 
 | Item | Long side (short side mirrors it) |
 |---|---|
 | Entry reference | last close |
-| Structural stop | nearest support `zone_low` - `STRUCTURE_STOP_BUFFER_ATR` (0.5) ATR; none if no support below |
+| Volatility stop (primary) | entry × (1 - `VOL_STOP_K` (2.4) × σ_h): the 95% band edge; none without rv20 or at or below zero |
 | ATR stop | entry - `STOP_ATR_MULT` (2) ATR |
-| Stop distance | in ATRs and % of entry, for each stop |
-| First target | nearest resistance price; else the bull scenario's first target (projection) |
+| Structural stop (reference) | nearest support `zone_low` - `STRUCTURE_STOP_BUFFER_ATR` (0.5) ATR; none if no support below |
+| Stop distance | in ATRs, % of entry and σ_h, for each stop |
+| Touch rate | for each stop and the first target: the calibrated share of paths that reached a price that many σ_h away within h days |
+| First target | entry × (1 + `VOL_TARGET_K` (1) × σ_h), the 1σ band edge; without rv20, the level target |
+| Level target (reference) | nearest resistance price; else the bull scenario's first target (projection) |
+| Pair odds | the 1σ target and 95% stop played from the close in calibration: target first, stop first, neither within h days (10 days: 31.4% / 4.1% / 64.4%; 60 days: 33.7% / 5.1% / 61.3%) |
 | Reward/risk | (target - entry) / (entry - stop), for each stop |
 | Position-size example | risk $ = `ACCOUNT_SIZE` × `RISK_PER_TRADE` = $100,000 × 1% = $1,000; shares = floor(risk $ / (entry - stop)); notional and % of account; flagged when above 100% of the account |
 
-The headline example uses the structural stop when it exists, otherwise the ATR stop. No commissions,
-slippage, financing or borrow are modelled. A gap can fill a stop well beyond its level.
+The headline example uses the volatility stop when it exists, otherwise the ATR stop; `by_stop` sizes all
+three. With no measured edge a stop/target pair is worth about zero before costs whatever its reward/risk
+(the 1σ / 2.4σ pair has reward/risk 0.42 and reached its target first 7.6 times as often as its stop; the
+64% of paths that reached neither within the horizon make up the difference). The touch rates show the
+trade-off between a near and a far stop. No commissions, slippage, financing or
+borrow are modelled. A gap can fill a stop well beyond its level.
 
 ---
 

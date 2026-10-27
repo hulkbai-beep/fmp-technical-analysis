@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-The ta-1.1 contract: a small, versioned summary of one stock's swing and position runs for other tools.
+The ta-1.2 contract: a small, versioned summary of one stock's swing and position runs for other tools.
 
 metrics.json is internal and may change between versions. The contract is the public interface: fields are only
 ever added, and renaming or removing one means a new major version (ta-2.0). It selects and normalises facts and
-judges nothing (no "buy", no target of its own). contracts/ta-1.1.schema.json describes every field;
+judges nothing (no "buy", no target of its own). contracts/ta-1.2.schema.json describes every field;
 tests/test_contract.py checks both.
 
 Blocks that do not depend on the horizon (data quality, market, event, volatility, extension, trend, regime, RS,
@@ -27,7 +27,7 @@ from pathlib import Path
 
 import scorecard as SC
 
-CONTRACT = "ta-1.1"   # 1.1 adds event.last_earnings*, targets' kind; 1.x versions only add fields
+CONTRACT = "ta-1.2"   # 1.1 adds event.last_earnings*, targets' kind; 1.2 levels_note, range_95, vol stops; 1.x only add fields
 HORIZONS = ("swing", "position")
 # Modules computed the same way for both horizons; the contract takes them from the swing run.
 SHARED = ("snapshot", "data_quality", "market_context", "regime", "trend_momentum", "relative_strength",
@@ -259,8 +259,14 @@ def _stops(side):
     if not isinstance(side, dict):
         return None
     d = side.get("stop_distance_pct") or {}
+    t = side.get("stop_touch_rate") or {}
+    vt = _num(side.get("vol_target"))
     return {"structural": _num(side.get("structural_stop")), "structural_distance_pct": _num(d.get("structural")),
-            "atr": _num(side.get("atr_stop")), "atr_distance_pct": _num(d.get("atr"))}
+            "atr": _num(side.get("atr_stop")), "atr_distance_pct": _num(d.get("atr")),
+            "vol": _num(side.get("vol_stop")), "vol_distance_pct": _num(d.get("vol")), "vol_target": vt,
+            "touch_rate": {k: _num(t.get(k)) for k in ("vol", "structural", "atr")},
+            "target_touch_rate": None if vt is None else _num(side.get("first_target_touch_rate")),
+            "primary": _get(side, "position_size_example", "stop_basis")}
 
 
 def _evidence(entries, primary, source=None):
@@ -308,11 +314,16 @@ def _horizon(m):
         "supports": supports,
         "resistances": resistances,
         "levels_window": None if not lv else _pick(lv, ("lookback_bars", "window_start", "window_end")),
+        "levels_note": _get(lv, "evidence", "note"),
         "bull": _scenario(_get(sn, "bull")),
         "bear": _scenario(_get(sn, "bear")),
         "range_1sd": None if not base.get("available") else {
             "low": _num(base.get("range_low")), "high": _num(base.get("range_high")),
             "move_pct": _num(base.get("expected_move_1sd_pct")), "earnings_caveat": base.get("earnings_caveat")},
+        "range_95": None if not base.get("available") else {
+            "low": _num(base.get("range_95_low")), "high": _num(base.get("range_95_high")),
+            "move_pct": _num(base.get("expected_move_95_pct")), "k": _num(base.get("band_95_k")),
+            "coverage": _num(_get(base, "coverage", "within_95_band"))},
         "stops_ref": None if not rk else {"long": _stops(rk.get("long_side")), "short": _stops(rk.get("short_side"))},
         "earnings_within_horizon": None if not er else er.get("within_horizon"),
         "signals": _evidence(sig.get("active"), primary),
@@ -331,7 +342,7 @@ def _check_pair(swing, position):
 
 
 def build(swing: dict, position: dict) -> dict:
-    """The ta-1.1 contract from one stock's swing and position metrics (same ticker, same last bar)."""
+    """The ta-1.2 contract from one stock's swing and position metrics (same ticker, same last bar)."""
     _check_pair(swing, position)
     m = swing
     snap = m.get("snapshot") or {}

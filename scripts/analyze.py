@@ -9,7 +9,7 @@ metrics.json (every computed number) and a self-contained chart.html.
               position (weekly emphasis, 20/60-day stats, ~2-year levels)
   --out       output folder (default ./ta-output/<TICKER>_<as_of>/)
   --refresh   ignore the local cache and fetch everything again
-  --contract  also write the ta-1.1 contract (both horizons; the other one runs from the cache;
+  --contract  also write the ta-1.2 contract (both horizons; the other one runs from the cache;
               see contract.py)
 
 Exit codes: 0 done; 1 the analysis could not run (unknown ticker, no data, FMP or network
@@ -171,7 +171,8 @@ def config_snapshot(horizon: str) -> dict:
                       "conf_agreement_high": C.CONF_AGREEMENT_HIGH, "conf_agreement_low": C.CONF_AGREEMENT_LOW},
         "risk": {"trigger_rvol": C.TRIGGER_RVOL, "stop_atr_mult": C.STOP_ATR_MULT,
                  "structure_stop_buffer_atr": C.STRUCTURE_STOP_BUFFER_ATR, "account_size": C.ACCOUNT_SIZE,
-                 "risk_per_trade": C.RISK_PER_TRADE},
+                 "risk_per_trade": C.RISK_PER_TRADE, "vol_band_k95": C.VOL_BAND_K95, "vol_stop_k": C.VOL_STOP_K,
+                 "vol_target_k": C.VOL_TARGET_K},
     }
 
 

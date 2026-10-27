@@ -466,10 +466,16 @@ def test_base_case_expected_move():
     assert base["expected_move_1sd_price"] == pytest.approx(CLOSE * sd)
     assert base["expected_move_atr"] == pytest.approx(CLOSE * sd / ATR)
     assert (base["range_low"], base["range_high"]) == pytest.approx((CLOSE * (1 - sd), CLOSE * (1 + sd)))
+    assert base["band_95_k"] == 2.4 and base["expected_move_95_pct"] == pytest.approx(2.4 * sd)
+    assert (base["range_95_low"], base["range_95_high"]) == pytest.approx((CLOSE * (1 - 2.4 * sd), CLOSE * (1 + 2.4 * sd)))
+    assert base["coverage"] == {"horizon_days": 10, "within_1sd": 0.682, "within_2sd": 0.926, "within_95_band": 0.958,
+                                "basis": C.VOL_CALIBRATION}
+    assert "68.2%" in base["text"] and "+-2.4 sigma" in base["text"] and "92.6%" in base["method"]
     assert base["earnings_caveat"] is None
     pos = S.build_scenarios(ctx_for("position"), m, None)
     assert pos["horizon_days"] == 60
     assert pos["base"]["expected_move_1sd_pct"] == pytest.approx(0.30 * math.sqrt(60 / 252))
+    assert pos["base"]["coverage"]["horizon_days"] == 60 and pos["base"]["coverage"]["within_95_band"] == 0.949
 
 
 def test_base_case_earnings_caveat():
@@ -506,6 +512,8 @@ def test_scenarios_without_levels_module():
     m["levels"] = {"available": False, "reason": "close or ATR unavailable"}
     sc = S.build_scenarios(ctx_for(), m, None)
     assert sc["available"] and any("levels unavailable" in n for n in sc["notes"])
+    assert not any("reference only" in n for n in sc["notes"])
+    assert any("reference only" in n for n in S.build_scenarios(ctx_for(), modules_for(1), None)["notes"])
     assert sc["bear"]["trigger"]["level"] == pytest.approx(CLOSE - ATR)
 
 
@@ -532,24 +540,46 @@ def test_risk_arithmetic_exact():
     sc = S.build_scenarios(ctx_for(), m, None)
     risk = S.build_risk(ctx_for(), m, sc)
     lg, sh = risk["long_side"], risk["short_side"]
-    assert lg["entry_ref"] == 100.0
+    sd = 0.30 * math.sqrt(10 / 252)
+    assert lg["entry_ref"] == 100.0 and lg["sigma_h_pct"] == pytest.approx(sd) and risk["horizon_days"] == 10
+    assert lg["vol_stop"] == pytest.approx(100 * (1 - 2.4 * sd)) and lg["vol_target"] == pytest.approx(100 * (1 + sd))
     assert lg["structural_stop"] == pytest.approx(94.0) and lg["atr_stop"] == pytest.approx(96.0)
-    assert lg["stop_distance_atr"] == pytest.approx({"structural": 3.0, "atr": 2.0})
-    assert lg["stop_distance_pct"] == pytest.approx({"structural": 0.06, "atr": 0.04})
-    assert lg["first_target"] == 110.0 and lg["first_target_basis"] == "nearest resistance"
-    assert lg["reward_risk"] == pytest.approx({"structural": 10 / 6, "atr": 2.5})
+    assert "reference only" in lg["structural_stop_basis"] and "95% band" in lg["vol_stop_basis"]
+    assert lg["stop_distance_atr"] == pytest.approx({"vol": 120 * sd, "structural": 3.0, "atr": 2.0})
+    assert lg["stop_distance_pct"] == pytest.approx({"vol": 2.4 * sd, "structural": 0.06, "atr": 0.04})
+    assert lg["stop_distance_sigma"] == pytest.approx({"vol": 2.4, "structural": 0.06 / sd, "atr": 0.04 / sd})
+    assert lg["first_target"] == pytest.approx(100 * (1 + sd)) and "1-sigma band edge" in lg["first_target_basis"]
+    assert lg["first_target_sigma"] == pytest.approx(1.0)
+    assert lg["level_target"] == 110.0 and lg["level_target_basis"] == "nearest resistance (reference only)"
+    assert lg["reward_risk"] == pytest.approx({"vol": 1 / 2.4, "structural": 100 * sd / 6, "atr": 100 * sd / 4})
+    assert lg["stop_touch_rate"]["vol"] == pytest.approx(C.VOL_TOUCH[10][2.4])
+    assert C.VOL_TOUCH[10][1.5] < lg["stop_touch_rate"]["atr"] < C.VOL_TOUCH[10][0.5]
+    assert lg["first_target_touch_rate"] == pytest.approx(C.VOL_TOUCH[10][1.0])
+    assert lg["vol_pair_odds"] == {"target_first": 0.314, "stop_first": 0.041, "neither": 0.644, "horizon_days": 10}
     ex = lg["position_size_example"]
     assert (ex["account"], ex["risk_pct"], ex["risk_dollars"]) == (100_000, 0.01, 1000.0)
-    assert ex["stop_basis"] == "structural" and ex["shares"] == 166 and ex["notional"] == pytest.approx(16_600.0)
-    assert ex["notional_pct_account"] == pytest.approx(0.166) and ex["exceeds_account"] is False
-    assert ex["by_stop"]["atr"]["shares"] == 250 and ex["by_stop"]["atr"]["notional"] == pytest.approx(25_000.0)
+    assert ex["stop_basis"] == "vol" and ex["shares"] == 69 and ex["notional"] == pytest.approx(6_900.0)
+    assert ex["notional_pct_account"] == pytest.approx(0.069) and ex["exceeds_account"] is False
+    assert ex["by_stop"]["structural"]["shares"] == 166 and ex["by_stop"]["atr"]["shares"] == 250
+    assert ex["by_stop"]["atr"]["notional"] == pytest.approx(25_000.0)
 
+    assert sh["vol_stop"] == pytest.approx(100 * (1 + 2.4 * sd)) and sh["first_target"] == pytest.approx(100 * (1 - sd))
     assert sh["structural_stop"] == pytest.approx(112.0) and sh["atr_stop"] == pytest.approx(104.0)
-    assert sh["first_target"] == 96.0
-    assert sh["reward_risk"] == pytest.approx({"structural": 4 / 12, "atr": 1.0})
-    assert sh["position_size_example"]["shares"] == 83
-    assert sh["position_size_example"]["by_stop"]["atr"]["shares"] == 250
+    assert sh["level_target"] == 96.0
+    assert sh["reward_risk"] == pytest.approx({"vol": 1 / 2.4, "structural": 100 * sd / 12, "atr": 100 * sd / 4})
+    assert sh["position_size_example"]["shares"] == 69
+    assert sh["position_size_example"]["by_stop"]["structural"]["shares"] == 83
     assert risk["label"] == S.ILLUSTRATIVE and C.DISCLAIMER in risk["notes"]
+    assert any("reference only" in n for n in risk["notes"])
+
+
+def test_touch_rate_interpolates_the_calibration():
+    row = C.VOL_TOUCH[10]
+    assert S.touch_rate(1.0, 10) == pytest.approx(row[1.0]) and S.touch_rate(2.4, 10) == pytest.approx(row[2.4])
+    mid = S.touch_rate(1.25, 10)
+    assert mid == pytest.approx(math.sqrt(row[1.0] * row[1.5]))
+    assert S.touch_rate(0.1, 10) is None and S.touch_rate(5.0, 10) is None and S.touch_rate(None, 10) is None
+    assert S.touch_rate(1.0, 12) == pytest.approx(row[1.0]) and S.touch_rate(1.0, 45) == pytest.approx(C.VOL_TOUCH[60][1.0])
 
 
 def test_risk_exact_multiple_is_not_floored_down():
@@ -557,27 +587,44 @@ def test_risk_exact_multiple_is_not_floored_down():
     m["levels"]["supports"] = [{"price": 95.4, "zone_low": 95.3, "zone_high": 95.5, "sources": ["pivot_low"]}]
     m["volatility"]["atr14"] = 0.6                          # stop = 95.3 - 0.3 = 95.0 -> 5.0 per share
     ex = S.build_risk(ctx_for(), m, None)["long_side"]["position_size_example"]
-    assert ex["shares"] == 200
+    assert ex["by_stop"]["structural"]["shares"] == 200
 
 
 def test_risk_flags_notional_above_account():
     m = modules_for(1)
     m["volatility"]["atr14"] = 0.1
     m["levels"]["supports"] = [{"price": 99.95, "zone_low": 99.9, "zone_high": 99.95, "sources": ["poc"]}]
-    ex = S.build_risk(ctx_for(), m, None)["long_side"]["position_size_example"]
+    ex = S.build_risk(ctx_for(), m, None)["long_side"]["position_size_example"]["by_stop"]["structural"]
     assert ex["risk_per_share"] == pytest.approx(0.15) and ex["shares"] == 6666
     assert ex["exceeds_account"] is True and ex["flag"] == "illustrative only; would exceed the account"
 
 
-def test_risk_without_support_uses_atr_stop_and_projection_target():
+def test_risk_without_support_or_volatility():
     m = modules_for(1)
     m["levels"].update(supports=[], resistances=[], high_52w=CLOSE)
     sc = S.build_scenarios(ctx_for(), m, None)
     lg = S.build_risk(ctx_for(), m, sc)["long_side"]
     assert lg["structural_stop"] is None and lg["reward_risk"]["structural"] is None
+    assert lg["position_size_example"]["stop_basis"] == "vol"
+    assert lg["level_target"] == pytest.approx(104.0) and "projection" in lg["level_target_basis"]
+    assert any("no structural stop" in n for n in lg["notes"])
+    m["volatility"]["rv20"] = m["regime"]["volatility"]["rv20"] = None
+    lg = S.build_risk(ctx_for(), m, sc)["long_side"]
+    assert lg["vol_stop"] is None and lg["vol_pair_odds"] is None and lg["stop_touch_rate"]["atr"] is None
     assert lg["position_size_example"]["stop_basis"] == "atr" and lg["position_size_example"]["shares"] == 250
     assert lg["first_target"] == pytest.approx(104.0) and "projection" in lg["first_target_basis"]
-    assert any("no structural stop" in n for n in lg["notes"])
+    assert any("no volatility stop" in n for n in lg["notes"])
+
+
+def test_bands_that_reach_zero():
+    m = modules_for(1)
+    m["volatility"]["rv20"] = 2.0                            # 60 days: sigma_h = 0.98, 2.4 sigma > 100%
+    sc = S.build_scenarios(ctx_for("position"), m, None)
+    assert sc["base"]["range_95_low"] is None and any("reaches zero" in n for n in sc["notes"])
+    assert "zero to" in sc["base"]["text"]
+    lg = S.build_risk(ctx_for("position"), m, sc)["long_side"]
+    assert lg["vol_stop"] is None and lg["position_size_example"]["stop_basis"] == "atr"
+    assert any("volatility stop would be at or below zero" in n for n in lg["notes"])
 
 
 # ---------------------------------------------------------------------------- end to end on synthetic bars
@@ -626,9 +673,10 @@ def test_risk_flags_a_stop_wider_than_the_risk_budget():
     m["trend_momentum"]["close"] = m["regime"]["direction"]["close"] = big
     lg = S.build_risk(ctx_for(), m, None)["long_side"]
     ex = lg["position_size_example"]
-    # stop = 47,500 - 500 = 47,000 -> 3,000 per share > the $1,000 budget
-    assert ex["shares"] == 0 and ex["fractional_shares"] == pytest.approx(1 / 3)
-    assert "exceeds the $1,000 risk budget" in ex["flag"] and "0.33 shares" in ex["flag"]
+    # structural stop = 47,500 - 500 = 47,000 -> 3,000 per share > the $1,000 budget (the vol stop is wider still)
+    st = ex["by_stop"]["structural"]
+    assert ex["shares"] == 0 and st["shares"] == 0 and st["fractional_shares"] == pytest.approx(1 / 3)
+    assert "exceeds the $1,000 risk budget" in st["flag"] and "0.33 shares" in st["flag"]
     assert any("no whole-share position fits" in n for n in lg["notes"])
 
 

@@ -37,11 +37,17 @@ whole, because zones built 5 bars apart share most of their bars and are not ind
 Tables are given per rank, per symbol, per daily direction at the build bar (Uptrend / Downtrend /
 Mixed, as in the regime module) and per period (--split dates).
 
+--exclude START:END drops a window (e.g. the 2020 crash): a row is dropped when any bar from its
+build bar to the last bar its outcome can use falls inside, and such as-of bars are never placebos.
+--exclusions FILE adds per-symbol windows from clean_data.py's exclusions.csv. The report covers the
+rows left; rows.csv keeps all with an `excluded` flag.
+
 In-sample and without costs; it measures where price reacts, not a trading rule.
 """
 from __future__ import annotations
 
 import argparse
+import bisect
 import sys
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -72,6 +78,67 @@ def load_csv(path: str | Path) -> pd.DataFrame:
     df = df[(df["high"] >= df["low"]) & (df["low"] > 0)]
     df.index.name = "date"
     return df[~df.index.duplicated(keep="last")]
+
+
+def excluded_bars(index: pd.DatetimeIndex, windows: list[tuple[str, str]], forward: int) -> np.ndarray:
+    """True for build bars whose outcome span (the bar itself to 2 x forward - 1 bars later) touches
+    any window. Window dates are inclusive whole days, so on intraday bars they cover every bar of
+    their first and last day."""
+    inside = np.zeros(len(index), dtype=bool)
+    day = pd.DatetimeIndex(index).normalize()
+    for a, b in windows:
+        inside |= (day >= pd.Timestamp(a)) & (day <= pd.Timestamp(b))
+    span = 2 * forward
+    hit = np.convolve(inside.astype(int), np.ones(span, dtype=int))[span - 1:span - 1 + len(index)]
+    return hit > 0          # hit[t] counts inside bars in t..t+span-1
+
+
+def parse_windows(items: list[str]) -> list[tuple[str, str]]:
+    """START:END strings to (start, end) pairs, both checked as dates."""
+    out = []
+    for s in items:
+        a, _, b = s.partition(":")
+        pd.Timestamp(a), pd.Timestamp(b)
+        out.append((a, b))
+    return out
+
+
+def load_exclusions(path: str | Path, hourly: bool = False) -> dict[str, list[tuple[str, str]]]:
+    """Per-symbol windows from clean_data.py's exclusions.csv: rows that apply to `all` bars, plus
+    the `hourly` rows when the test runs on hourly bars."""
+    ex = pd.read_csv(path, dtype=str)
+    keep = ex["applies"].isin(["all", "hourly"] if hourly else ["all"])
+    out: dict[str, list[tuple[str, str]]] = {}
+    for r in ex[keep].itertuples():
+        out.setdefault(r.symbol.upper(), []).append((r.start, r.end))
+    return out
+
+
+def file_windows(paths: list[str], exclude: list[str], exclusions: str | None,
+                 hourly: bool = False) -> list[list[tuple[str, str]]]:
+    """Per file: the --exclude windows plus its symbol's --exclusions rows (symbol = file stem)."""
+    base = parse_windows(exclude)
+    per = load_exclusions(exclusions, hourly) if exclusions else {}
+    return [base + per.get(Path(p).stem.upper(), []) for p in paths]
+
+
+def describe_windows(exclude: list[str], exclusions: str | None) -> str:
+    parts = [", ".join(x.replace(":", "..") for x in exclude)] if exclude else []
+    if exclusions:
+        parts.append(f"per-symbol windows from {Path(exclusions).name}")
+    return "; ".join(parts) or "none"
+
+
+def placebo_pool(asof: list[tuple], excluded: np.ndarray) -> list[int]:
+    """As-of positions that may serve as placebos: those whose build bar is not excluded (all of
+    them when every one is)."""
+    return [n for n, a in enumerate(asof) if not excluded[a[0]]] or list(range(len(asof)))
+
+
+def pool_offsets(pool: list[int], n_asof: int) -> list[int]:
+    """The PLACEBO_OFFSETS steps after n_asof along the pool (cyclic)."""
+    p = bisect.bisect_left(pool, n_asof)
+    return [pool[(p + k) % len(pool)] for k in PLACEBO_OFFSETS]
 
 
 def outcome(bars: pd.DataFrame, t: int, lo: float, hi: float, side: str, atr: float, forward: int) -> str | None:
@@ -123,9 +190,9 @@ def _direction(close: float, row: pd.Series) -> str:
 
 
 def walk(bars: pd.DataFrame, horizon: str = "swing", step: int = 5, forward: int = 20,
-         build=L.build_levels, symbol: str = "") -> pd.DataFrame:
+         build=L.build_levels, symbol: str = "", windows: list[tuple[str, str]] = ()) -> pd.DataFrame:
     """One row per (as-of bar, level): symbol, rank, side, daily direction, width and distance in
-    ATRs, outcome and the placebo outcomes."""
+    ATRs, outcome, the placebo outcomes (from non-excluded as-of bars) and the `excluded` flag."""
     ind = I.compute_all(bars)
     start = max(int(C.HORIZONS[horizon]["levels_lookback"]), C.HIGH_52W_BARS, 220)
     asof, rows = [], []
@@ -144,10 +211,13 @@ def walk(bars: pd.DataFrame, horizon: str = "swing", step: int = 5, forward: int
                              "lo_atr": (lo - close) / atr, "hi_atr": (hi - close) / atr,
                              "width_atr": (hi - lo) / atr, "dist_atr": abs(z["price"] - close) / atr,
                              "outcome": outcome(bars, t, lo, hi, side, atr, forward), "n_asof": len(asof) - 1})
+    excl = excluded_bars(bars.index, list(windows), forward)
+    pool = placebo_pool(asof, excl)
     for r in rows:
+        r["excluded"] = bool(excl[r["t"]])
         r["placebo"] = []
-        for k in PLACEBO_OFFSETS:
-            t2, close2, atr2 = asof[(r["n_asof"] + k) % len(asof)]
+        for n2 in pool_offsets(pool, r["n_asof"]):
+            t2, close2, atr2 = asof[n2]
             r["placebo"].append(outcome(bars, t2, close2 + r["lo_atr"] * atr2, close2 + r["hi_atr"] * atr2,
                                         r["side"], atr2, forward))
     return pd.DataFrame(rows)
@@ -247,10 +317,10 @@ def box_build(bars: pd.DataFrame):
 
 
 def _run(args: tuple) -> pd.DataFrame:
-    path, horizon, step, forward, source = args
+    path, horizon, step, forward, source, windows = args
     bars = load_csv(path)
     build = box_build(bars) if source == "boxes" else L.build_levels
-    return walk(bars, horizon, step, forward, build=build, symbol=Path(path).stem.upper())
+    return walk(bars, horizon, step, forward, build=build, symbol=Path(path).stem.upper(), windows=windows)
 
 
 def report(rows: pd.DataFrame, meta: dict) -> str:
@@ -286,25 +356,30 @@ def main(argv=None) -> int:
                     help="period boundaries by build date; two dates give train / validation / test")
     ap.add_argument("--source", default="levels", choices=["levels", "boxes"],
                     help="zones to test: the key levels, or the edges of the active trading-range box")
+    ap.add_argument("--exclude", nargs="*", default=[], metavar="START:END")
+    ap.add_argument("--exclusions", help="exclusions.csv from clean_data.py")
     ap.add_argument("--jobs", type=int, default=1, help="files run in parallel")
     ap.add_argument("--out", help="directory for rows.csv and report.md")
     a = ap.parse_args(argv)
-    tasks = [(p, a.horizon, a.step, a.forward, a.source) for p in a.csv]
+    wins = file_windows(a.csv, a.exclude, a.exclusions)
+    tasks = [(p, a.horizon, a.step, a.forward, a.source, w) for p, w in zip(a.csv, wins)]
     if a.jobs > 1:
         with ProcessPoolExecutor(a.jobs) as ex:
             results = list(ex.map(_run, tasks))
     else:
         results = [_run(t) for t in tasks]
     for path, rows in zip(a.csv, results):
-        print(f"\n{Path(path).stem}\n{summarize(rows, interval=False).round(3).to_string()}")
+        if not rows.empty:
+            print(f"\n{Path(path).stem}\n{summarize(rows[~rows['excluded']], interval=False).round(3).to_string()}")
     rows = pd.concat(results, ignore_index=True)
     if rows.empty:
         print("no levels built", file=sys.stderr)
         return 1
     if a.split:
         rows["period"] = periods(rows["date"], a.split)
+    main_rows = rows[~rows["excluded"]]
     if len(results) > 1:
-        print(f"\nall files\n{summarize(rows).round(3).to_string()}")
+        print(f"\nall files\n{summarize(main_rows).round(3).to_string()}")
     if a.out:
         out = Path(a.out)
         out.mkdir(parents=True, exist_ok=True)
@@ -313,8 +388,9 @@ def main(argv=None) -> int:
         meta = {"source": a.source, "horizon": a.horizon, "step": a.step, "forward": a.forward, "files": len(a.csv),
                 "first build": rows["date"].min().strftime("%Y-%m-%d"),
                 "last build": rows["date"].max().strftime("%Y-%m-%d"),
-                "split": ", ".join(a.split) or "none"}
-        (out / "report.md").write_text(report(rows, meta), encoding="utf-8")
+                "split": ", ".join(a.split) or "none", "excluded": describe_windows(a.exclude, a.exclusions),
+                "rows": f"{len(rows)} ({int(rows['excluded'].sum())} excluded)"}
+        (out / "report.md").write_text(report(main_rows, meta), encoding="utf-8")
         print(f"\nwrote {out / 'rows.csv'} and {out / 'report.md'}")
     return 0
 

@@ -21,6 +21,9 @@ for a long), `broken` = hit (a gap through counts). The placebo puts a stop at t
 from the close on other as-of bars. A structural stop that is hit less often than the placebo
 means the level protects the stop.
 
+--exclude START:END and --exclusions FILE drop rows as in levels_backtest.py (outcome span touches a
+window; such as-of bars are never placebos); the report covers the rows left.
+
 Pre-registered reading: a source passes when its edge interval lies above 0 in the train period
 and its edge is positive in validation; the test period is read once, afterwards.
 """
@@ -88,8 +91,10 @@ def nearest(prices: list[float], close: float, atr: float, side: str) -> float |
     return min(ok) if ok else None
 
 
-def walk(bars: pd.DataFrame, step: int = 5, forward: int = 20, symbol: str = "") -> pd.DataFrame:
-    """Rows of kind 'source' (one per source and side) and 'stop' (structural stops)."""
+def walk(bars: pd.DataFrame, step: int = 5, forward: int = 20, symbol: str = "",
+         windows: list[tuple[str, str]] = ()) -> pd.DataFrame:
+    """Rows of kind 'source' (one per source and side) and 'stop' (structural stops), with the
+    `excluded` flag; placebos come from non-excluded as-of bars."""
     ind = I.compute_all(bars)
     atr_s = ind["atr14"]
     start = max(int(C.HORIZONS["swing"]["levels_lookback"]), C.HIGH_52W_BARS, 220)
@@ -129,10 +134,13 @@ def walk(bars: pd.DataFrame, step: int = 5, forward: int = 20, symbol: str = "")
             rows.append({**base, "kind": "stop", "source": "structural_stop", "side": side,
                          "stop_atr": (stop - close) / atr, "width_atr": np.nan, "dist_atr": abs(stop - close) / atr,
                          "outcome": stop_outcome(bars, t, stop, side, forward)})
+    excl = B.excluded_bars(bars.index, list(windows), forward)
+    pool = B.placebo_pool(asof, excl)
     for r in rows:
+        r["excluded"] = bool(excl[r["t"]])
         r["placebo"] = []
-        for k in B.PLACEBO_OFFSETS:
-            t2, close2, atr2 = asof[(r["n_asof"] + k) % len(asof)]
+        for n2 in B.pool_offsets(pool, r["n_asof"]):
+            t2, close2, atr2 = asof[n2]
             if r["kind"] == "source":
                 r["placebo"].append(B.outcome(bars, t2, close2 + r["lo_atr"] * atr2, close2 + r["hi_atr"] * atr2,
                                               r["side"], atr2, forward))
@@ -149,8 +157,8 @@ def stop_outcome(bars: pd.DataFrame, t: int, stop: float, side: str, forward: in
 
 
 def _run(args: tuple) -> pd.DataFrame:
-    path, step, forward = args
-    return walk(B.load_csv(path), step, forward, symbol=Path(path).stem.upper())
+    path, step, forward, windows = args
+    return walk(B.load_csv(path), step, forward, symbol=Path(path).stem.upper(), windows=windows)
 
 
 def _table(df: pd.DataFrame) -> str:
@@ -187,10 +195,13 @@ def main(argv=None) -> int:
     ap.add_argument("--step", type=int, default=5)
     ap.add_argument("--forward", type=int, default=20)
     ap.add_argument("--split", nargs="*", default=[], metavar="DATE")
+    ap.add_argument("--exclude", nargs="*", default=[], metavar="START:END")
+    ap.add_argument("--exclusions", help="exclusions.csv from clean_data.py")
     ap.add_argument("--jobs", type=int, default=1)
     ap.add_argument("--out")
     a = ap.parse_args(argv)
-    tasks = [(p, a.step, a.forward) for p in a.csv]
+    wins = B.file_windows(a.csv, a.exclude, a.exclusions)
+    tasks = [(p, a.step, a.forward, w) for p, w in zip(a.csv, wins)]
     if a.jobs > 1:
         with ProcessPoolExecutor(a.jobs) as ex:
             results = list(ex.map(_run, tasks))
@@ -203,15 +214,18 @@ def main(argv=None) -> int:
         return 1
     if a.split:
         rows["period"] = B.periods(rows["date"], a.split)
-    print(B.summarize(rows[rows["kind"] == "source"], by="source").round(3).to_string())
+    main_rows = rows[~rows["excluded"]]
+    print(B.summarize(main_rows[main_rows["kind"] == "source"], by="source").round(3).to_string())
     if a.out:
         out = Path(a.out)
         out.mkdir(parents=True, exist_ok=True)
         rows.assign(placebo=rows["placebo"].map(lambda ps: ";".join(str(x) for x in ps))) \
             .drop(columns=["n_asof"]).to_csv(out / "rows.csv", index=False)
         meta = {"step": a.step, "forward": a.forward, "files": len(a.csv), "zone_half_atr": ZONE_HALF_ATR,
-                "reach_atr": REACH_ATR, "split": ", ".join(a.split) or "none"}
-        (out / "report.md").write_text(report(rows, meta), encoding="utf-8")
+                "reach_atr": REACH_ATR, "split": ", ".join(a.split) or "none",
+                "excluded": B.describe_windows(a.exclude, a.exclusions),
+                "rows": f"{len(rows)} ({int(rows['excluded'].sum())} excluded)"}
+        (out / "report.md").write_text(report(main_rows, meta), encoding="utf-8")
         print(f"wrote {out / 'rows.csv'} and {out / 'report.md'}")
     return 0
 

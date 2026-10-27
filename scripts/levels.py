@@ -7,6 +7,10 @@ reacted on earlier tests (holds, breaks, role reversals, recent ones counting mo
 weight of candidates in it. A support zone lies wholly below the close and a resistance zone
 wholly above it.
 
+The zones are reference only: in walk-forward tests they held no more often than the same zones
+moved to other prices (references/methodology.md, "Do the levels hold?"), so the stops and targets
+in scorecard.py come from volatility bands instead.
+
 Everything uses split-adjusted OHLC (the prices that actually traded, continuous across splits)
 over the last ctx["hz"]["levels_lookback"] bars, as of the last complete bar. Definitions are
 documented in references/methodology.md.
@@ -677,5 +681,6 @@ def build_levels(ctx) -> dict:
                               f"{reach:g} ATR of the close, {C.LEVELS_PER_SIDE} in all"},
         "supports": supports,
         "resistances": resistances,
+        "evidence": {"backtested_edge": False, "note": C.LEVELS_EVIDENCE_NOTE},
         "notes": notes,
     }

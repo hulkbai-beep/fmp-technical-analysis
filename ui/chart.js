@@ -218,7 +218,7 @@
     const price = `<tr class="price"><td>${esc(t("k_price"))}</td><td>${esc(fmtPx(d.key_numbers?.price))}</td><td></td><td></td></tr>`;
     return card(t("t_levels"), `<div class="ta-tablewrap"><table class="ta-table"><thead><tr><th></th><th>${esc(t("th_level"))}</th>
       <th>${esc(t("th_dist"))}</th><th class="l">${esc(t("th_src"))}</th></tr></thead>
-      <tbody>${res}${price}${sup}</tbody></table></div>`);
+      <tbody>${res}${price}${sup}</tbody></table></div><p class="ta-small">${esc(t("lv_ref"))}</p>`);
   }
 
   function notesHtml(d) {
