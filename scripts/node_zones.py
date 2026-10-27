@@ -17,8 +17,9 @@ From the last `lookback` bars (about 3 years of daily bars):
      weak / medium / strong / very_strong at the GRADE_CUTS of the density (fitted to the sample's
      50 matched zones: 64% exact there; refitted leaving one symbol out, about 58% against 42% for
      always 'strong'; very_strong is under-called);
-  5. side: support when the zone's midpoint is below the last close, else resistance (67 of the
-     sample's 71 zones; the other 4 contain the close).
+  5. side: resistance when the zone lies wholly above the last close, else support (a zone holding
+     the close counts as support). The sample's 71 zones follow this for 67; its 10 zones that hold
+     the close are 6 support, 4 resistance (the midpoint rule also gets 67).
 
 On the sample, with daily bars, the zones overlap the table's by a mean IoU of about 0.6 (50 of 71
 at 0.5 or more); the table's zones moved 2-8% at random reach about 0.43. A time-at-price profile
@@ -90,7 +91,7 @@ def grade(density: float) -> str:
 
 def node_zones(bars: pd.DataFrame, lookback: int = LOOKBACK) -> list[dict]:
     """Zones of the last `lookback` bars, highest first: zone_low, zone_high, share (of the
-    window's volume), density, grade and side relative to the last close."""
+    window's volume), density, grade and side (resistance wholly above the last close, else support)."""
     d = bars[["high", "low", "close", "volume"]].dropna().iloc[-lookback:]
     if len(d) < 2:
         return []
@@ -120,7 +121,7 @@ def node_zones(bars: pd.DataFrame, lookback: int = LOOKBACK) -> list[dict]:
         density = share / ((z_hi - z_lo) / (hi - lo))
         out.append({"zone_low": z_lo, "zone_high": z_hi, "share": share, "density": float(density),
                     "grade": grade(density),
-                    "side": "support" if (z_lo + z_hi) / 2 < close else "resistance"})
+                    "side": "resistance" if z_lo > close else "support"})
     return sorted(out, key=lambda z: -z["zone_low"])
 
 
@@ -128,7 +129,8 @@ def reference_block(bars: pd.DataFrame, atr: float | None, lookback: int = LOOKB
                     per_side: int = PER_SIDE) -> dict:
     """levels.node_zones in metrics.json: the zone holding the last close (if any) and the nearest
     `per_side` zones wholly above and wholly below it, nearest first, with the distance of the near
-    edge from the close (% and ATRs). Reference only (NOTE)."""
+    edge from the close (% and ATRs). Zones above are resistance, the one holding the close and
+    those below support. Reference only (NOTE)."""
     d = bars[["high", "low", "close", "volume"]].dropna().iloc[-lookback:]
     notes = [] if len(d) >= lookback else [f"node-zone window has only {len(d)} bars (lookback {lookback})"]
     if len(d) >= 2 and d["close"].iloc[-1] > 0:
@@ -144,7 +146,7 @@ def reference_block(bars: pd.DataFrame, atr: float | None, lookback: int = LOOKB
     close = float(d["close"].iloc[-1])
 
     def row(z: dict, edge: float | None) -> dict:
-        out = {k: z[k] for k in ("zone_low", "zone_high", "grade", "density", "share")}
+        out = {k: z[k] for k in ("zone_low", "zone_high", "side", "grade", "density", "share")}
         out["distance_pct"] = 0.0 if edge is None else edge / close - 1.0
         out["distance_atr"] = None if not atr else (0.0 if edge is None else (edge - close) / atr)
         return out

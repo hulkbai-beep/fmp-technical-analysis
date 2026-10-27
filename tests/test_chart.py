@@ -53,6 +53,14 @@ def _modules(ctx):
                             "touches": 5, "volume_share": 0.1, "score": 1.5,
                             "distance_pct": p / close - 1, "distance_atr": (p - close) / 2.0}
     anchor = str(bars.index[-40].date())
+    node = lambda a, b, g, dist: {"zone_low": a, "zone_high": b, "side": None, "grade": g, "density": 1.1,  # noqa: E731
+                                  "share": 0.05, "distance_pct": dist, "distance_atr": dist * 20}
+    node_zones = {"available": True, "lookback_bars": 600, "window_start": str(bars.index[0].date()),
+                  "window_end": str(bars.index[-1].date()), "n_zones": 5,
+                  "at_close": {**node(close * 0.98, close * 1.02, "strong", 0.0), "distance_atr": 0.0},
+                  "above": [node(close * 1.05, close * 1.08, "medium", 0.05), node(close * 1.12, close * 1.2, "weak", 0.12)],
+                  "below": [node(close * 0.9, close * 0.95, "very_strong", -0.05)],
+                  "evidence": {"backtested_edge": False, "note": "reference only"}, "notes": ["window note"]}
     return {
         "regime": {"available": True, "label": "Strong uptrend / normal vol", "type": "trend", "direction_sign": 1,
                    "direction": {"label": "Strong uptrend"}, "strength": {"adx": 31.2, "label": "trending"},
@@ -64,7 +72,8 @@ def _modules(ctx):
                    "resistances": [level(close * 1.04, ["pivot_high", "avwap_high_52w"])],
                    "high_52w": hi, "low_52w": lo, "lookback_bars": 126, "window_start": str(bars.index[-126].date()),
                    "volume_profile": {"available": True, "poc": (edges[9] + edges[10]) / 2, "value_area_low": edges[3],
-                                      "value_area_high": edges[10], "bins": bins, "hvn": [], "lvn": [], "lookback_bars": 126}},
+                                      "value_area_high": edges[10], "bins": bins, "hvn": [], "lvn": [], "lookback_bars": 126},
+                   "node_zones": node_zones},
         "signals": {"available": True, "primary_horizon": 10, "active": [{
             "id": "uptrend_pullback", "name": "Uptrend pullback", "bias": 1, "pillar": "mean_reversion",
             "fired_date": str(bars.index[-1].date()), "bars_ago": 0, "regime_used": "above_200", "confidence": "normal",
@@ -140,6 +149,33 @@ def test_summary_panels_follow_the_module_outputs():
     assert len(d["data_notes"]["approximations"]) == 2
 
 
+def test_node_zones_carry_their_side_by_position():
+    ctx, d = _data()
+    nz = d["node_zones"]
+    assert nz["available"] and nz["lookback"] == 756 and nz["lookback_bars"] == 600
+    assert nz["window_start"] == str(ctx["bars"].index[0].date()) and nz["note"] == "reference only"
+    # above the close = resistance; the zone holding it and those below = support
+    assert [z["side"] for z in nz["above"]] == ["resistance", "resistance"]
+    assert nz["at_close"]["side"] == "support" and [z["side"] for z in nz["below"]] == ["support"]
+    assert [z["grade"] for z in nz["above"]] == ["medium", "weak"] and nz["below"][0]["grade"] == "very_strong"
+    assert set(nz["above"][0]) == set(chart.NODE_KEYS) | {"side"}
+    assert nz["above"][0]["zone_low"] < nz["above"][1]["zone_low"]     # nearest first, as in metrics
+
+
+def test_node_zones_missing_or_unavailable():
+    ctx = _ctx()
+    m = _modules(ctx)
+    m["levels"]["node_zones"] = {"available": False, "reason": "too wide", "notes": []}
+    assert chart.build_chart_data(ctx, m)["node_zones"] == {"available": False, "reason": "too wide"}
+    m["levels"]["node_zones"] = {"available": True, "at_close": None, "above": [], "below": []}
+    nz = chart.build_chart_data(ctx, m)["node_zones"]
+    assert nz["available"] and nz["at_close"] is None and nz["above"] == nz["below"] == []
+    del m["levels"]["node_zones"]
+    assert chart.build_chart_data(ctx, m)["node_zones"]["available"] is False
+    del m["levels"]
+    assert chart.build_chart_data(ctx, m)["node_zones"] == {"available": False, "reason": "levels module unavailable"}
+
+
 def test_avwap_series_fall_back_to_volume_flow_anchors(monkeypatch):
     monkeypatch.setitem(sys.modules, "modules", None)   # import modules -> ImportError
     ctx, d = _data()
@@ -187,6 +223,12 @@ def test_chart_data_from_the_real_module_builders():
     assert all(p["weight"] is not None for p in d["scorecard"]["pillars"])
     assert d["volume_profile"]["available"] and d["volume_profile"]["bins"]
     assert d["levels"]["supports"] or d["levels"]["resistances"]
+    nz, src = d["node_zones"], m["levels"]["node_zones"]
+    assert nz["available"] and src["available"] and nz["lookback_bars"] == src["lookback_bars"] == 700
+    assert [(z["zone_low"], z["side"]) for z in nz["above"]] == [
+        (pytest.approx(z["zone_low"], rel=1e-5), "resistance") for z in src["above"]]
+    assert [z["side"] for z in nz["below"]] == [z["side"] for z in src["below"]] == ["support"] * len(src["below"])
+    assert (nz["at_close"] is None) == (src["at_close"] is None)
     assert set(d["avwaps"]) == {a["anchor"] for a in m["volume_flow"]["anchored_vwaps"]}
     assert d["avwaps"]["ytd_start"][-1][1] == pytest.approx(
         next(a["vwap"] for a in m["volume_flow"]["anchored_vwaps"] if a["anchor"] == "ytd_start"), abs=1e-4)

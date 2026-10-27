@@ -1,7 +1,7 @@
 // Technical-analysis chart for chart.html and the local app (ui/index.html): hand-drawn SVG, no
 // libraries. TAChart.render(root, data) draws the header, the main chart (candles, SMAs, anchored
-// VWAPs, support/resistance zones, earnings markers, volume-profile sidebar, volume / RSI / RS
-// sub-panels), chart 2 (price action after Al Brooks), chart 3 (candlestick patterns) and the side
+// VWAPs, support/resistance zones, ~3-year node zones, earnings markers, volume-profile sidebar,
+// volume / RSI / RS sub-panels), chart 2 (price action after Al Brooks), chart 3 (candlestick patterns) and the side
 // panels from the JSON that scripts/chart.py builds. Every number shown comes from that JSON; this
 // file only lays it out (weekly candles are precomputed too).
 (function (global) {
@@ -16,6 +16,7 @@
   const MIN_VIEW = 10;        // fewest daily bars a zoom can show
   const WEEKLY_MIN_DAYS = 140; // a weekly-default chart shows daily candles for views up to ~6 months
   const RANGES = [["1m", 1], ["3m", 3], ["6m", 6], ["ytd", 0], ["1y", 12]];
+  const NODE_SHADE = { weak: 0.45, medium: 0.65, strong: 0.85, very_strong: 1 };   // node-zone fill by density grade
   let uid = 0;
 
   // ------------------------------------------------------------------ formatting
@@ -32,6 +33,13 @@
   };
   const fmtPP = v => isNum(v) ? fmtSigned(v * 100, 0) + "pp" : "–";
   const pctCls = v => !isNum(v) || v === 0 ? "" : v > 0 ? "pos" : "neg";
+  // years the node-zone window spans: "3" for the full lookback, e.g. "1.2" for a stock listed ~14 months ago
+  function nodeYears(nz) {
+    const n = Math.min(nz?.lookback_bars ?? Infinity, nz?.lookback ?? Infinity);
+    if (!isNum(n)) return "3";
+    const y = n / 252;
+    return y >= 1 && Math.abs(y - Math.round(y)) < 0.05 ? String(Math.round(y)) : Math.max(0.1, y).toFixed(1);
+  }
   function fmtVol(v) {
     if (!isNum(v)) return "–";
     const a = Math.abs(v);
@@ -221,6 +229,34 @@
       <tbody>${res}${price}${sup}</tbody></table></div><p class="ta-small">${esc(t("lv_ref"))}</p>`);
   }
 
+  // ~3-year node zones, top to bottom: resistance (above the close) farthest first, the zone holding the
+  // close (support) or else the close itself, then support below
+  function nodeZonesHtml(d) {
+    const nz = d.node_zones || {}, title = t("t_nodes", nodeYears(nz));
+    if (!nz.available) return card(title, `<p class="ta-small">${esc(t("nz_none"))}${nz.reason ? " " + esc(nz.reason) : ""}</p>`);
+    const close = esc(fmtPx(d.key_numbers?.price));
+    const row = (x, at) => {
+      const r = x.side === "resistance";
+      const dist = at ? `${esc(t("nz_at"))}<br><span class="ta-sub">${esc(t("k_price"))} ${close}</span>`
+        : `${esc(fmtPct(x.distance_pct, 1, true))}<br><span class="ta-sub">${esc(fmtSigned(x.distance_atr, 1))} ATR</span>`;
+      // four columns so the card fits a phone: the volume share sits under the zone
+      return `<tr${at ? ' class="price"' : ""}><td class="${r ? "neg" : "pos"}"><b>${esc(t(r ? "nz_res" : "nz_sup"))}</b></td>
+        <td>${esc(fmtPx(x.zone_low))}–${esc(fmtPx(x.zone_high))}<br><span class="ta-sub">${esc(t("nz_share", fmtPct(x.share, 1)))}</span></td><td>${dist}</td>
+        <td title="${esc(t("nz_density_title", fmtNum(x.density, 2)))}">${esc(tv("gr_", x.grade))}<br><span class="ta-sub">${esc(fmtNum(x.density, 2))}×</span></td></tr>`;
+    };
+    const above = nz.above || [], below = nz.below || [];
+    const mid = nz.at_close ? row(nz.at_close, true)
+      : `<tr class="price"><td>${esc(t("k_price"))}</td><td>${close}</td><td></td><td></td></tr>`;
+    const notes = [t("nz_window", nz.lookback_bars, nz.window_start ?? "")];
+    if (isNum(nz.lookback) && nz.lookback_bars < nz.lookback) notes.push(t("nz_short", nz.lookback_bars, nz.lookback));
+    if (!above.length) notes.push(t("nz_no_above"));
+    if (!below.length) notes.push(t("nz_no_below"));
+    return card(title, `<div class="ta-tablewrap"><table class="ta-table ta-nz"><thead><tr><th></th><th>${esc(t("th_zone"))}</th>
+      <th>${esc(t("th_dist"))}</th><th>${esc(t("th_density"))}</th></tr></thead>
+      <tbody>${above.map(x => row(x, false)).reverse().join("")}${mid}${below.map(x => row(x, false)).join("")}</tbody></table></div>
+      ${notes.map(x => `<p class="ta-small">${esc(x)}</p>`).join("")}<p class="ta-small">${esc(t("nz_ref"))}</p>`);
+  }
+
   function notesHtml(d) {
     const n = d.data_notes || {};
     let h = "";
@@ -245,6 +281,8 @@
     }
     if (d.levels?.supports?.length) items.push({ key: "supports", label: t("lg_supports"), color: "var(--up)", fill: "var(--up-zone)", sw: "box" });
     if (d.levels?.resistances?.length) items.push({ key: "resistances", label: t("lg_resistances"), color: "var(--down)", fill: "var(--down-zone)", sw: "box" });
+    if (d.node_zones?.available) items.push({ key: "nodes", label: t("lg_nodes", nodeYears(d.node_zones)), color: "var(--muted)", sw: "box dash",
+      fill: "linear-gradient(var(--nz-r-edge) 50%, var(--nz-s-edge) 50%)", title: t("t_nodes", nodeYears(d.node_zones)) });
     if (d.volume_profile?.available) items.push({ key: "vp", label: t("lg_vp"), color: "var(--va)", sw: "box" });
     if ((d.earnings_dates || []).length) items.push({ key: "earnings", label: t("lg_earnings"), color: "var(--text)", sw: "box" });
     return items;
@@ -429,6 +467,33 @@
       }
     }
 
+    // ~3-year node zones (reference only): faint bands with dashed edges under the key-level zones, red
+    // when wholly above the last close (resistance), green when holding it or below (support), darker
+    // for a higher density. A longer map than the key levels, so they never widen the price scale; each
+    // visible band gets a label at its left end, under the lines and candles (skipped where it would sit
+    // on another label).
+    let nodes = "", nodeTags = "";
+    const nz = d.node_zones || {};
+    if (on("nodes") && nz.available) {
+      const used = [], yrs = nodeYears(nz);
+      for (const x of [...(nz.above || []), ...(nz.at_close ? [nz.at_close] : []), ...(nz.below || [])]) {
+        if (!isNum(x.zone_low) || !isNum(x.zone_high) || x.zone_high <= lo || x.zone_low >= hi) continue;
+        const k = x.side === "resistance" ? "r" : "s", yh = y(x.zone_high), yl = y(x.zone_low);
+        const y1 = Math.max(top, yh), y2 = Math.min(top + HM, yl);
+        nodes += `<rect x="0" y="${y1.toFixed(1)}" width="${PW}" height="${Math.max(1, y2 - y1).toFixed(1)}" fill="var(--nz-${k})" fill-opacity="${NODE_SHADE[x.grade] ?? 0.65}"/>`;
+        for (const ye of [yh, yl]) {
+          if (ye < top || ye > top + HM) continue;
+          const yy = Math.round(ye) + 0.5;
+          nodes += `<line x1="0" x2="${PW}" y1="${yy}" y2="${yy}" stroke="var(--nz-${k}-edge)" stroke-dasharray="5 4"/>`;
+        }
+        const ty = y2 - y1 >= 15 ? y1 + 11 : (y1 + y2) / 2 + 4;
+        if (ty - 9 < top || ty > top + HM - 1 || used.some(u => Math.abs(u - ty) < 12)) continue;
+        used.push(ty);
+        const label = t("nz_label", yrs, t(k === "r" ? "nz_res" : "nz_sup"), W < 560 ? null : tv("gr_", x.grade));
+        nodeTags += `<text class="nz ${k} halo" x="4" y="${ty.toFixed(1)}">${esc(label)}</text>`;
+      }
+    }
+
     // support / resistance zones: light green / light red bands with a line at the level price, drawn
     // under the moving averages and the candles. Their tags sit on the price axis, never over a candle.
     const tags = [];
@@ -585,7 +650,7 @@
     box.innerHTML = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" tabindex="0" aria-label="${esc(t("chart_aria"))}">
       <defs><clipPath id="${id}-clip"><rect x="0" y="${top}" width="${PW}" height="${HM}"/></clipPath></defs>
       ${back}<line x1="0" x2="${PW}" y1="${top + HM + 0.5}" y2="${top + HM + 0.5}" stroke="var(--border)"/>
-      <g clip-path="${clip}">${zones}</g><g clip-path="${clip}">${lineSvg}</g><g clip-path="${clip}" shape-rendering="crispEdges">${candles}</g>${g}${sub}${axis}${fore}
+      <g clip-path="${clip}">${nodes}${zones}${nodeTags}</g><g clip-path="${clip}">${lineSvg}</g><g clip-path="${clip}" shape-rendering="crispEdges">${candles}</g>${g}${sub}${axis}${fore}
       <line class="xh xv" x1="0" x2="0" y1="${top}" y2="${bottom}" visibility="hidden"/>
       <line class="xh xy" x1="0" x2="${PW}" y1="0" y2="0" visibility="hidden"/>
       <g class="xp" visibility="hidden"><rect x="${XA - 4}" y="-9" width="${AX - 4}" height="18" rx="4" fill="var(--text)"/><text x="${XA}" y="4" style="fill:var(--card)"></text></g>
@@ -987,7 +1052,7 @@
     const legend = legendItems(data, st.prep).map(it =>
       `<button type="button" class="ta-chip" data-k="${esc(it.key)}" aria-pressed="${st.vis[it.key] !== false}"${it.title ? ` title="${esc(it.title)}"` : ""}>` +
       `<span class="sw ${it.sw}" style="color:${it.color}${it.fill ? ";background:" + it.fill : ""}"></span>${esc(it.label)}</button>`).join("");
-    const vp = data.volume_profile || {};
+    const vp = data.volume_profile || {}, nz = data.node_zones || {};
     root.innerHTML = `${headerHtml(data)}
       <div class="ta-grid">
         <section class="ta-card ta-main">
@@ -1004,12 +1069,13 @@
           <div class="ta-chartbox"></div>
           <p class="ta-note ta-wknote" hidden>${esc(t("weekly_note"))}</p>
           <p class="ta-note">${esc(t("approx"))}${vp.available && vp.lookback_bars ? " " + esc(t("vp_window", vp.lookback_bars, vp.window_start ?? "")) : ""}</p>
+          ${nz.available ? `<p class="ta-note">${esc(t("nz_chart_note", nodeYears(nz), nz.lookback_bars, nz.window_start ?? ""))}</p>` : ""}
           <p class="ta-note">${esc(t("kb_hint"))}</p>
         </section>
         ${patternCardHtml(st, "pa", data)}
         ${patternCardHtml(st, "cs", data)}
         <aside class="ta-side">${regimeHtml(data.regime)}${scoreHtml(data.scorecard)}${signalsHtml(data.signals)}</aside>
-        <div class="ta-below">${levelsHtml(data)}${notesHtml(data)}</div>
+        <div class="ta-below"><div class="ta-stack">${levelsHtml(data)}${nodeZonesHtml(data)}</div>${notesHtml(data)}</div>
       </div>
       <p class="ta-disclaimer">${esc(I18N.lang() === "zh" ? t("disclaimer") : data.meta?.disclaimer || t("disclaimer"))}</p>`;
     st.box = root.querySelector(".ta-main .ta-chartbox");
