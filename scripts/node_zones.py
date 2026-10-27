@@ -24,6 +24,10 @@ On the sample, with daily bars, the zones overlap the table's by a mean IoU of a
 at 0.5 or more); the table's zones moved 2-8% at random reach about 0.43. A time-at-price profile
 (volume set to 1 per bar) places the zones as well; volume shows in the grades (Spearman 0.75 vs
 0.65). Some of the table's edges are rounded by hand, which this does not copy.
+
+analyze.py shows them as levels.node_zones (reference_block), reference only: bought or shorted for
+1-3 months they did no better than the same zones at other prices, and the grades did not sort the
+outcomes (node_zones_backtest.py, tranche_backtest.py; methodology.md H.2).
 """
 from __future__ import annotations
 
@@ -42,6 +46,12 @@ CORE_SHARE = 0.3            # zone = the node's bins at >= this share of its smo
 MIN_NODE_SHARE = 0.005      # nodes holding less of the window's volume are dropped
 GRADE_CUTS = ((1.9, "very_strong"), (0.8, "strong"), (0.5, "medium"), (0.0, "weak"))
 GRADES = ("weak", "medium", "strong", "very_strong")
+PER_SIDE = 3                # zones listed above and below the close in levels.node_zones
+NOTE = ("reference only: about 3 years of daily bars, each bar's volume spread over its range; the grade is the "
+        "zone's volume density, not a strength. In walk-forward tests on 32 US stocks and ETFs (daily bars "
+        "2008-2026), buying or shorting at these zones for 1-3 months did no better than at the same zones moved "
+        "to other prices, the grades did not sort the outcomes, and as tranche prices they matched a fixed ladder "
+        "of the same depth (references/methodology.md H.2)")
 
 
 def smooth(x: np.ndarray, sigma: float = SMOOTH_BINS) -> np.ndarray:
@@ -108,6 +118,48 @@ def node_zones(bars: pd.DataFrame, lookback: int = LOOKBACK) -> list[dict]:
                     "grade": grade(density),
                     "side": "support" if (z_lo + z_hi) / 2 < close else "resistance"})
     return sorted(out, key=lambda z: -z["zone_low"])
+
+
+def reference_block(bars: pd.DataFrame, atr: float | None, lookback: int = LOOKBACK,
+                    per_side: int = PER_SIDE) -> dict:
+    """levels.node_zones in metrics.json: the zone holding the last close (if any) and the nearest
+    `per_side` zones wholly above and wholly below it, nearest first, with the distance of the near
+    edge from the close (% and ATRs). Reference only (NOTE)."""
+    d = bars[["high", "low", "close", "volume"]].dropna().iloc[-lookback:]
+    notes = [] if len(d) >= lookback else [f"node-zone window has only {len(d)} bars (lookback {lookback})"]
+    zones = node_zones(d, lookback)
+    if not zones:
+        return {"available": False, "reason": "no volume profile (too few bars, no range or no volume)",
+                "notes": notes}
+    close = float(d["close"].iloc[-1])
+
+    def row(z: dict, edge: float | None) -> dict:
+        out = {k: z[k] for k in ("zone_low", "zone_high", "grade", "density", "share")}
+        out["distance_pct"] = 0.0 if edge is None else edge / close - 1.0
+        out["distance_atr"] = None if not atr else (0.0 if edge is None else (edge - close) / atr)
+        return out
+
+    above = sorted((z for z in zones if z["zone_low"] > close), key=lambda z: z["zone_low"])
+    below = [z for z in zones if z["zone_high"] < close]          # node_zones lists highest first
+    at = next((z for z in zones if z["zone_low"] <= close <= z["zone_high"]), None)
+    for side, zs in (("above", above), ("below", below)):
+        if not zs:
+            notes.append(f"no node zone {side} the last close: price is near the "
+                         f"{'top' if side == 'above' else 'bottom'} of the window's range")
+    return {
+        "available": True,
+        "lookback_bars": len(d),
+        "window_start": d.index[0].strftime("%Y-%m-%d"),
+        "window_end": d.index[-1].strftime("%Y-%m-%d"),
+        "method": {"bin_share": BIN_SHARE, "smooth_bins": SMOOTH_BINS, "core_share": CORE_SHARE,
+                   "min_node_share": MIN_NODE_SHARE, "grade_cuts": {g: cut for cut, g in GRADE_CUTS}},
+        "n_zones": len(zones),
+        "at_close": None if at is None else row(at, None),
+        "above": [row(z, z["zone_low"]) for z in above[:per_side]],
+        "below": [row(z, z["zone_high"]) for z in below[:per_side]],
+        "evidence": {"backtested_edge": False, "note": NOTE},
+        "notes": notes,
+    }
 
 
 def main(argv=None) -> int:

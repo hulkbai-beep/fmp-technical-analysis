@@ -102,8 +102,17 @@ def test_edge_interval_is_reproducible_and_brackets_the_edge():
     assert (lo, hi) == B.edge_interval(rows)
     assert lo <= s.loc["all", "edge"] <= hi
     assert s.loc["all", "gap"] == (rows["outcome"] == "gap").sum()
-    one = rows[(rows["symbol"] == "A") & (rows["date"].dt.year == 2019)]
-    assert all(np.isnan(B.edge_interval(one)))
+    one = rows[(rows["date"].dt.year == 2019) & (rows["date"].dt.month == 1)]
+    assert set(one["symbol"]) == {"A", "B"} and all(np.isnan(B.edge_interval(one)))
+
+
+def test_block_keys_are_calendar_months_across_symbols():
+    rows = _rows()
+    keys = B.block_keys(rows)
+    assert len(keys) == len(rows)
+    assert set(keys) == {f"{y}-{m:02d}" for y in (2019, 2020, 2021) for m in (1, 2)}
+    jan = rows["date"].dt.strftime("%Y-%m") == "2020-01"
+    assert set(rows.loc[jan, "symbol"]) == {"A", "B"} and set(keys[jan.to_numpy()]) == {"2020-01"}
 
 
 def test_periods_split():

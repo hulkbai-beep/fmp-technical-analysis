@@ -164,7 +164,7 @@ def _table(df: pd.DataFrame) -> str:
 def report(rows: pd.DataFrame, meta: dict) -> str:
     out = ["# Breakout follow-through", ""] + [f"- {k}: {v}" for k, v in meta.items()]
     out += ["", "`hold_rate` = continuation rate (the barrier in the breakout's direction first). Edge interval: "
-            f"{B.BOOT_CI:.0%} cluster bootstrap over (symbol, year) blocks.", "", "## By variant", "",
+            f"{B.BOOT_CI:.0%} cluster bootstrap over {B.BOOT_BLOCKS}.", "", "## By variant", "",
             _table(B.summarize(rows, by="kind")), ""]
     for kind in sorted(rows["kind"].unique()):
         g = rows[rows["kind"] == kind]

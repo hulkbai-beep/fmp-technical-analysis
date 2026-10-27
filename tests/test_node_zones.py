@@ -45,6 +45,32 @@ def test_two_bands_give_two_zones_graded_by_density():
     assert abs(sum(z["share"] for z in zones) - 1) < 0.1
 
 
+def test_reference_block_splits_zones_around_the_close():
+    # three bands; the last bars trade in the middle one, so it holds the close
+    bars = band_bars([(100, 110, 1e6), (160, 165, 3e6), (130, 135, 2e6)])
+    out = NZ.reference_block(bars, atr=2.0, lookback=len(bars))
+    assert out["available"] and out["lookback_bars"] == len(bars) and out["n_zones"] == 3
+    close = bars["close"].iloc[-1]
+    at, (up,), (down,) = out["at_close"], out["above"], out["below"]
+    assert at["zone_low"] <= close <= at["zone_high"] and at["distance_pct"] == 0 == at["distance_atr"]
+    assert up["zone_low"] > close and down["zone_high"] < close
+    assert up["distance_pct"] == up["zone_low"] / close - 1 and up["distance_atr"] == (up["zone_low"] - close) / 2.0
+    assert down["distance_pct"] == down["zone_high"] / close - 1 < 0
+    assert {"zone_low", "zone_high", "grade", "density", "share"} <= up.keys()
+    assert out["evidence"] == {"backtested_edge": False, "note": NZ.NOTE} and out["notes"] == []
+
+
+def test_reference_block_nearest_first_per_side_and_notes():
+    bands = [(100, 104, 1e6), (110, 114, 1e6), (120, 124, 1e6), (130, 134, 1e6), (140, 144, 1e6)]
+    bars = band_bars(bands, n_each=60)
+    out = NZ.reference_block(bars, atr=None, lookback=1000, per_side=2)
+    assert out["above"] == [] and out["at_close"] is not None
+    assert [z["zone_high"] for z in out["below"]] == sorted((z["zone_high"] for z in out["below"]), reverse=True)
+    assert len(out["below"]) == 2 and all(z["distance_atr"] is None for z in out["below"])
+    assert any("only 300 bars" in n for n in out["notes"]) and any("no node zone above" in n for n in out["notes"])
+    assert NZ.reference_block(bars.iloc[:1], atr=1.0)["available"] is False
+
+
 def test_grade_cuts():
     assert NZ.grade(0.1) == "weak" and NZ.grade(0.5) == "medium"
     assert NZ.grade(0.8) == "strong" and NZ.grade(2.5) == "very_strong"

@@ -32,8 +32,10 @@ marks no level; it is scored the same way. Hold rates rise with the distance fro
 (price that has travelled further is more stretched), and the placebo has the same distances, so
 edge = hold rate - placebo hold rate is what the zone's location adds.
 
-The 90% interval for the edge is a cluster bootstrap: (symbol, calendar year) blocks are resampled
-whole, because zones built 5 bars apart share most of their bars and are not independent draws.
+The 90% interval for the edge is a cluster bootstrap: calendar-month blocks (every symbol's rows of
+the month together) are resampled whole, because zones built 5 bars apart share most of their bars
+and zones of different symbols in the same month share the market's moves; zone and placebo come
+from different dates, so those moves stay in the edge.
 Tables are given per rank, per symbol, per daily direction at the build bar (Uptrend / Downtrend /
 Mixed, as in the regime module) and per period (--split dates).
 
@@ -65,6 +67,7 @@ PLACEBO_OFFSETS = (17, 41)  # placebo as-of bars: this many test steps later (cy
 BOOT_REPS = 2000            # cluster-bootstrap resamples for the edge interval
 BOOT_CI = 0.90              # two-sided coverage of that interval
 BOOT_SEED = 20261026        # fixed, so a report is reproducible
+BOOT_BLOCKS = "calendar-month blocks (all symbols' rows of a month together)"
 RESOLVED = ("held", "broken")
 
 
@@ -236,12 +239,18 @@ def _edge(c: np.ndarray) -> np.ndarray:
         return c[..., 0] / (c[..., 0] + c[..., 1]) - c[..., 2] / (c[..., 2] + c[..., 3])
 
 
+def block_keys(g: pd.DataFrame) -> np.ndarray:
+    """Bootstrap block of each row: the calendar month of its date, all symbols together (an
+    earlier (symbol, year) blocking treated symbols in the same year as independent and gave
+    intervals 1.5-2 times too narrow)."""
+    return pd.DatetimeIndex(g["date"]).strftime("%Y-%m").to_numpy()
+
+
 def edge_interval(g: pd.DataFrame, reps: int = BOOT_REPS, ci: float = BOOT_CI,
                   seed: int = BOOT_SEED) -> tuple[float, float]:
-    """Cluster-bootstrap interval for the edge, resampling (symbol, year) blocks whole;
+    """Cluster-bootstrap interval for the edge, resampling block_keys blocks whole;
     (nan, nan) with fewer than two blocks."""
-    keys = list(zip(g["symbol"] if "symbol" in g else [""] * len(g), pd.DatetimeIndex(g["date"]).year))
-    blocks = np.array([_counts(b) for _, b in g.groupby(pd.Series(keys, index=g.index).astype(str), sort=True)])
+    blocks = np.array([_counts(b) for _, b in g.groupby(block_keys(g), sort=True)])
     if len(blocks) < 2:
         return np.nan, np.nan
     rng = np.random.default_rng(seed)
@@ -336,7 +345,7 @@ def report(rows: pd.DataFrame, meta: dict) -> str:
 
     out = [f"# Walk-forward check: {meta.get('source', 'levels')}", ""]
     out += [f"- {k}: {v}" for k, v in meta.items()]
-    out += ["", f"Edge interval: {BOOT_CI:.0%} cluster bootstrap over (symbol, year) blocks, {BOOT_REPS} resamples.", ""]
+    out += ["", f"Edge interval: {BOOT_CI:.0%} cluster bootstrap over {BOOT_BLOCKS}, {BOOT_REPS} resamples.", ""]
     sections = [("By rank", None), ("By daily direction at the build bar", "direction")]
     if "period" in rows:
         sections.append(("By period", "period"))

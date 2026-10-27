@@ -33,7 +33,7 @@ Pre-registered hypotheses (written before the first run):
   node_vs_placebo: mean node gain - mean placebo gain;
   node_vs_atr, node_vs_pct: the mean of node gain - atr (pct) gain on the same dates.
 Each passes the screen when it is at least MIN_EDGE_PCT percent, its 90% cluster-bootstrap interval
-over (symbol, year) blocks lies above 0 and it is positive in each period (--split); it passes the
+over calendar-month blocks lies above 0 and it is positive in each period (--split); it passes the
 multiple-testing gate when its (1 - 0.10 / 3) interval lies above 0. The other comparisons
 (dca, lump, node_mid, fill rates) are context.
 
@@ -128,7 +128,7 @@ def walk(bars: pd.DataFrame, step: int = 5, window: int = 63, symbol: str = "",
 
 # ----------------------------------------------------------------------------- statistics
 def _blocks(g: pd.DataFrame) -> np.ndarray:
-    return (g["symbol"].astype(str) + ":" + pd.DatetimeIndex(g["date"]).year.astype(str)).to_numpy()
+    return B.block_keys(g)
 
 
 def _boot(blocks: np.ndarray, stat, ci: float) -> tuple[float, float]:
@@ -213,7 +213,7 @@ def _fmt(df: pd.DataFrame) -> str:
 def report(rows: pd.DataFrame, meta: dict) -> str:
     out = ["# Tranche buying at node zones", ""] + [f"- {k}: {v}" for k, v in meta.items()]
     out += ["", "gain = log(close at t / average cost) in percent; positive = cheaper than buying all at t. "
-            f"Intervals: {B.BOOT_CI:.0%} cluster bootstrap over (symbol, year) blocks; bonf_lo at "
+            f"Intervals: {B.BOOT_CI:.0%} cluster bootstrap over {B.BOOT_BLOCKS}; bonf_lo at "
             f"{1 - 0.10 / len(HYPOTHESES):.2%}.", "", "## Verdict, main sample", "", _fmt(verdict(rows)), "",
             "## Plans, main sample", "", _fmt(plan_table(rows)), "",
             f"Buying it all at t returned {rows['ret_lump'].mean():.2f}% on average over the window "

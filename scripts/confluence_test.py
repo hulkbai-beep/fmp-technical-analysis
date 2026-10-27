@@ -182,7 +182,7 @@ def report(rows: pd.DataFrame, meta: dict) -> str:
     v = verdict(main)
     out = ["# Confluence: do levels where several methods agree hold better?", ""]
     out += [f"- {k}: {x}" for k, x in meta.items()]
-    out += ["", f"Edge interval: {B.BOOT_CI:.0%} cluster bootstrap over (symbol, year) blocks.", "",
+    out += ["", f"Edge interval: {B.BOOT_CI:.0%} cluster bootstrap over {B.BOOT_BLOCKS}.", "",
             f"Pre-registered verdict (main sample): {'PASS' if v['pass'] else 'no pass'}; fixed-width edges "
             + ", ".join(f"{c}: {e:.3f}" for c, e in v["edges"].items())
             + "; 3+ edge per period " + ", ".join(f"{p} {e:.3f}" for p, e in v["per_period_3plus"].items()), ""]

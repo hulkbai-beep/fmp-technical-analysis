@@ -366,7 +366,7 @@ def walk(bars: pd.DataFrame, step: int = 5, forward: int = 20, symbol: str = "",
 
 # ----------------------------------------------------------------------------- statistics
 def _blocks(g: pd.DataFrame) -> pd.Series:
-    return pd.Series(list(zip(g["symbol"], pd.DatetimeIndex(g["date"]).year)), index=g.index).astype(str)
+    return pd.Series(B.block_keys(g), index=g.index)
 
 
 def _boot(blocks: np.ndarray, stat, ci: float, reps: int = B.BOOT_REPS) -> tuple[float, float]:
@@ -383,7 +383,7 @@ def _boot(blocks: np.ndarray, stat, ci: float, reps: int = B.BOOT_REPS) -> tuple
 
 
 def versus_counts(a: pd.DataFrame, b: pd.DataFrame) -> pd.DataFrame:
-    """Per (symbol, year) block: held / broken of a, then of b (fib vs alt)."""
+    """Per bootstrap block (B.block_keys): held / broken of a, then of b (fib vs alt)."""
     def cnt(g):
         k = _blocks(g)
         return pd.DataFrame({"h": (g["outcome"] == "held").groupby(k).sum(),
@@ -476,7 +476,7 @@ def report(rows: pd.DataFrame, meta: dict) -> str:
     main = rows[~rows["excluded"]]
     out = [f"# Support/resistance methods, {meta.get('bars', 'daily').split(',')[0]} screen", ""] + [f"- {k}: {v}" for k, v in meta.items()]
     out += ["", f"Edge = hold rate - placebo hold rate (fib_ret / fib_ext: - the other ratios of the same swings). "
-            f"Intervals: cluster bootstrap over (symbol, year) blocks, {SCREEN_CI:.0%} and the multiple-testing "
+            f"Intervals: cluster bootstrap over {B.BOOT_BLOCKS}, {SCREEN_CI:.0%} and the multiple-testing "
             f"{1 - (1 - SCREEN_CI) / N_HYPOTHESES:.2%} (bonf_lo). pnl in ATRs per trade after costs.", ""]
     keep = ["n", "resolved", "hold_rate", "compare_hold", "edge", "edge_lo", "edge_hi", "bonf_lo"]
     for name, g in (("main sample", main), ("full sample", rows)):

@@ -402,6 +402,12 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   extreme when price is at one.
 - **Reference only:** `levels.evidence` = `{backtested_edge: false, note}` (`LEVELS_EVIDENCE_NOTE`), for the
   reasons in H.1. The report, the chart and the contract (`levels_note`) carry the note.
+- **Node zones (reference):** `levels.node_zones` adds the ~3-year node zones of H.2 (`scripts/node_zones.py`,
+  the last 756 daily bars whatever the horizon): the zone holding the close (`at_close`) and the nearest
+  `PER_SIDE` = 3 zones wholly above and wholly below it, each with its grade, volume share and the distance
+  of its near edge from the close (% and ATRs). It carries its own `evidence` (`node_zones.NOTE`, for the
+  reasons in H.2), feeds nothing else (scorecard, scenarios, stops) and is not in the contract; an error
+  there leaves the key levels as they are, with a note.
 
 ### H.1 Do the levels hold? (test plan V2, 2026-10-27)
 - **Data:** the 32-symbol universe, daily bars 2005-2026 and regular-session hourly bars 2010-2026 (no pre- or
@@ -470,22 +476,30 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   +0.09. Hold rates: S1 +0.2 points, R1 −1.2. Every interval includes 0. A same-date check (fixed 1- and
   2-ATR slabs wholly on a node vs wholly off one, date and distance fixed effects) also found no
   difference (S1 63 bars +0.02 and +0.05 ATR, intervals including 0).
-- **Intervals:** the reports' (symbol, year) bootstrap treats symbols in the same year as independent,
-  but zone and placebo come from different dates, so market-wide moves stay in the edge. Clustered by
-  calendar month the intervals are 1.5-2 times wider: S1 ret21 −0.19 to +0.21, ret63 −0.32 to +0.42. So
-  "no edge" rules out edges above about 0.4 ATR (about 0.8% of price) per 63-bar trade, not smaller ones.
+- **Intervals:** every backtest now resamples calendar-month blocks (all symbols' rows of a month
+  together, `levels_backtest.block_keys`). The earlier (symbol, year) blocks treated symbols in the same
+  year as independent, but zone and placebo come from different dates, so market-wide moves stay in the
+  edge, and those intervals were 1.5-2 times too narrow. By month: S1 ret21 −0.19 to +0.21, ret63 −0.32 to
+  +0.42. So "no edge" rules out edges above about 0.4 ATR (about 0.8% of price) per 63-bar trade, not
+  smaller ones. A 63-bar outcome spans three months, so neighbouring blocks still share some of it and
+  even these intervals may be a little narrow.
 - **Drawdown:** after an S1 buy the 63-bar drawdown was 3.97 ATR vs 4.10 at the placebo, edge +0.13
-  (about 0.25% of price). The (symbol, year) interval (+0.01 to +0.25) put it through the screen, but by
+  (about 0.25% of price). The earlier (symbol, year) interval (+0.01 to +0.25) put it through the screen, but by
   month it is −0.17 to +0.41, about half of it is a calendar effect shared by other symbols, and with
   504- or 1008-bar windows it is +0.08 (intervals including 0). It is not a result.
+- **Secondary rows** (not pre-registered; the report's tables hold about 40 such edges): by month,
+  S2's hold rate is 3.5 points above its placebo (+1.1 to +5.8), though its returns match it (63 bars
+  −0.07 ATR, −0.55 to +0.42), and shorts at R2 had a shallower 63-bar drawdown (+0.67 ATR, +0.31 to
+  +1.01). Among 40 edges a few 90% intervals clear 0 by chance; these would need a new pre-registered
+  test before being read as findings.
 - **Grades do not sort outcomes:** S1 63-bar return edge weak +0.06, medium +0.02, strong −0.01, very
-  strong +0.25 (−0.37 to +0.90); at 21 bars weak is best. Rank correlations of density with each edge are
+  strong +0.25 (−0.31 to +0.81); at 21 bars weak is best. Rank correlations of density with each edge are
   about 0. Raw hold rates do rise with grade, because higher grades are wider zones; the same-shape
   placebo rises the same way.
 - **Tranche buying** (`scripts/tranche_backtest.py`, same data, 23,177 dates, 3 hypotheses written before
   the run): a third bought at the close, two limit orders over the next 63 bars, unfilled parts bought at
   bar 63's close, so plans differ only in average cost. Node ladder (tops of S1 and S2, median 2.6% and
-  7.5% below the close) vs the same offsets on other dates: −0.07% (−0.25 to +0.12). Its raw lead over a
+  7.5% below the close) vs the same offsets on other dates: −0.07% (by month −0.38 to +0.24). Its raw lead over a
   5% / 10% ladder (+0.21%) and a 2 / 4 ATR ladder (+0.19%) is exposure: its nearer limits keep it
   invested 63% of the window vs 54% and 58% in a sample that rose 2.9% per window (+0.93% vs 5/10% in
   rising windows, −0.91% in falling ones). With each symbol's drift removed the three ladders tie

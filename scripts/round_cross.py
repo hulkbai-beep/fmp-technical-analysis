@@ -19,7 +19,7 @@ reaches both is `ambiguous` and, like `open` (neither), left out. ret_session = 
 crossing direction over the next SESSION_BARS bars, in ATRs.
 
 edge = continuation rate after round crosses - after the control crosses; the interval is the
-cluster bootstrap over (symbol, year) blocks. --exclude / --exclusions drop events whose span
+cluster bootstrap over calendar-month blocks. --exclude / --exclusions drop events whose span
 touches a window (hourly-only rows apply with --hourly). Pre-registered reading: passes when the
 edge is at least 0.02, its 90% interval lies above 0 and it is positive in each period.
 """

@@ -184,7 +184,7 @@ def verdict(rows: pd.DataFrame) -> pd.DataFrame:
 def report(rows: pd.DataFrame, meta: dict) -> str:
     main = rows[~rows["excluded"]]
     out = ["# Levels by market state", ""] + [f"- {k}: {v}" for k, v in meta.items()]
-    out += ["", f"Edge interval: {B.BOOT_CI:.0%} cluster bootstrap over (symbol, year) blocks. "
+    out += ["", f"Edge interval: {B.BOOT_CI:.0%} cluster bootstrap over {B.BOOT_BLOCKS}. "
             "Placebo: same symbol, same state bucket.", ""]
     for name, g in (("main sample (windows excluded)", main), ("full sample", rows)):
         v = verdict(g)

@@ -174,7 +174,7 @@ def _table(df: pd.DataFrame) -> str:
 def report(rows: pd.DataFrame, meta: dict) -> str:
     src, stop = rows[rows["kind"] == "source"], rows[rows["kind"] == "stop"]
     out = ["# Support/resistance source screen and stop test", ""] + [f"- {k}: {v}" for k, v in meta.items()]
-    out += ["", f"Edge interval: {B.BOOT_CI:.0%} cluster bootstrap over (symbol, year) blocks.", ""]
+    out += ["", f"Edge interval: {B.BOOT_CI:.0%} cluster bootstrap over {B.BOOT_BLOCKS}.", ""]
     periods = sorted(rows["period"].unique()) if "period" in rows else [None]
     for p in periods:
         g = src if p is None else src[src["period"] == p]

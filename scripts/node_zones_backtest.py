@@ -27,9 +27,9 @@ other as-of bars of the same series (levels_backtest.PLACEBO_OFFSETS steps on, n
 ones), and is scored the same way. Nodes cover most of the window's range, so the moved zone usually
 lies on another node: the test asks whether the nearest node's exact edges matter. Edge = zone -
 placebo: hold rate, mean ret, and for mae placebo depth - zone depth (positive when the zone limits
-the drawdown). Its 90% interval is a cluster bootstrap over (symbol, year) blocks; zone and placebo
-come from different dates, so market-wide moves stay in the edge, and clustering by calendar month
-widens the intervals 1.5-2 times (methodology.md H.2).
+the drawdown). Its 90% interval is a cluster bootstrap over calendar-month blocks (all symbols'
+rows of a month together, levels_backtest.block_keys): zone and placebo come from different dates,
+so market-wide moves stay in the edge and symbols of the same month are not independent draws.
 
 Pre-registered hypotheses (written before the first run):
   s1_ret21, s1_ret63: S1 trades, ret edge, holds 21 and 63;
@@ -175,9 +175,8 @@ def _mean_edge(c: np.ndarray) -> np.ndarray:
 
 def mean_interval(g: pd.DataFrame, col: str, sign: float = 1.0, ci: float = B.BOOT_CI,
                   reps: int = B.BOOT_REPS, seed: int = B.BOOT_SEED) -> tuple[float, float]:
-    """Cluster-bootstrap interval of mean(zone) - mean(placebo) over (symbol, year) blocks."""
-    keys = g["symbol"].astype(str) + ":" + pd.DatetimeIndex(g["date"]).year.astype(str)
-    blocks = np.array([_sums(b, col, sign) for _, b in g.groupby(keys.to_numpy(), sort=True)])
+    """Cluster-bootstrap interval of mean(zone) - mean(placebo) over B.block_keys blocks."""
+    blocks = np.array([_sums(b, col, sign) for _, b in g.groupby(B.block_keys(g), sort=True)])
     if len(blocks) < 2:
         return np.nan, np.nan
     rng = np.random.default_rng(seed)
@@ -271,7 +270,7 @@ def report(rows: pd.DataFrame, meta: dict, holds: tuple) -> str:
     out = ["# Long-window node zones: position-holder test", ""] + [f"- {k}: {v}" for k, v in meta.items()]
     out += ["", f"Edges: zone - moved-zone placebo. ret in ATRs per trade after costs (shorts at resistance "
             f"count the fall); mae edge = placebo depth - zone depth. Intervals: {B.BOOT_CI:.0%} cluster "
-            f"bootstrap over (symbol, year) blocks; bonf_lo at {1 - 0.10 / N_HYPOTHESES:.2%}.", "",
+            f"bootstrap over {B.BOOT_BLOCKS}; bonf_lo at {1 - 0.10 / N_HYPOTHESES:.2%}.", "",
             "## Verdict, main sample", "", _fmt_table(verdict(rows)), ""]
     key = rows.assign(key=np.where(rows["side"] == "support", "S", "R") + rows["rank"].astype(str))
     out += ["## Trades by zone (S1, S2, R1, R2)", "", trade_table(key, "key", holds)]

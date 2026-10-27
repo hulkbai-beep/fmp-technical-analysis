@@ -597,11 +597,23 @@ def _shortfall_note(side: str, n: int, weak: int, extremes: dict) -> str:
     return msg
 
 
+def _node_zones(bars: pd.DataFrame, atr: float, notes: list) -> dict:
+    """node_zones.reference_block on the bars up to as_of (about 3 years, whatever the horizon);
+    reference only, and an error leaves the key levels as they are."""
+    try:
+        import node_zones   # imports this module for its profile binning
+        return node_zones.reference_block(bars, atr)
+    except Exception as exc:  # shown for reference only; record why it is missing
+        notes.append(f"node zones skipped ({type(exc).__name__}: {exc})")
+        return {"available": False, "reason": f"internal error: {type(exc).__name__}: {exc}"}
+
+
 def build_levels(ctx) -> dict:
     """H: swing pivots, supply/demand zones, volume profile, 52-week range, gaps, SMAs and anchored
     VWAPs as weighted candidates; per side of the close, density zones scored by earlier reactions
     and candidate weight; the nearest qualifying zone and the strongest within reach, up to
-    C.LEVELS_PER_SIDE supports and resistances around the last close."""
+    C.LEVELS_PER_SIDE supports and resistances around the last close. Also, for reference, the
+    ~3-year volume-profile node zones around the close (node_zones.py)."""
     notes: list[str] = []
     bars = ctx.get("bars")
     if bars is not None and ctx.get("as_of"):
@@ -682,5 +694,6 @@ def build_levels(ctx) -> dict:
         "supports": supports,
         "resistances": resistances,
         "evidence": {"backtested_edge": False, "note": C.LEVELS_EVIDENCE_NOTE},
+        "node_zones": _node_zones(bars, atr, notes),
         "notes": notes,
     }

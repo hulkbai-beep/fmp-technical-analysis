@@ -189,7 +189,7 @@ def _vtable(v: pd.DataFrame) -> str:
 def report(rows: pd.DataFrame, meta: dict) -> str:
     main = rows[~rows["excluded"]]
     out = ["# Support/resistance on hourly bars", ""] + [f"- {k}: {v}" for k, v in meta.items()]
-    out += ["", f"Edge interval: {B.BOOT_CI:.0%} cluster bootstrap over (symbol, year) blocks.", ""]
+    out += ["", f"Edge interval: {B.BOOT_CI:.0%} cluster bootstrap over {B.BOOT_BLOCKS}.", ""]
     out += ["## Sources, main sample (windows excluded)", "", _vtable(verdict(main[main["kind"] == "source"])), ""]
     out += ["## Key levels S1-S3 / R1-R3 on hourly bars, main sample", "",
             _vtable(verdict(main[main["kind"] == "level"])), ""]
