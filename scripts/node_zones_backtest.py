@@ -31,8 +31,9 @@ the drawdown). Its 90% interval is a cluster bootstrap over 3-month calendar blo
 all symbols' rows of those months together, levels_backtest.block_keys): zone and placebo come from
 different dates, so market-wide moves stay in the edge, symbols of the same months are not
 independent draws, and an entry wait plus a 63-bar hold spans 3-4 months (1-month blocks gave
-intervals about 1.4 times narrower). The blocking was changed after the first run, on review; it
-only widened the intervals of hypotheses that had all failed.
+intervals about 1.4 times narrower). The blocking was changed after the first run, on review: under
+(symbol, year) blocks s1_mae63 had passed the screen (not the Bonferroni gate); with 3-month blocks
+nothing passes.
 
 Pre-registered hypotheses (written before the first run):
   s1_ret21, s1_ret63: S1 trades, ret edge, holds 21 and 63;

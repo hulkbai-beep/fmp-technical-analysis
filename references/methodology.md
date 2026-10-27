@@ -368,7 +368,7 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   touching bar itself the reaction counts only if the bar opened in or beyond the zone, otherwise the
   outcome is `ambiguous` and left out. Each zone is compared with the same zone shape moved to other
   dates; the edge gets a 90% cluster-bootstrap interval over calendar-month blocks (all symbols' rows of
-  a month together, `block_keys`; (symbol, year) blocks before 2026-10-27, see H.2), and tables are split
+  a month together, `block_keys`; (symbol, year) blocks until the reruns of 2026-10-27, see H.2), and tables are split
   by rank, symbol, daily direction at the build bar and period (`--split`). `scripts/fetch_csv.py` saves
   the 32-symbol baseline universe (trending, declining, sideways, high-volatility stocks and ETFs) as CSVs
   for it. On six large-cap stocks (1995-2018 daily bars, with the earlier one-sided touch rule) neither
@@ -435,8 +435,8 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   flips; confirmation by a close or a wick back out of the zone; Fibonacci retracements (0.382, 0.5, 0.618)
   vs 0.30 / 0.45 / 0.70 of the same swings; Fibonacci extensions (1.272, 1.618) vs 1.15 / 1.45 / 1.80;
   weekly and monthly floor pivots and Camarilla levels; the Ichimoku cloud and Kijun. **None passed.**
-  Fibonacci retracements did slightly worse than the other ratios (−1.1 points, interval −1.9 to −0.3);
-  extensions +1.4 (−0.6 to +3.5). A limit-order trade at each zone (stop 0.5 ATR beyond, target 1 ATR,
+  Fibonacci retracements did slightly worse than the other ratios (−1.1 points, interval −1.8 to −0.4);
+  extensions +1.4 (−0.5 to +3.2). A limit-order trade at each zone (stop 0.5 ATR beyond, target 1 ATR,
   0.05% cost per side) lost 0.03-0.09 ATR per trade in every family, about as much as the same trade at
   the moved zones.
 - **Hourly, 2010-2021** (39 items; `intraday_levels.py`, `sr_methods.py --hourly`, `round_cross.py`,
@@ -449,6 +449,14 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   never read.
 - **Earlier baselines** (key levels, boxes, breakouts, sources, structural stop, regimes) moved by less
   than 0.5 points on the cleaned data.
+- **Intervals by calendar month** (rerun 2026-10-27; the first runs used (symbol, year) blocks, see H.2;
+  the intervals in this section are the month ones): no verdict changed in any of the 13 daily or 39
+  hourly items. Fibonacci retracements stay below their comparison, which uses other ratios of the same
+  swings, so market-wide moves cancel. The one by-side row that had met the interval and period
+  conditions under (symbol, year) blocks, hourly opening-range support (+0.8 points, under the 2-point
+  gate), no longer clears 0 (−0.2 to +1.8). Across these and the baseline reports of H, about 40 of
+  some 750 intervals moved across 0, in both directions: mostly rows by symbol, side or period, plus a
+  few main- and full-sample rows such as the measured-move target; none is a pre-registered verdict.
 - **Reading:** 52 method variants, none better than the same zone at other prices. The zones are kept as
   reference prices (where price has traded and reacted before), not as places likely to hold. Stops and
   targets come from the calibrated volatility bands in section 6.
@@ -491,8 +499,9 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   edge; and a wait of up to 21 bars plus a 63-bar hold spans 3-4 months, so 1-month blocks still share
   outcomes. From (symbol, year) to 1-month to 3-month blocks, S1 ret63 widened from −0.18..+0.28 to
   −0.32..+0.42 to −0.50..+0.55, and ret21 from −0.10..+0.11 to −0.19..+0.21 to −0.23..+0.24. The blocking
-  was changed after the first run, on review; every hypothesis had already failed under the narrowest
-  intervals, so no verdict changed. "No edge" rules out edges above about 0.55 ATR (about 1% of price)
+  was changed after the first run, on review. Nothing had passed the Bonferroni gate even under the
+  narrowest intervals; the one screen pass, the S1 63-bar drawdown (below), did not survive the wider
+  blocks. "No edge" rules out edges above about 0.55 ATR (about 1% of price)
   per 63-bar trade and about 0.25 ATR per 21-bar trade, not smaller ones. The numbers below are 3-month
   blocks.
 - **Drawdown:** after an S1 buy the 63-bar drawdown was 3.97 ATR vs 4.10 at the placebo, edge +0.13
