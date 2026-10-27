@@ -22,7 +22,8 @@ sequence), so edge = what the level's location adds within the state.
 
 --exclude drops a window (e.g. 2020-02-20:2020-04-30): a row is dropped when any bar from its build
 bar to the last bar its outcome can use (2 x forward - 1 bars later) falls inside, and such as-of
-bars are never used as placebos. The report gives both the excluded and the full sample.
+bars are never used as placebos. --exclusions FILE adds per-symbol windows from clean_data.py's
+exclusions.csv. The report gives both the excluded and the full sample.
 
 Pre-registered reading (written before the run): a state passes when its bucket's edge interval lies
 above 0 on the main sample (windows excluded) and its edge is positive in each period. The buckets
@@ -89,15 +90,8 @@ def states(bars: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def excluded_bars(index: pd.DatetimeIndex, windows: list[tuple[str, str]], forward: int) -> np.ndarray:
-    """True for build bars whose outcome span (the bar itself to 2 x forward - 1 bars later) touches
-    any window."""
-    inside = np.zeros(len(index), dtype=bool)
-    for a, b in windows:
-        inside |= (index >= pd.Timestamp(a)) & (index <= pd.Timestamp(b))
-    span = 2 * forward
-    hit = np.convolve(inside.astype(int), np.ones(span, dtype=int))[span - 1:span - 1 + len(index)]
-    return hit > 0          # hit[t] counts inside bars in t..t+span-1
+excluded_bars = B.excluded_bars
+parse_windows = B.parse_windows
 
 
 def matched_placebo(rows: pd.DataFrame, bars: pd.DataFrame, asof: pd.DataFrame, key: str, forward: int) -> list:
@@ -211,15 +205,6 @@ def report(rows: pd.DataFrame, meta: dict) -> str:
     return "\n".join(out)
 
 
-def parse_windows(items: list[str]) -> list[tuple[str, str]]:
-    out = []
-    for s in items:
-        a, _, b = s.partition(":")
-        pd.Timestamp(a), pd.Timestamp(b)
-        out.append((a, b))
-    return out
-
-
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("csv", nargs="+")
@@ -227,11 +212,12 @@ def main(argv=None) -> int:
     ap.add_argument("--forward", type=int, default=20)
     ap.add_argument("--split", nargs="*", default=[], metavar="DATE")
     ap.add_argument("--exclude", nargs="*", default=[], metavar="START:END")
+    ap.add_argument("--exclusions", help="exclusions.csv from clean_data.py")
     ap.add_argument("--jobs", type=int, default=1)
     ap.add_argument("--out")
     a = ap.parse_args(argv)
-    windows = parse_windows(a.exclude)
-    tasks = [(p, a.step, a.forward, windows) for p in a.csv]
+    wins = B.file_windows(a.csv, a.exclude, a.exclusions)
+    tasks = [(p, a.step, a.forward, w) for p, w in zip(a.csv, wins)]
     if a.jobs > 1:
         with ProcessPoolExecutor(a.jobs) as ex:
             results = list(ex.map(_run, tasks))
@@ -253,7 +239,7 @@ def main(argv=None) -> int:
             .drop(columns=["n_asof", "all"]).to_csv(out / "rows.csv.gz", index=False)
         meta = {"step": a.step, "forward": a.forward, "files": len(a.csv),
                 "split": ", ".join(a.split) or "none",
-                "excluded": ", ".join(f"{x}..{y}" for x, y in windows) or "none",
+                "excluded": B.describe_windows(a.exclude, a.exclusions),
                 "rows": f"{len(rows)} ({int(rows['excluded'].sum())} excluded)",
                 "cuts": f"adx {ADX_CUTS}, er{ER_BARS} {ER_CUTS}, vr({VR_Q}, {VR_BARS}) {VR_CUTS}, "
                         f"vol pctl terciles"}

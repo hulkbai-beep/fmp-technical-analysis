@@ -228,11 +228,12 @@ def main(argv=None) -> int:
     ap.add_argument("--forward", type=int, default=20)
     ap.add_argument("--split", nargs="*", default=[], metavar="DATE")
     ap.add_argument("--exclude", nargs="*", default=[], metavar="START:END")
+    ap.add_argument("--exclusions", help="exclusions.csv from clean_data.py")
     ap.add_argument("--jobs", type=int, default=1)
     ap.add_argument("--out")
     a = ap.parse_args(argv)
-    windows = RS.parse_windows(a.exclude)
-    tasks = [(p, a.step, a.forward, windows, a.hourly, a.daily) for p in a.csv]
+    wins = B.file_windows(a.csv, a.exclude, a.exclusions, hourly=a.hourly)
+    tasks = [(p, a.step, a.forward, w, a.hourly, a.daily) for p, w in zip(a.csv, wins)]
     if a.jobs > 1:
         with ProcessPoolExecutor(a.jobs) as ex:
             results = list(ex.map(_run, tasks))
@@ -254,7 +255,7 @@ def main(argv=None) -> int:
             .drop(columns=["n_asof"]).to_csv(out / "rows.csv.gz", index=False)
         meta = {"bars": "hourly" if a.hourly else "daily", "step": "once per session" if a.hourly else a.step,
                 "forward": a.forward, "files": len(a.csv), "split": ", ".join(a.split) or "none",
-                "excluded": ", ".join(f"{x}..{y}" for x, y in windows) or "none",
+                "excluded": B.describe_windows(a.exclude, a.exclusions),
                 "rows": f"{len(rows)} ({int(rows['excluded'].sum())} excluded)",
                 "zone (fixed)": f"candidate +- {SS.ZONE_HALF_ATR} ATR, within {SS.REACH_ATR} ATR"}
         (out / "report.md").write_text(report(rows, meta), encoding="utf-8")

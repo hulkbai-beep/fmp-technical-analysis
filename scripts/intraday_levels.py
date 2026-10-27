@@ -220,11 +220,12 @@ def main(argv=None) -> int:
     ap.add_argument("--forward", type=int, default=14)
     ap.add_argument("--split", nargs="*", default=[], metavar="DATE")
     ap.add_argument("--exclude", nargs="*", default=[], metavar="START:END")
+    ap.add_argument("--exclusions", help="exclusions.csv from clean_data.py")
     ap.add_argument("--jobs", type=int, default=1)
     ap.add_argument("--out")
     a = ap.parse_args(argv)
-    windows = RS.parse_windows(a.exclude)
-    tasks = [(p, a.daily, a.build_bar, a.forward, windows) for p in a.csv]
+    wins = B.file_windows(a.csv, a.exclude, a.exclusions, hourly=True)
+    tasks = [(p, a.daily, a.build_bar, a.forward, w) for p, w in zip(a.csv, wins)]
     if a.jobs > 1:
         with ProcessPoolExecutor(a.jobs) as ex:
             results = list(ex.map(_run, tasks))
@@ -248,7 +249,7 @@ def main(argv=None) -> int:
                 "first build": rows["date"].min().strftime("%Y-%m-%d"),
                 "last build": rows["date"].max().strftime("%Y-%m-%d"),
                 "split": ", ".join(a.split) or "none",
-                "excluded": ", ".join(f"{x}..{y}" for x, y in windows) or "none",
+                "excluded": B.describe_windows(a.exclude, a.exclusions),
                 "rows": f"{len(rows)} ({int(rows['excluded'].sum())} excluded)",
                 "sessions rescaled to the daily basis": ", ".join(f"{k} {v:.1%}" for k, v in scaled.items()) or "none"}
         (out / "report.md").write_text(report(rows, meta), encoding="utf-8")

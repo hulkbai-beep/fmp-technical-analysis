@@ -22,6 +22,9 @@ but moves it to other bars of the same series (PLACEBO_OFFSET_BARS later, wrappi
 continuation rate - placebo rate, with the cluster-bootstrap interval of levels_backtest.py.
 In the tables `hold_rate` is the continuation rate.
 
+--exclude START:END and --exclusions FILE drop events as in levels_backtest.py (outcome span
+touches a window); such bars are never placebos. The report covers the events left.
+
 In-sample and without costs; it measures follow-through, not a trading rule.
 """
 from __future__ import annotations
@@ -93,8 +96,9 @@ def donchian_events(bars: pd.DataFrame) -> list[dict]:
     return out
 
 
-def walk(bars: pd.DataFrame, forward: int = 20, symbol: str = "") -> pd.DataFrame:
-    """One row per (event, variant) with the outcome and the placebo outcomes."""
+def walk(bars: pd.DataFrame, forward: int = 20, symbol: str = "",
+         windows: list[tuple[str, str]] = ()) -> pd.DataFrame:
+    """One row per (event, variant) with the outcome, the placebo outcomes and the `excluded` flag."""
     ind = I.compute_all(bars)
     atr = I.atr(bars)
     a = atr.to_numpy(dtype=float)
@@ -103,6 +107,7 @@ def walk(bars: pd.DataFrame, forward: int = 20, symbol: str = "") -> pd.DataFram
     lo_t, hi_t = WARMUP_BARS, len(bars) - forward          # events and placebo bars in [lo_t, hi_t)
     if hi_t - lo_t < 2:
         return pd.DataFrame()
+    excl = B.excluded_bars(bars.index, list(windows), forward)
 
     def ok(t):
         return lo_t <= t < hi_t and np.isfinite(a[t]) and a[t] > 0
@@ -113,14 +118,15 @@ def walk(bars: pd.DataFrame, forward: int = 20, symbol: str = "") -> pd.DataFram
         placebo = []
         for k in PLACEBO_OFFSET_BARS:
             t2 = lo_t + (t - lo_t + k) % (hi_t - lo_t)
-            if not ok(t2):
+            if not ok(t2) or excl[t2]:
                 placebo.append(None)
                 continue
             placebo.append(_label(first_passage(hl, t2, close[t2] + up_atr * a[t2], close[t2] - dn_atr * a[t2],
                                                 forward), d))
         return {"symbol": symbol, "date": bars.index[t], "kind": kind, "side": "up" if d > 0 else "down",
                 "rank": 1, "direction": B._direction(close[t], ind.iloc[t]), "width_atr": width_atr,
-                "dist_atr": up_atr if d > 0 else dn_atr, "outcome": outcome, "placebo": placebo}
+                "dist_atr": up_atr if d > 0 else dn_atr, "outcome": outcome, "placebo": placebo,
+                "excluded": bool(excl[t])}
 
     rows = []
     for e in box_events(bars, atr):
@@ -141,8 +147,8 @@ def walk(bars: pd.DataFrame, forward: int = 20, symbol: str = "") -> pd.DataFram
 
 
 def _run(args: tuple) -> pd.DataFrame:
-    path, forward = args
-    return walk(B.load_csv(path), forward, symbol=Path(path).stem.upper())
+    path, forward, windows = args
+    return walk(B.load_csv(path), forward, symbol=Path(path).stem.upper(), windows=windows)
 
 
 def _table(df: pd.DataFrame) -> str:
@@ -174,10 +180,13 @@ def main(argv=None) -> int:
     ap.add_argument("csv", nargs="+")
     ap.add_argument("--forward", type=int, default=20)
     ap.add_argument("--split", nargs="*", default=[], metavar="DATE")
+    ap.add_argument("--exclude", nargs="*", default=[], metavar="START:END")
+    ap.add_argument("--exclusions", help="exclusions.csv from clean_data.py")
     ap.add_argument("--jobs", type=int, default=1)
     ap.add_argument("--out")
     a = ap.parse_args(argv)
-    tasks = [(p, a.forward) for p in a.csv]
+    wins = B.file_windows(a.csv, a.exclude, a.exclusions)
+    tasks = [(p, a.forward, w) for p, w in zip(a.csv, wins)]
     if a.jobs > 1:
         with ProcessPoolExecutor(a.jobs) as ex:
             results = list(ex.map(_run, tasks))
@@ -190,7 +199,8 @@ def main(argv=None) -> int:
         return 1
     if a.split:
         rows["period"] = B.periods(rows["date"], a.split)
-    print(B.summarize(rows, by="kind").round(3).to_string())
+    main_rows = rows[~rows["excluded"]]
+    print(B.summarize(main_rows, by="kind").round(3).to_string())
     if a.out:
         out = Path(a.out)
         out.mkdir(parents=True, exist_ok=True)
@@ -198,8 +208,10 @@ def main(argv=None) -> int:
             .to_csv(out / "rows.csv", index=False)
         meta = {"forward": a.forward, "barrier_atr": BARRIER_ATR, "files": len(a.csv),
                 "first event": rows["date"].min().strftime("%Y-%m-%d"),
-                "last event": rows["date"].max().strftime("%Y-%m-%d"), "split": ", ".join(a.split) or "none"}
-        (out / "report.md").write_text(report(rows, meta), encoding="utf-8")
+                "last event": rows["date"].max().strftime("%Y-%m-%d"), "split": ", ".join(a.split) or "none",
+                "excluded": B.describe_windows(a.exclude, a.exclusions),
+                "events": f"{len(rows)} ({int(rows['excluded'].sum())} excluded)"}
+        (out / "report.md").write_text(report(main_rows, meta), encoding="utf-8")
         print(f"wrote {out / 'rows.csv'} and {out / 'report.md'}")
     return 0
 

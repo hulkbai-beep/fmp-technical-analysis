@@ -126,11 +126,12 @@ def main(argv=None) -> int:
     ap.add_argument("--horizons", type=int, nargs="+", default=[5, 10, 20])
     ap.add_argument("--split", nargs="*", default=[], metavar="DATE")
     ap.add_argument("--exclude", nargs="*", default=[], metavar="START:END")
+    ap.add_argument("--exclusions", help="exclusions.csv from clean_data.py")
     ap.add_argument("--jobs", type=int, default=1)
     ap.add_argument("--out")
     a = ap.parse_args(argv)
-    windows = RS.parse_windows(a.exclude)
-    tasks = [(p, a.step, tuple(a.horizons), windows) for p in a.csv]
+    wins = B.file_windows(a.csv, a.exclude, a.exclusions, hourly=False)
+    tasks = [(p, a.step, tuple(a.horizons), w) for p, w in zip(a.csv, wins)]
     if a.jobs > 1:
         with ProcessPoolExecutor(a.jobs) as ex:
             results = list(ex.map(_run, tasks))
@@ -148,7 +149,7 @@ def main(argv=None) -> int:
         out.mkdir(parents=True, exist_ok=True)
         meta = {"step": a.step, "horizons": " ".join(map(str, a.horizons)), "files": len(a.csv),
                 "split": ", ".join(a.split) or "none",
-                "excluded": ", ".join(f"{x}..{y}" for x, y in windows) or "none",
+                "excluded": B.describe_windows(a.exclude, a.exclusions),
                 "rows": f"{len(rows)} ({int(rows['excluded'].sum())} excluded)"}
         (out / "report.md").write_text(report(rows, meta), encoding="utf-8")
         print(f"wrote {out / 'report.md'}")
