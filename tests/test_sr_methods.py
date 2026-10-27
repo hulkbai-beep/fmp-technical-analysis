@@ -93,3 +93,34 @@ def test_walk_and_main_report(tmp_path):
                    "--out", str(tmp_path / "o")]) == 0
     text = (tmp_path / "o" / "report.md").read_text(encoding="utf-8")
     assert "## Verdict, main sample" in text and "## Trade measure, main sample" in text
+
+
+def test_hourly_walk_builds_once_per_session_with_daily_pivots():
+    from test_regime_split import hourly_bars
+    import intraday_levels as IL
+    h = hourly_bars(days=120)
+    rows = M.walk(h, forward=14, symbol="H", hourly=True)
+    pos = IL.session_info(h)["pos"].to_numpy()
+    assert set(pos[rows["t"].unique()]) == {M.HOURLY_BUILD_BAR}
+    assert {"pivot_d", "camarilla_d"} <= set(rows["method"])
+    day = h.index.normalize()
+    r = rows[(rows["method"] == "pivot_d")].iloc[0]
+    prev = h[day == day.unique()[list(day.unique()).index(day[r["t"]]) - 1]]
+    p = (prev["high"].max() + prev["low"].min() + prev["close"].iloc[-1]) / 3
+    lv = M.period_levels(h, "D").iloc[r["t"]]
+    assert abs(lv["P"] - p) < 1e-9
+
+
+def test_round_cross_levels_and_walk(tmp_path):
+    import round_cross as RC
+    from test_regime_split import hourly_bars
+    assert RC.crossed(99.5, 100.2, 5.0, 0.0) == 100.0 and RC.crossed(99.5, 100.2, 5.0, 0.3) is None
+    assert RC.crossed(101.0, 99.0, 1.0, 0.0) == 99.0 and RC.crossed(98.0, 98.9, 1.0, 0.7) == 98.7
+    h = hourly_bars(days=200)
+    rows = RC.walk(h, forward=14, symbol="H")
+    assert {"round", "control"} == set(rows["kind"])
+    assert not rows.assign(d=rows["date"].dt.normalize()).duplicated(["kind", "level", "d"]).any()
+    p = tmp_path / "H.csv"
+    h.rename_axis("Date").to_csv(p)
+    assert RC.main([str(p), "--hourly", "--split", "2021-06-01", "--out", str(tmp_path / "o")]) == 0
+    assert "edge" in (tmp_path / "o" / "report.md").read_text(encoding="utf-8")

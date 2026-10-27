@@ -3,10 +3,11 @@
 Clean the daily and hourly bar files before the support/resistance tests, and list every change.
 
   python scripts/clean_data.py --daily DIR [--hourly DIR] --out DIR
-                               [--min-dollar-volume 1e7] [--max-move 0.5]
+                               [--min-dollar-volume 1e7] [--max-move 0.5] [--holdout-from DATE]
 
 Writes OUT/daily/<SYMBOL>.csv, OUT/hourly/<SYMBOL>.csv (with --hourly), OUT/exclusions.csv and
-OUT/report.md. Errors are removed; real extremes are kept. Bars that are right but should not be
+OUT/report.md. With --holdout-from DATE the hourly bars before DATE are also written to
+OUT/hourly-screen/, so a screen run on that folder cannot read the held-out bars. Errors are removed; real extremes are kept. Bars that are right but should not be
 counted (an illiquid stretch, an unverified jump, an hourly session that disagrees with its daily
 bar) stay in the files, so indicators run through them as usual, and are listed in exclusions.csv
 (symbol, applies, start, end, reason). The test scripts take --exclusions FILE and treat each row
@@ -202,6 +203,7 @@ def main(argv=None) -> int:
     ap.add_argument("--out", required=True)
     ap.add_argument("--min-dollar-volume", type=float, default=MIN_DOLLAR_VOLUME)
     ap.add_argument("--max-move", type=float, default=MAX_MOVE)
+    ap.add_argument("--holdout-from", help="also write hourly bars before this date to OUT/hourly-screen")
     a = ap.parse_args(argv)
     out = Path(a.out)
     (out / "daily").mkdir(parents=True, exist_ok=True)
@@ -252,6 +254,11 @@ def main(argv=None) -> int:
             excl += [(sym, "hourly", x, y, why) for x, y, why in session_windows(s)]
             fixed.rename_axis("Date").rename(columns=str.capitalize).to_csv(out / "hourly" / f"{sym}.csv",
                                                                            float_format="%.6f")
+            if a.holdout_from:
+                (out / "hourly-screen").mkdir(exist_ok=True)
+                early = fixed[fixed.index < pd.Timestamp(a.holdout_from)]
+                early.rename_axis("Date").rename(columns=str.capitalize).to_csv(
+                    out / "hourly-screen" / f"{sym}.csv", float_format="%.6f")
             for d, r in adj[adj["status"] != "adjusted"].iterrows():
                 notes.append(f"{sym} {d:%Y-%m-%d}: {r['status']} (bars {r['bars']}, ratio {r['ratio']:.4f}, "
                              f"level {r['level']:.4f})")
@@ -267,6 +274,7 @@ def main(argv=None) -> int:
         ex[c] = pd.to_datetime(ex[c]).dt.strftime("%Y-%m-%d")
     ex.sort_values(["symbol", "start"]).to_csv(out / "exclusions.csv", index=False)
     rep = ["# Data cleaning", "", f"- daily: {a.daily}", f"- hourly: {a.hourly or 'none'}",
+           f"- hourly screen copy: bars before {a.holdout_from}" if a.holdout_from else "- hourly screen copy: none",
            f"- liquidity: trailing {LIQ_BARS}-bar median dollar volume >= {a.min_dollar_volume:,.0f}",
            f"- jumps checked: |close change| > {a.max_move:.0%}", f"- exclusion rows: {len(ex)}", "",
            "## Daily", "", _md(pd.DataFrame(drows).T), ""]

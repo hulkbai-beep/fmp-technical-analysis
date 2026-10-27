@@ -3,7 +3,7 @@
 Daily screen of the support/resistance methods not tested before, with the gates written down
 before the run.
 
-  python scripts/sr_methods.py BARS.csv [BARS.csv ...] [--step 5] [--forward 20]
+  python scripts/sr_methods.py BARS.csv [BARS.csv ...] [--hourly] [--step 5] [--forward 20]
                                [--split 2017-01-01 2022-01-01] [--exclude START:END ...]
                                [--exclusions FILE] [--jobs 4] [--out DIR]
 
@@ -52,7 +52,14 @@ moved-zone placebo hold rate, except for fib_ret and fib_ext, where it is the ho
 Fibonacci zones - that of the other ratios of the same swings (the moved-zone placebo is shown
 beside it). Hypotheses here: fresh, tested_3plus, flip, confirm_close, confirm_wick, fib_ret,
 fib_ext, pivot_w, pivot_m, camarilla_w, camarilla_m, kumo, kijun; tested_1 and tested_2 are
-context. N_HYPOTHESES counts the plan's daily and hourly hypotheses together.
+context. N_HYPOTHESES counts the plan's daily hypotheses with room for the hourly ones.
+
+--hourly: HOURLY.csv files as written by clean_data.py (regular-session bars on the daily price
+basis). Zones are built once per session at the close of its second bar (as in
+intraday_levels.py), from HOURLY_START bars on; every bar count above is in hourly bars (ATR,
+pivots, Ichimoku), and the floor and Camarilla pivots of the previous session are added as
+pivot_d and camarilla_d. --forward defaults to 14 bars (two sessions); --exclusions also applies
+the hourly-only rows.
 """
 from __future__ import annotations
 
@@ -88,7 +95,10 @@ N_HYPOTHESES = 20
 SCREEN_CI = 0.90
 HYPOTHESES = ("fresh", "tested_3plus", "flip", "confirm_close", "confirm_wick", "fib_ret", "fib_ext",
               "pivot_w", "pivot_m", "camarilla_w", "camarilla_m", "kumo", "kijun")
+HOURLY_HYPOTHESES = HYPOTHESES + ("pivot_d", "camarilla_d")
 CONTEXT = ("tested_1", "tested_2")
+HOURLY_BUILD_BAR = 2
+HOURLY_START = 300
 VERSUS = {"fib_ret": "alt_ret", "fib_ext": "alt_ext"}
 CONFIRM = {"confirm_close": 0.0, "confirm_wick": WICK_SHARE}
 
@@ -286,17 +296,25 @@ def fixed_zones(groups: dict[str, list[float]], close: float, atr: float) -> lis
 
 # ----------------------------------------------------------------------------- walk
 def walk(bars: pd.DataFrame, step: int = 5, forward: int = 20, symbol: str = "",
-         windows: list[tuple[str, str]] = ()) -> pd.DataFrame:
-    """One row per (build bar, method, side[, ratio]) with outcome, pnl, placebo outcomes and pnls."""
+         windows: list[tuple[str, str]] = (), hourly: bool = False) -> pd.DataFrame:
+    """One row per (build bar, method, side[, ratio]) with outcome, pnl, placebo outcomes and pnls.
+    hourly: builds at the second bar of each session, with the previous session's pivots."""
     ind = I.compute_all(bars)
     atr_s = ind["atr14"]
     np_bars = tuple(bars[k].to_numpy(dtype=float) for k in ("open", "high", "low", "close"))
     piv = pivot_list(bars, atr_s, C.SWING_ATR)
     fpiv = pivot_list(bars, atr_s, FIB_SWING_ATR)
     pw, pm, ichi = period_levels(bars, "W-FRI"), period_levels(bars, "M"), ichimoku(bars)
+    pd_ = period_levels(bars, "D") if hourly else None
     start = max(int(C.HORIZONS["swing"]["levels_lookback"]), C.HIGH_52W_BARS, 220)
+    if hourly:
+        import intraday_levels as IL
+        pos = IL.session_info(bars)["pos"].to_numpy()
+        builds = [int(t) for t in np.flatnonzero(pos == HOURLY_BUILD_BAR) if HOURLY_START <= t < len(bars) - forward]
+    else:
+        builds = range(start, len(bars) - forward, step)
     asof, rows = [], []
-    for t in range(start, len(bars) - forward, step):
+    for t in builds:
         close, atr = float(np_bars[3][t]), float(atr_s.iat[t])
         if not (np.isfinite(atr) and atr > 0):
             continue
@@ -308,6 +326,9 @@ def walk(bars: pd.DataFrame, step: int = 5, forward: int = 20, symbol: str = "",
                   "camarilla_m": [pm[k].iat[t] for k in ("cR3", "cS3", "cR4", "cS4")],
                   "kumo": [ichi["kumo_top"].iat[t], ichi["kumo_bottom"].iat[t]],
                   "kijun": [ichi["kijun"].iat[t]]}
+        if hourly:
+            groups["pivot_d"] = [pd_[k].iat[t] for k in ("P", "R1", "S1", "R2", "S2")]
+            groups["camarilla_d"] = [pd_[k].iat[t] for k in ("cR3", "cS3", "cR4", "cS4")]
         zones += fixed_zones(groups, close, atr)
         lv = L.build_levels(B._context(bars, ind, t, "swing"))
         if lv.get("available"):
@@ -409,7 +430,7 @@ def pnl_edge(g: pd.DataFrame, ci: float) -> dict:
             "pnl_lo": lo, "pnl_hi": hi}
 
 
-def verdict(rows: pd.DataFrame, methods=HYPOTHESES + CONTEXT) -> pd.DataFrame:
+def verdict(rows: pd.DataFrame, methods=HOURLY_HYPOTHESES + CONTEXT) -> pd.DataFrame:
     """Per method: hold-rate edge with its screen and multiple-testing intervals, per-period edges,
     the trade measure and pass flags."""
     bonf = 1 - (1 - SCREEN_CI) / N_HYPOTHESES
@@ -453,7 +474,7 @@ def _fmt_table(df: pd.DataFrame, ints=("n", "resolved", "trades")) -> str:
 
 def report(rows: pd.DataFrame, meta: dict) -> str:
     main = rows[~rows["excluded"]]
-    out = ["# Support/resistance methods, daily screen", ""] + [f"- {k}: {v}" for k, v in meta.items()]
+    out = [f"# Support/resistance methods, {meta.get('bars', 'daily').split(',')[0]} screen", ""] + [f"- {k}: {v}" for k, v in meta.items()]
     out += ["", f"Edge = hold rate - placebo hold rate (fib_ret / fib_ext: - the other ratios of the same swings). "
             f"Intervals: cluster bootstrap over (symbol, year) blocks, {SCREEN_CI:.0%} and the multiple-testing "
             f"{1 - (1 - SCREEN_CI) / N_HYPOTHESES:.2%} (bonf_lo). pnl in ATRs per trade after costs.", ""]
@@ -467,7 +488,7 @@ def report(rows: pd.DataFrame, meta: dict) -> str:
             out += ["## Trade measure, main sample", "",
                     _fmt_table(v[["trades", "pnl", "placebo_pnl", "pnl_edge", "pnl_lo", "pnl_hi"]]), ""]
             sides = main.assign(method=main["method"] + " " + main["side"])
-            ms = [f"{m} {s}" for m in HYPOTHESES + CONTEXT for s in ("support", "resistance")]
+            ms = [f"{m} {s}" for m in HOURLY_HYPOTHESES + CONTEXT for s in ("support", "resistance")]
             vs = verdict(sides, [m for m in ms if m in set(sides["method"])])
             out += ["## By side, main sample (placebo comparison)", "",
                     _fmt_table(vs[["n", "resolved", "hold_rate", "compare_hold", "edge", "edge_lo", "edge_hi"]]), ""]
@@ -480,23 +501,30 @@ def report(rows: pd.DataFrame, meta: dict) -> str:
 
 
 def _run(args: tuple) -> pd.DataFrame:
-    path, step, forward, windows = args
-    return walk(B.load_csv(path), step, forward, symbol=Path(path).stem.upper(), windows=windows)
+    path, step, forward, windows, hourly = args
+    if hourly:
+        import intraday_levels as IL
+        bars = IL.load_hourly(path)
+    else:
+        bars = B.load_csv(path)
+    return walk(bars, step, forward, symbol=Path(path).stem.upper(), windows=windows, hourly=hourly)
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("csv", nargs="+")
+    ap.add_argument("--hourly", action="store_true")
     ap.add_argument("--step", type=int, default=5)
-    ap.add_argument("--forward", type=int, default=20)
+    ap.add_argument("--forward", type=int, help="bars (default 20, hourly 14)")
     ap.add_argument("--split", nargs="*", default=[], metavar="DATE")
     ap.add_argument("--exclude", nargs="*", default=[], metavar="START:END")
     ap.add_argument("--exclusions", help="exclusions.csv from clean_data.py")
     ap.add_argument("--jobs", type=int, default=1)
     ap.add_argument("--out")
     a = ap.parse_args(argv)
-    wins = B.file_windows(a.csv, a.exclude, a.exclusions)
-    tasks = [(p, a.step, a.forward, w) for p, w in zip(a.csv, wins)]
+    a.forward = a.forward or (14 if a.hourly else 20)
+    wins = B.file_windows(a.csv, a.exclude, a.exclusions, hourly=a.hourly)
+    tasks = [(p, a.step, a.forward, w, a.hourly) for p, w in zip(a.csv, wins)]
     if a.jobs > 1:
         with ProcessPoolExecutor(a.jobs) as ex:
             results = list(ex.map(_run, tasks))
@@ -517,7 +545,8 @@ def main(argv=None) -> int:
         rows.assign(placebo=rows["placebo"].map(lambda ps: ";".join(str(x) for x in ps)),
                     placebo_pnl=rows["placebo_pnl"].map(lambda ps: ";".join(f"{x:.4f}" for x in ps))) \
             .drop(columns=["n_asof"]).to_csv(out / "rows.csv.gz", index=False)
-        meta = {"step": a.step, "forward": a.forward, "files": len(a.csv), "split": ", ".join(a.split) or "none",
+        meta = {"bars": "hourly, built at the second bar of each session" if a.hourly else f"daily, every {a.step}",
+                "forward": a.forward, "files": len(a.csv), "split": ", ".join(a.split) or "none",
                 "excluded": B.describe_windows(a.exclude, a.exclusions),
                 "rows": f"{len(rows)} ({int(rows['excluded'].sum())} excluded)",
                 "zones": f"+-{ZONE_HALF_ATR} ATR within {REACH_ATR} ATR; Fibonacci +-{FIB_ZONE_SHARE:.0%} of the leg "
