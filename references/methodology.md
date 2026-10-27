@@ -439,6 +439,31 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   reference prices (where price has traded and reacted before), not as places likely to hold. Stops and
   targets come from the calibrated volatility bands in section 6.
 
+### H.2 Long-window node zones for 1-3 month holds (2026-10-27)
+- **Where they come from:** a sample table of 71 support/resistance zones (12 symbols, 2026-10-23/26) was
+  reverse-engineered. `scripts/node_zones.py` rebuilds it: a ~3-year (756-bar) daily volume profile with
+  bins 0.25% of the close, smoothed (Gaussian, 2 bins) and cut at its local minima; each node's zone is
+  its run of bins at ≥ 30% of its peak; the grade (weak / medium / strong / very_strong) is the zone's
+  volume density in multiples of the window's average (cuts 0.5, 0.8, 1.9). Mean overlap (IoU) with the
+  table 0.61, 50 of 71 zones at ≥ 0.5, against about 0.43 for the table's zones moved 2-8% at random;
+  64% of matched zones get the table's grade, 98% within one grade.
+- **Test** (`scripts/node_zones_backtest.py`, 32 symbols, daily 2008-2026, same exclusions, split
+  2017/2022, 8 hypotheses written before the run): buy at the nearest support zone wholly below the
+  close (S1) on the first touch within 21 bars, hold 21 or 63 bars, no stop; short the nearest resistance
+  (R1) the same way. Edge = mean return in ATRs (after 0.05% per side) − the same trade at the moved-zone
+  placebo; drawdown edge = placebo depth − zone depth.
+- **Result: no edge on returns.** S1, 21 bars: +0.01 ATR per trade (90% interval −0.10 to +0.11); 63 bars:
+  +0.04 (−0.18 to +0.28; zone +1.78 ATR vs placebo +1.74, 61% winners); S1 graded strong or very strong,
+  63 bars: +0.04 (−0.23 to +0.34). R1 shorts: −0.03 and +0.09. Hold rates: S1 +0.2 points, R1 −1.2.
+- **Drawdown:** after an S1 buy the 63-bar drawdown was 3.97 ATR vs 4.10 at the placebo, edge +0.13
+  (+0.01 to +0.25), positive in each period, so it passed the screen but not the multiple-testing gate
+  (98.75% interval from −0.05). With 504- or 1008-bar windows it was +0.08 with intervals including 0.
+- **Grades do not sort outcomes:** S1 63-bar return edge weak +0.06, medium +0.02, strong −0.01, very
+  strong +0.25 (−0.37 to +0.90).
+- **Reading:** the zones describe where volume traded, as the sample table does, but buying them for one to
+  three months did no better than buying a zone of the same shape at another price. At most they trim the
+  drawdown slightly. The skill's levels stay reference only.
+
 ### I. Multi-timeframe (`multi_timeframe`)
 - **Weekly bars:** W-FRI, with SMA10w, SMA40w and Wilder RSI(14) on weekly closes.
 - **Weekly direction** (needs 40 weekly bars):
