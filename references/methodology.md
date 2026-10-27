@@ -463,6 +463,15 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
 - **Reading:** the zones describe where volume traded, as the sample table does, but buying them for one to
   three months did no better than buying a zone of the same shape at another price. At most they trim the
   drawdown slightly. The skill's levels stay reference only.
+- **Tranche buying** (`scripts/tranche_backtest.py`, same data, 23,177 dates, 3 hypotheses written before
+  the run): a third bought at the close, two limit orders over the next 63 bars, unfilled parts bought at
+  bar 63's close, so plans differ only in average cost. Node ladder (tops of S1 and S2, median 2.6% and
+  7.5% below the close) vs the same offsets on other dates: −0.07% (−0.25 to +0.12). It was cheaper than
+  a 5% / 10% ladder by +0.21% (+0.14 to +0.28) and a 2 / 4 ATR ladder by +0.19% (+0.08 to +0.31),
+  positive in each period but under the 0.25% bar, and the placebo does as well: the gain comes from the
+  nearer first limit (1.14 limits filled vs 0.86 for 5% / 10%), not from the node prices. Every ladder
+  cost more than buying it all at once (node −0.58%, monthly purchases −0.77%; the price rose 2.9% over
+  the window on average) while being cheaper on 56% of dates.
 
 ### I. Multi-timeframe (`multi_timeframe`)
 - **Weekly bars:** W-FRI, with SMA10w, SMA40w and Wilder RSI(14) on weekly closes.
