@@ -50,7 +50,7 @@ does the explaining. The output describes conditions and historical base rates. 
 2. **Run** from the skill folder:
    `python scripts/analyze.py TICKER --horizon swing|position [--out DIR] [--refresh] [--history-start YYYY-MM-DD] [--contract PATH]`.
    - Output goes to `./ta-output/<TICKER>_<as_of>/` by default.
-   - Add `--contract PATH` only when another tool needs the ta-1.1 contract: the other horizon also runs,
+   - Add `--contract PATH` only when another tool needs the ta-1.2 contract: the other horizon also runs,
      from the cache, and the contract covers both (see "Contract for other tools").
    - An uncached run makes 10 API calls for a stock, 8 for an ETF and 7 for SPY. A same-day
      re-run makes 0.
@@ -63,7 +63,10 @@ does the explaining. The output describes conditions and historical base rates. 
    user's language.
 5. **Reply** with a short summary:
    - regime, bias and confidence;
-   - the nearest support and resistance;
+   - the nearest support and resistance, labelled reference only (仅供参考，回测无优势): in walk-forward
+     tests the zones held no more often than the same zones moved to other prices;
+   - the horizon's 1σ range and calibrated 95% range (±2.4σ, not ±2σ), and the volatility stop with
+     how often a stop that far away was touched in calibration;
    - any active signals, each with its n;
    - the price-action state and always-in direction, and any setup or candlestick pattern that fired
      in the last 3 bars, each with its n (context, not part of the scorecard);
@@ -120,7 +123,7 @@ does the explaining. The output describes conditions and historical base rates. 
 | `--out` | folder | `./ta-output/<TICKER>_<as_of>/` | where `metrics.json` and `chart.html` go |
 | `--refresh` | flag | off | ignore the cache and fetch everything again |
 | `--history-start` | `YYYY-MM-DD` | IPO date | ignore the symbol's history before this date (e.g. a pre-merger SPAC shell) |
-| `--contract` | file path | off | also write the ta-1.1 contract for another tool (both horizons; see below) |
+| `--contract` | file path | off | also write the ta-1.2 contract for another tool (both horizons; see below) |
 | `FMP_BASE_URL` | URL | unset (official FMP) | only for a third-party proxy |
 | `FMP_TLS_VERIFY` | `0` / `1` | `1` | `0` only per process, only for a proxy; ignored for the official host |
 | `FMP_CACHE_DIR` | folder | `~/.cache/fmp-technical` | response cache (never contains the key) |
@@ -129,16 +132,16 @@ does the explaining. The output describes conditions and historical base rates. 
 All analysis thresholds live in `scripts/config.py`, and each run records them in
 `meta.config_snapshot`.
 
-## Contract for other tools (ta-1.1)
+## Contract for other tools (ta-1.2)
 
-Tools that build on this skill (a decision engine, a screener) read the **ta-1.1 contract**, not
+Tools that build on this skill (a decision engine, a screener) read the **ta-1.2 contract**, not
 `metrics.json`, whose layout is internal and may change.
 - `python scripts/analyze.py TICKER --contract out.json` writes it: the requested horizon runs as usual and
   the other one runs from the same-day cache, so it costs no extra API calls.
 - `python scripts/contract.py SWING/metrics.json POSITION/metrics.json [-o out.json]` builds it from two saved
   runs of the same ticker and day. Give each run its own `--out`: by default both horizons write to the same
   folder.
-- `contracts/ta-1.1.schema.json` describes every field. Horizon-independent blocks (data quality, market,
+- `contracts/ta-1.2.schema.json` describes every field. Horizon-independent blocks (data quality, market,
   earnings, volatility, extension, trend, regime, RS, flow, weekly, price-action context) sit at the top;
   the scorecard, zones (`low` / `high`), `price_location`, scenarios, reference stops, earnings inside the
   horizon and signal and pattern statistics (with `confirmed`, the scorecard's same-regime edge test) sit
@@ -147,6 +150,10 @@ Tools that build on this skill (a decision engine, a screener) read the **ta-1.1
   two-day move), so a caller can tell when fundamentals predate the newest statements, and the `kind` of each
   scenario target: `level` for a support/resistance zone, `projection` when no level lies beyond the trigger
   and the target is the trigger plus or minus a multiple of ATR.
+- 1.2 adds `levels_note`, `range_95` (the calibrated 95% band, about 2.4σ) and, in `stops_ref`, the
+  volatility-band stop and target (`vol`, `vol_target`), how often prices that far away were touched in
+  calibration (`touch_rate`, `target_touch_rate`) and the stop the risk example uses (`primary`). The zones
+  are reference only: in walk-forward tests they showed no edge over the same zones moved to other prices.
 - It selects facts and judges nothing; position sizing is left to the caller. Fields are only ever added;
   renaming or removing one means ta-2.0, and `tests/test_contract.py` checks the output against the schema.
 
@@ -188,7 +195,7 @@ Tools that build on this skill (a decision engine, a screener) read the **ta-1.1
 - `references/report_template.md`: the report's section order, key paths and wording rules. Read
   it before writing `report.md`.
 - `references/methodology.md`: data, adjustments, indicators, modules, the scorecard, scenarios
-  and approximations.
+  and approximations, and what the support/resistance and volatility-band back-tests found.
 - `references/signals.md`: the 14 pre-registered signal rules and how their statistics are
   computed.
 - `references/patterns.md`: the price-action readings and setups (chart 2) and the candlestick

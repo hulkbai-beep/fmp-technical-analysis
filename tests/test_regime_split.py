@@ -70,6 +70,18 @@ def test_vol_bands_calibrated_on_normal_returns(tmp_path):
                     "--out", str(tmp_path / "o")]) == 0
     text = (tmp_path / "o" / "report.md").read_text(encoding="utf-8")
     assert "## Excluded windows only" in text and "rv20 / 5" in text
+    assert "## Skill bands: rv20, linear, main sample" in text and "| 5 | pooled |" in text
+    rv = rows[rows["estimator"] == "rv20"]
+    assert set(rv["pair_long"]) <= {"target", "stop", "both", "neither"} and rows.loc[rows["estimator"] != "rv20", "z_lin"].isna().all()
+    assert abs((rv["z_lin"].abs() <= 1).mean() - 0.683) < 0.05
+
+
+def test_vol_bands_pair_outcome():
+    hi, lo = np.array([101.0, 103.0, 99.0]), np.array([99.0, 100.0, 95.0])
+    assert VB.pair_outcome(hi, lo, 102.0, 96.0, 1) == "target"       # high 103 on bar 2 before the low 95
+    assert VB.pair_outcome(hi, lo, 102.0, 96.0, -1) == "stop"        # short: the stop is the upper price
+    assert VB.pair_outcome(hi, lo, 104.0, 99.5, 1) == "stop" and VB.pair_outcome(hi, lo, 110.0, 90.0, 1) == "neither"
+    assert VB.pair_outcome(hi, lo, 101.0, 99.0, 1) == "both"
 
 
 def test_fetch_intraday_chunks_and_dedupes():

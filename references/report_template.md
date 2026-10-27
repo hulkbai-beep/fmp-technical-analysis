@@ -15,7 +15,8 @@ layouts and the wording rules.
 - **Fractions vs percentiles:**
   - fractions: `*_pct`, `returns.*`, `rel_return_*`, `mom_12_1`, `hit_rate`, `median`, `mean`, `p25`,
     `p75`, `median_mae`, `edge.*`, `rv20`, `atr_pct`, `adj_coverage`, `expected_move_1sd_pct`,
-    `median_abs_move`, `notional_pct_account`;
+    `expected_move_95_pct`, `coverage.within_*`, `sigma_h_pct`, `stop_touch_rate.*`, `first_target_touch_rate`,
+    `vol_pair_odds.*`, `median_abs_move`, `notional_pct_account`;
   - already 0-100: `*_pctl`, `pctl_1y`, `vol_pctl`, RSI, ADX, DI.
 - `null` means "not computable": say so and give the reason from the module's `notes` or `reason`.
   Never fill it in.
@@ -159,6 +160,7 @@ Do not invent conflicts, and do not drop any.
 - volume profile: `levels.volume_profile.poc`, `.value_area_low`, `.value_area_high`;
 - the 52-week range: `levels.high_52w` / `levels.high_52w_date` and `levels.low_52w` / `levels.low_52w_date`;
 - `levels.extremes` and `levels.notes`;
+- `levels.evidence.note` (why the zones are reference only);
 - anchored VWAPs: `volume_flow.anchored_vwaps[*]` with `anchor`, `anchor_date`, `vwap`,
   `price_vs_vwap_pct`, `price_vs_vwap_atr`.
 
@@ -172,6 +174,11 @@ Do not invent conflicts, and do not drop any.
 **Labels:** call the volume profile and VWAPs "daily-bar approximations". If a side has fewer than 3
 levels, quote the note (e.g. "price at an all-time high (available history): no resistance levels
 above the last close in the window").
+
+**Reference only.** Head the section with `levels.evidence.note`, translated (Chinese: 仅供参考，回测无优势).
+In walk-forward tests these zones held no more often than the same zones moved to other prices, so never
+say a zone "should hold", "is strong support" or "is likely to cap the price". `touches` / `holds` /
+`breaks` are a count of what happened, not evidence that the next test will go the same way.
 
 ### 7. Signal statistics (信号统计)
 **Fields:**
@@ -259,29 +266,49 @@ market flag). If n < 8 (`config.EARNINGS_REACTIONS_MIN`), say the sample is smal
   - `text`;
 - base case: `scenarios.base.expected_move_1sd_pct`, `.expected_move_1sd_price`, `.expected_move_atr`,
   `.range_low`, `.range_high`, `.earnings_caveat`;
-- `scenarios.horizon_days`, `scenarios.leaning`.
+- the calibrated 95% band: `scenarios.base.band_95_k`, `.expected_move_95_pct`, `.range_95_low`,
+  `.range_95_high`, and `.coverage.within_1sd`, `.within_2sd`, `.within_95_band`, `.horizon_days`;
+- `scenarios.horizon_days`, `scenarios.leaning`, `scenarios.notes`.
 
-**Layout:** a table (Scenario | Trigger | Target zones | Invalidation), with rows Bull, Bear and Base
-(the 1σ range). Below it, the scenario `text`s (translated), the base-case text and the earnings caveat.
-Projection targets must be called "projections (no level beyond the trigger)". Mention `leaning` as
-"the scorecard bias leans toward the {bull|bear} scenario", not as a forecast.
+**Layout:** a table (Scenario | Trigger | Target zones | Invalidation), with rows Bull, Bear, Base 1σ and
+Base 95% (±`band_95_k`σ). Below it, the scenario `text`s (translated), the base-case text and the earnings
+caveat. Projection targets must be called "projections (no level beyond the trigger)". Mention `leaning`
+as "the scorecard bias leans toward the {bull|bear} scenario", not as a forecast.
+
+**Bands:** the 95% band is ±`band_95_k`σ (about 2.4σ), not ±2σ: fat tails mean ±2σ held only
+`coverage.within_2sd` of closes in calibration. Never call ±2σ a 95% range. Give each band's coverage
+("the 1σ band held 68% of 10-day closes in calibration"). The bull and bear triggers and their level
+targets are built from the key levels, so add one line that they are reference prices, not tested
+edges (`scenarios.notes`).
 
 ### 11. Risk (风险测算)
 **Fields:** for `risk.long_side` and `risk.short_side`:
-- `entry_ref`;
-- `structural_stop` (`structural_stop_basis`) and `atr_stop` (`atr_stop_basis`);
-- `stop_distance_atr.structural/atr` and `stop_distance_pct.structural/atr`;
-- `first_target` (`first_target_basis`);
-- `reward_risk.structural/atr`;
+- `entry_ref`, `sigma_h_pct` (the h-day 1σ move as a fraction), `risk.horizon_days`;
+- `vol_stop` (`vol_stop_basis`): the primary stop, at the calibrated 95% band edge;
+- `structural_stop` (`structural_stop_basis`, reference only) and `atr_stop` (`atr_stop_basis`);
+- `stop_distance_atr.vol/structural/atr`, `stop_distance_pct.vol/structural/atr` and
+  `stop_distance_sigma.vol/structural/atr`;
+- `stop_touch_rate.vol/structural/atr`: the share of calibration paths that reached a price that many σ
+  away within the horizon;
+- `first_target` (`first_target_basis`, the 1σ band edge) with `first_target_touch_rate`;
+- `level_target` (`level_target_basis`, reference only);
+- `vol_pair_odds.target_first`, `.stop_first`, `.neither` (the 1σ target and the 95% stop played from the
+  close, `.horizon_days`);
+- `reward_risk.vol/structural/atr`;
 - `position_size_example.risk_dollars`, `.stop_basis`, `.shares`, `.notional`, `.notional_pct_account`,
   `.flag`;
 - `risk.label` and `risk.notes`.
 
-**Layout:** a table with columns Item | Long side | Short side. Head it with "{risk.label}". Then the
-notes as bullets.
+**Layout:** a table with columns Item | Long side | Short side, rows: volatility stop (primary), ATR stop,
+structural stop (reference), target (1σ), level target (reference), touch rates, target first / stop first
+/ neither, reward/risk, position size. Head it with "{risk.label}". Then the notes as bullets.
 
 **Framing:** say this shows what a 1% risk on a hypothetical $100,000 account would mean. It is not
-a suggestion to trade.
+a suggestion to trade. Say what the touch rates mean: how often ordinary moves reached that price within
+the horizon in the calibration sample, not a forecast for this stock. A reward/risk ratio below 1 with a
+far stop is not "worse" than one above 1 with a near stop: with no measured edge both are worth about
+zero before costs, and the touch rates show the trade-off (e.g. a 2 ATR stop was touched within 10 days
+about a third of the time, the 95% band stop about 4%).
 
 ### 12. Methodology & caveats (方法与说明)
 **Content:**
@@ -349,6 +376,8 @@ Weighted score +1.25 → **Bullish**; confidence **high**
   consolidation or a shallow pullback rather than a reversal.
 
 ## 6. Key levels
+Reference only: in walk-forward tests, zones like these held no more often than the same zones moved
+to other prices.
 | Level | Price | Zone | Distance | Sources | Tests |
 |---|---|---|---|---|---|
 | R1 | 4509.87 | 4502.10-4517.40 | +0.8% / +0.4 ATR | AVWAP 52-week high | 1 (1 held, 0 broken) |
@@ -389,13 +418,19 @@ absolute two-day reaction over the last 12 reports was 1.6%.
 |---|---|---|---|
 | Bull | close above 4509.87 on RVOL ≥ 1.5 | 4552.98-4601.15 | close back below 4461.69 |
 | Bear | close below 4266.35 on RVOL ≥ 1.5 | 4186.54-4234.71, 4084.49-4132.66 | close back above 4314.52 |
-| Base (1σ, 10 days) | — | 4250.80-4699.87 (±5.0%, 2.3 ATR) | — |
+| Base 1σ (10 days) | — | 4250.80-4699.87 (±5.0%, 2.3 ATR; held 68.2% of closes) | — |
+| Base 95% (±2.4σ) | — | 3936.46-5014.22 (±12.0%; held 95.8%) | — |
+
+Triggers and level targets come from the key levels, which are reference prices, not tested edges.
 
 ## 11. Risk
 Illustrative arithmetic, not a recommendation.
 | Item | Long side | Short side |
 |---|---|---|
-| Structural stop | 4218.17 (2.7 ATR, 5.7%) | 4558.04 (0.9 ATR, 1.8%) |
+| Volatility stop (95% band) | 3936.46 (2.4σ, 12.0%; touched 4.3%) | 5014.22 (2.4σ, 12.0%; touched 4.3%) |
+| Structural stop (reference) | 4218.17 (2.7 ATR, 5.7%; touched 26.0%) | 4558.04 (0.9 ATR, 1.8%; touched 69.1%) |
+| Target (1σ) | 4699.87 (touched 31.5%) | 4250.80 (touched 31.5%) |
+| Target first / stop first / neither | 31.4% / 4.1% / 64.4% | 31.4% / 4.1% / 64.4% |
 | … | | |
 
 ## 12. Methodology & caveats

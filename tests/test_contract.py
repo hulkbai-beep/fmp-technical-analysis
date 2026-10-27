@@ -1,4 +1,4 @@
-"""The ta-1.1 contract (scripts/contract.py, contracts/ta-1.1.schema.json) on a fake FMP (no network).
+"""The ta-1.2 contract (scripts/contract.py, contracts/ta-1.2.schema.json) on a fake FMP (no network).
 
 Every contract must match the schema, and its numbers must be the metrics' numbers. A small JSON Schema checker
 lives here so the tests need nothing beyond pandas, numpy and pytest.
@@ -108,6 +108,11 @@ def test_numbers_are_the_metrics(stock):
         assert h["levels_window"]["lookback_bars"] == m["levels"]["lookback_bars"]
         assert h["bull"]["trigger"] == m["scenarios"]["bull"]["trigger"]["level"]
         assert h["stops_ref"]["long"]["structural"] == m["risk"]["long_side"]["structural_stop"]
+        assert h["stops_ref"]["short"]["vol"] == m["risk"]["short_side"]["vol_stop"]
+        assert h["stops_ref"]["long"]["touch_rate"]["vol"] == m["risk"]["long_side"]["stop_touch_rate"]["vol"]
+        assert h["stops_ref"]["long"]["primary"] == "vol"
+        assert h["range_95"]["high"] == m["scenarios"]["base"]["range_95_high"] and h["range_95"]["k"] == 2.4
+        assert h["levels_note"] == m["levels"]["evidence"]["note"] and "reference only" in h["levels_note"]
         assert h["earnings_within_horizon"] == m["event_risk"]["within_horizon"]
         primary = m["signals"]["primary_horizon"]
         assert [(s["id"], s["confirmed"]) for s in h["signals"]] == \

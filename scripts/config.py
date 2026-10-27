@@ -267,6 +267,35 @@ RISK_PER_TRADE = 0.01
 NO_LEVEL_TRIGGER_ATR = 1.0        # trigger = close +- this many ATRs when no level or 52-week extreme lies beyond it
 SCENARIO_PROJECTION_ATR = (1.0, 2.0)   # target projections (ATRs from the trigger) when no level lies beyond it
 INVALIDATION_MIN_ATR = 0.5        # invalidation sits at least this many ATRs back through the trigger
+# Volatility bands: close x (1 +- k x sigma_h), sigma_h = rv20 x sqrt(h / 252). The support/resistance levels
+# showed no back-tested edge (references/methodology.md, "Do the levels hold?"), so stops and targets come from
+# these bands, and the tables below say how often ordinary moves reached each one.
+VOL_BAND_K95 = 2.4                # k whose band held 95% of h-day closes (2 held only 92-93%)
+VOL_STOP_K = VOL_BAND_K95         # volatility stop: entry -+ k sigma_h (the 95% band edge)
+VOL_TARGET_K = 1.0                # volatility target: entry +- k sigma_h (the 1-sigma band edge)
+VOL_CALIBRATION = ("32 US stocks and ETFs, daily bars 2005-2026 (cleaned; the 2020 crash and flagged windows "
+                   "excluded), up and down moves pooled; scripts/vol_bands.py")
+# share of h-day closes inside close x (1 +- k sigma_h), by h then k
+VOL_BAND_COVER = {
+    5: {1.0: 0.686, 2.0: 0.926, 2.4: 0.959},
+    10: {1.0: 0.682, 2.0: 0.926, 2.4: 0.958},
+    20: {1.0: 0.674, 2.0: 0.920, 2.4: 0.955},
+    60: {1.0: 0.659, 2.0: 0.916, 2.4: 0.949},
+}
+# share of paths whose high reached close x (1 + k sigma_h), or whose low reached close x (1 - k sigma_h), within
+# h days (the two directions averaged), by h then k; interpolated in k on a log scale, None outside 0.25-4
+VOL_TOUCH = {
+    5: {0.25: 0.766, 0.5: 0.582, 0.75: 0.424, 1.0: 0.303, 1.5: 0.149, 2.0: 0.073, 2.4: 0.041, 3.0: 0.020, 4.0: 0.007},
+    10: {0.25: 0.778, 0.5: 0.592, 0.75: 0.436, 1.0: 0.315, 1.5: 0.155, 2.0: 0.076, 2.4: 0.043, 3.0: 0.020, 4.0: 0.007},
+    20: {0.25: 0.785, 0.5: 0.602, 0.75: 0.448, 1.0: 0.323, 1.5: 0.161, 2.0: 0.080, 2.4: 0.047, 3.0: 0.022, 4.0: 0.008},
+    60: {0.25: 0.798, 0.5: 0.616, 0.75: 0.460, 1.0: 0.338, 1.5: 0.176, 2.0: 0.089, 2.4: 0.053, 3.0: 0.025, 4.0: 0.009},
+}
+# the VOL_TARGET_K target and VOL_STOP_K stop played from the close: (target first, stop first, neither) in h days
+VOL_PAIR_ODDS = {5: (0.302, 0.039, 0.658), 10: (0.314, 0.041, 0.644), 20: (0.322, 0.044, 0.633),
+                 60: (0.337, 0.051, 0.613)}
+LEVELS_EVIDENCE_NOTE = ("reference only: in walk-forward tests on 32 US stocks and ETFs (daily bars 2005-2026, "
+                        "hourly bars 2010-2021), zones like these held no more often than the same zones moved to "
+                        "other prices, and none of 52 method variants passed (references/methodology.md)")
 
 # ---------------------------------------------------------------------------- chart (chart.html)
 CHART_PRICE_DECIMALS = 4          # decimals kept for prices (candles, SMAs, AVWAPs, levels)

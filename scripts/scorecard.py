@@ -782,6 +782,37 @@ def build_scorecard(ctx, modules) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------- volatility bands
+def sigma_h(rv20: float, h: int) -> float:
+    """The h-day move as a fraction of the close: annualized rv20 x sqrt(h / 252)."""
+    return rv20 * math.sqrt(h / C.TRADING_DAYS_PER_YEAR)
+
+
+def _calibrated(table: dict, h: int) -> int:
+    """The calibrated horizon nearest h (the shorter one on a tie)."""
+    return min(table, key=lambda k: (abs(k - h), k))
+
+
+def touch_rate(k: float | None, h: int) -> float | None:
+    """Share of calibration paths that reached a price k x sigma_h from the close within h days
+    (config.VOL_TOUCH), interpolated in k on a log scale; None outside the calibrated range of k."""
+    if k is None or not math.isfinite(k):
+        return None
+    row = C.VOL_TOUCH[_calibrated(C.VOL_TOUCH, h)]
+    ks = sorted(row)
+    if not ks[0] <= k <= ks[-1]:
+        return None
+    for a, b in zip(ks, ks[1:]):
+        if k <= b:
+            w = (k - a) / (b - a)
+            return math.exp((1 - w) * math.log(row[a]) + w * math.log(row[b]))
+    return row[ks[-1]]
+
+
+def _pct1(x: float | None) -> str:
+    return "n/a" if x is None else f"{x * 100:.1f}%"
+
+
 # ---------------------------------------------------------------------------- scenarios
 def _market(ctx, modules) -> dict:
     """Last close, ATR(14), 20-day realized vol and 52-week / all-time extremes, from ctx or the modules."""
@@ -895,6 +926,8 @@ def build_scenarios(ctx, modules, scorecard) -> dict:
     notes = []
     if _usable(modules, "levels") is None:
         notes.append(f"{_why_missing(modules, 'levels')}: triggers fall back to 52-week extremes or ATR offsets")
+    else:
+        notes.append(f"triggers and level targets come from the key levels, which are {C.LEVELS_EVIDENCE_NOTE}")
 
     ev = _usable(modules, "event_risk")
     caveat = None
@@ -908,16 +941,32 @@ def build_scenarios(ctx, modules, scorecard) -> dict:
     if rv is None:
         base = {"available": False, "reason": "20-day realized volatility unavailable", "earnings_caveat": caveat}
     else:
-        sd = rv * math.sqrt(h / C.TRADING_DAYS_PER_YEAR)
-        move = close * sd
+        sd = sigma_h(rv, h)
+        move, k95 = close * sd, C.VOL_BAND_K95
+        hc = _calibrated(C.VOL_BAND_COVER, h)
+        cover = C.VOL_BAND_COVER[hc]
+        low95 = close - k95 * move
+        if low95 <= 0:
+            notes.append(f"the {k95:g}-sigma band reaches zero: no lower 95% bound")
         base = {"available": True, "rv20": rv, "expected_move_1sd_pct": sd, "expected_move_1sd_price": move,
                 "expected_move_atr": move / atr, "range_low": close - move, "range_high": close + move,
+                "band_95_k": k95, "expected_move_95_pct": k95 * sd, "expected_move_95_price": k95 * move,
+                "range_95_low": low95 if low95 > 0 else None, "range_95_high": close + k95 * move,
+                "coverage": {"horizon_days": hc, "within_1sd": cover.get(1.0), "within_2sd": cover.get(2.0),
+                             "within_95_band": cover.get(k95), "basis": C.VOL_CALIBRATION},
                 "earnings_caveat": caveat,
-                "method": "last close x rv20 (annualized) x sqrt(h / 252); zero drift, assumes recent volatility "
-                          "persists; about 68% of outcomes under a normal approximation, fat tails in practice"}
+                "method": "last close x (1 +- k x rv20 (annualized) x sqrt(h / 252)); zero drift, assumes recent "
+                          "volatility persists. Returns have fat tails, so 2 sigma is not a 95% range: in the "
+                          f"calibration sample ({C.VOL_CALIBRATION}) the 1-sigma band held "
+                          f"{_pct1(cover.get(1.0))} of {hc}-day closes, 2 sigma {_pct1(cover.get(2.0))} and "
+                          f"{k95:g} sigma {_pct1(cover.get(k95))}"}
+        band95 = (f"{_px(low95)} to {_px(close + k95 * move)}" if low95 > 0
+                  else f"zero to {_px(close + k95 * move)}")
         base["text"] = (f"Over {h} trading days, 20-day realized volatility of {rv * 100:.1f}% annualized implies "
                         f"a 1-sigma move of about +-{sd * 100:.1f}% (+-{_px(move)}, {move / atr:.1f} ATR): roughly "
-                        f"{_px(close - move)} to {_px(close + move)}." + (f" {caveat}" if caveat else ""))
+                        f"{_px(close - move)} to {_px(close + move)}, a band that held {_pct1(cover.get(1.0))} of "
+                        f"{hc}-day closes in calibration. The calibrated 95% band, +-{k95:g} sigma "
+                        f"(+-{k95 * sd * 100:.1f}%), is roughly {band95}." + (f" {caveat}" if caveat else ""))
 
     bias_sign = int(_num(_get(scorecard, "bias_sign")) or 0)
     leaning = {1: "bull", -1: "bear", 0: "neither"}[_sign(bias_sign)]
@@ -956,11 +1005,26 @@ def _size(entry: float, stop: float | None, d: int) -> dict | None:
             "notional": notional, "notional_pct_account": pct, "exceeds_account": pct > 1.0, "flag": flag}
 
 
-def _risk_side(d: int, mk: dict, scen_side: dict | None) -> dict:
-    """Long (d=+1) or short (d=-1) arithmetic from the last close."""
-    entry, atr = mk["close"], mk["atr"]
+def _risk_side(d: int, mk: dict, scen_side: dict | None, h: int) -> dict:
+    """Long (d=+1) or short (d=-1) arithmetic from the last close. The primary stop and the first target are
+    the calibrated volatility-band edges; the structural stop and the level target are kept for reference."""
+    entry, atr, rv = mk["close"], mk["atr"], mk["rv20"]
     stop_side, target_side = (mk["supports"], mk["resistances"]) if d > 0 else (mk["resistances"], mk["supports"])
     notes = []
+
+    sd = None if rv is None or rv <= 0 else sigma_h(rv, h)
+    vol_stop = vol_target = None
+    if sd is None:
+        notes.append("20-day realized volatility unavailable: no volatility stop or target")
+    else:
+        vol_stop = entry * (1 - d * C.VOL_STOP_K * sd)
+        vol_target = entry * (1 + d * C.VOL_TARGET_K * sd)
+        if vol_stop <= 0:
+            vol_stop = None
+            notes.append("volatility stop would be at or below zero")
+        if vol_target <= 0:
+            vol_target = None
+            notes.append("volatility target would be at or below zero")
 
     ref = stop_side[0] if stop_side else None
     structural = None
@@ -976,40 +1040,66 @@ def _risk_side(d: int, mk: dict, scen_side: dict | None) -> dict:
         notes.append("ATR stop would be at or below zero")
 
     if target_side:
-        target, t_basis = float(target_side[0]["price"]), f"nearest {'resistance' if d > 0 else 'support'}"
+        level_target, lt_basis = float(target_side[0]["price"]), f"nearest {'resistance' if d > 0 else 'support'}"
     elif scen_side and scen_side.get("targets"):
-        target, t_basis = float(scen_side["targets"][0]["price"]), scen_side["targets"][0]["label"]
+        level_target, lt_basis = float(scen_side["targets"][0]["price"]), scen_side["targets"][0]["label"]
     else:
-        target, t_basis = None, "none"
+        level_target, lt_basis = None, "none"
+    vt_basis = f"entry {'+' if d > 0 else '-'} {C.VOL_TARGET_K:g} x rv20 x sqrt({h} / 252): the 1-sigma band edge"
+    if vol_target is not None:
+        target, t_basis = vol_target, vt_basis
+    else:
+        target, t_basis = level_target, lt_basis
 
-    stops = {"structural": structural, "atr": atr_stop}
+    stops = {"vol": vol_stop, "structural": structural, "atr": atr_stop}
     dist_atr = {k: (None if s is None else d * (entry - s) / atr) for k, s in stops.items()}
     dist_pct = {k: (None if s is None else d * (entry - s) / entry) for k, s in stops.items()}
+    dist_sigma = {k: (None if p is None or sd is None else p / sd) for k, p in dist_pct.items()}
+    touch = {k: (None if x is None or x <= 0 else touch_rate(x, h)) for k, x in dist_sigma.items()}
+    t_sigma = None if target is None or sd is None else d * (target / entry - 1) / sd
     rr = {k: (None if s is None or target is None or d * (entry - s) <= 0 else d * (target - entry) / (d * (entry - s)))
           for k, s in stops.items()}
     sizes = {k: _size(entry, s, d) for k, s in stops.items()}
-    primary = "structural" if sizes["structural"] else "atr"
+    primary = "vol" if sizes["vol"] else "atr"
     example = {"account": C.ACCOUNT_SIZE, "risk_pct": C.RISK_PER_TRADE,
                "risk_dollars": C.ACCOUNT_SIZE * C.RISK_PER_TRADE, "stop_basis": primary,
                **(sizes[primary] or {"stop": None, "shares": None, "notional": None}), "by_stop": sizes}
     if example["shares"] == 0:
         notes.append(f"position-size example: {example['flag']}")
+    odds = None
+    if vol_stop is not None and vol_target is not None:
+        hp = _calibrated(C.VOL_PAIR_ODDS, h)
+        odds = dict(zip(("target_first", "stop_first", "neither"), C.VOL_PAIR_ODDS[hp]), horizon_days=hp)
 
     return {
         "entry_ref": entry,
+        "sigma_h_pct": sd,
+        "vol_stop": vol_stop,
+        "vol_stop_basis": (f"entry {'-' if d > 0 else '+'} {C.VOL_STOP_K:g} x rv20 x sqrt({h} / 252): the calibrated "
+                           "95% band edge"),
+        "vol_target": vol_target,
+        "vol_target_basis": vt_basis,
         "structural_stop": structural,
         "structural_ref": None if ref is None else {
             "price": float(ref["price"]), "zone_low": _num(ref.get("zone_low")), "zone_high": _num(ref.get("zone_high")),
             "sources": list(ref.get("sources") or []), "distance_atr": (float(ref["price"]) - entry) / atr,
             "distance_pct": float(ref["price"]) / entry - 1},
         "structural_stop_basis": (f"nearest {'support zone low -' if d > 0 else 'resistance zone high +'} "
-                                  f"{C.STRUCTURE_STOP_BUFFER_ATR:g} ATR"),
+                                  f"{C.STRUCTURE_STOP_BUFFER_ATR:g} ATR (reference only: the levels showed no "
+                                  "back-tested edge)"),
         "atr_stop": atr_stop,
         "atr_stop_basis": f"entry {'-' if d > 0 else '+'} {C.STOP_ATR_MULT:g} ATR",
         "stop_distance_atr": dist_atr,
         "stop_distance_pct": dist_pct,
+        "stop_distance_sigma": dist_sigma,
+        "stop_touch_rate": touch,
         "first_target": target,
         "first_target_basis": t_basis,
+        "first_target_sigma": t_sigma,
+        "first_target_touch_rate": None if t_sigma is None or t_sigma <= 0 else touch_rate(t_sigma, h),
+        "level_target": level_target,
+        "level_target_basis": lt_basis + (" (reference only)" if level_target is not None else ""),
+        "vol_pair_odds": odds,
         "reward_risk": rr,
         "position_size_example": example,
         "notes": notes,
@@ -1022,7 +1112,15 @@ def build_risk(ctx, modules, scenarios) -> dict:
     mk = _market(ctx, modules)
     if mk["close"] is None or mk["atr"] is None or mk["atr"] <= 0:
         return {"available": False, "reason": "last close or ATR(14) unavailable", "notes": [ILLUSTRATIVE]}
+    _, hz = _horizon(ctx)
+    h = int(hz["primary"])
     notes = [ILLUSTRATIVE,
+             "Stops and the first target are the calibrated volatility-band edges (stop at the 95% band, "
+             f"{C.VOL_STOP_K:g} sigma; target at 1 sigma). The structural stop and the level target are shown for "
+             "reference only: the support/resistance levels showed no back-tested edge.",
+             f"Touch rates say how often ordinary moves reached each price within {h} trading days in the "
+             f"calibration sample ({C.VOL_CALIBRATION}). With no measured edge, a stop/target pair is worth about "
+             "zero before costs whatever its reward/risk.",
              "Entry reference = last close; no commissions, slippage or financing; a gap can fill a stop well "
              "beyond its level.",
              "Short side ignores borrow availability and cost.",
@@ -1035,7 +1133,8 @@ def build_risk(ctx, modules, scenarios) -> dict:
         "available": True,
         "label": ILLUSTRATIVE,
         "atr": mk["atr"],
-        "long_side": _risk_side(1, mk, _get(scenarios, "bull")),
-        "short_side": _risk_side(-1, mk, _get(scenarios, "bear")),
+        "horizon_days": h,
+        "long_side": _risk_side(1, mk, _get(scenarios, "bull"), h),
+        "short_side": _risk_side(-1, mk, _get(scenarios, "bear"), h),
         "notes": notes,
     }
