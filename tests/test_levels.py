@@ -8,6 +8,7 @@ import pytest
 
 import config as C
 import levels as L
+import node_zones as NZ
 from conftest import synthetic_bars
 
 REQUIRED_LEVEL_KEYS = {"price", "zone_low", "zone_high", "sources", "touches", "holds", "breaks", "flips",
@@ -374,6 +375,21 @@ def test_build_levels_on_synthetic_bars():
         assert lv["zone_low"] <= lv["price"] <= lv["zone_high"]
         assert lv["distance_atr"] == pytest.approx((lv["price"] - close) / atr)
         assert 0.0 <= lv["volume_share"] <= 1.0
+
+    # the ~3-year node zones ride along for reference, whatever the horizon
+    nz = out["node_zones"]
+    assert nz["available"] and nz["lookback_bars"] == min(len(bars), NZ.LOOKBACK)
+    assert nz["evidence"]["backtested_edge"] is False
+    assert all(z["zone_high"] < close for z in nz["below"]) and all(z["zone_low"] > close for z in nz["above"])
+
+
+def test_build_levels_survives_a_node_zone_error(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("no profile")
+    monkeypatch.setattr(NZ, "reference_block", boom)
+    out = L.build_levels(make_ctx(synthetic_bars()))
+    assert out["available"] and out["supports"] and out["node_zones"]["available"] is False
+    assert any(n.startswith("node zones skipped (RuntimeError") for n in out["notes"])
 
 
 def test_build_levels_uses_anchored_vwaps_when_available(monkeypatch):

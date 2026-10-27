@@ -162,7 +162,11 @@ Do not invent conflicts, and do not drop any.
 - `levels.extremes` and `levels.notes`;
 - `levels.evidence.note` (why the zones are reference only);
 - anchored VWAPs: `volume_flow.anchored_vwaps[*]` with `anchor`, `anchor_date`, `vwap`,
-  `price_vs_vwap_pct`, `price_vs_vwap_atr`.
+  `price_vs_vwap_pct`, `price_vs_vwap_atr`;
+- ~3-year node zones: `levels.node_zones` with `available` (else `reason`), `lookback_bars`,
+  `window_start`, `at_close` (the zone holding the close, or null), `above[*]` and `below[*]` (nearest
+  first), each with `zone_low`, `zone_high`, `grade`, `share`, `distance_pct`, `distance_atr`; and
+  `evidence.note`, `notes`.
 
 **Layout:**
 1. One table, top to bottom: R3, R2, R1, **Close**, S1, S2, S3. Columns: Level | Price | Zone | Distance
@@ -170,6 +174,14 @@ Do not invent conflicts, and do not drop any.
    when `fresh`).
 2. One line with the POC and value area.
 3. A small anchored-VWAP table.
+4. A small node-zone table under its own line, "~3-year node zones (reference only)" (Chinese: 约 3 年
+   成交密集区（仅供参考，回测无优势）), top to bottom: `above` farthest first, the `at_close` zone with
+   "holds the close" as its distance, then `below`. Columns: Zone | Distance (% / ATR, to the near edge) |
+   Volume density | Volume share. Show `grade` as a density, never as a strength: weak → low, medium →
+   medium, strong → high, very_strong → very high (Chinese column 成交密度: 低 / 中 / 高 / 很高; the sample
+   table these zones come from called them 弱 / 中 / 强 / 超强, which may be named once in the note, never
+   as the label). Quote `levels.node_zones.notes` (e.g. no zone above the close). When it is not
+   available, one line with the reason instead.
 
 **Labels:** call the volume profile and VWAPs "daily-bar approximations". If a side has fewer than 3
 levels, quote the note (e.g. "price at an all-time high (available history): no resistance levels
@@ -179,6 +191,14 @@ above the last close in the window").
 In walk-forward tests these zones held no more often than the same zones moved to other prices, so never
 say a zone "should hold", "is strong support" or "is likely to cap the price". `touches` / `holds` /
 `breaks` are a count of what happened, not evidence that the next test will go the same way.
+
+The node zones are a separate, longer map (where price traded over about 3 years, whatever the horizon)
+and are not the key levels: they do not feed the scorecard, scenarios or stops. Their grade is how dense
+the volume in the zone was (`density`, multiples of the window's average), not how likely it is to hold:
+in tests, buying or shorting at them for 1-3 months did no better than the same zones at other prices,
+the grades did not sort the outcomes, and as tranche prices they matched a fixed ladder of the same depth
+(`levels.node_zones.evidence.note`). Say so in one line under the table, and never call a high-density
+zone stronger support or a better place to buy.
 
 ### 7. Signal statistics (信号统计)
 **Fields:**
@@ -385,6 +405,16 @@ to other prices.
 | S1 | 4266.35 | … | -4.7% / -2.2 ATR | gap-up top | 2 (1 held, 1 broken) |
 
 POC 3,540.12; value area 3,402.55-3,781.20 (daily-bar approximation, last 126 bars).
+
+~3-year node zones (reference only), 756 bars from 2023-10-19:
+| Zone | Distance | Volume density | Volume share |
+|---|---|---|---|
+| 4,610.00-4,688.20 | +3.0% / +1.4 ATR | low | 2.1% |
+| 4,402.70-4,521.30 | holds the close | high | 9.4% |
+| 4,120.50-4,236.80 | -5.3% / -2.5 ATR | very high | 6.8% |
+
+Density shows how much volume traded in the zone, not how likely it is to hold: in tests these zones did
+no better than the same zones at other prices.
 
 ## 7. Signal statistics
 | Signal | Fired | Regime | n | Hit | Median | Same-regime | Edge | Confidence |
