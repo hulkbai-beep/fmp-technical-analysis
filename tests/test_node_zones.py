@@ -71,6 +71,18 @@ def test_reference_block_nearest_first_per_side_and_notes():
     assert NZ.reference_block(bars.iloc[:1], atr=1.0)["available"] is False
 
 
+def test_reference_block_refuses_a_range_too_wide_for_its_bins():
+    # a 1000x fall over the window would need ~400,000 bins of 0.25% of the last close
+    n = 756
+    close = 1000.0 * np.exp(-np.log(1000.0) * np.arange(n) / (n - 1))
+    idx = pd.bdate_range("2020-01-02", periods=n, name="date")
+    bars = pd.DataFrame({"open": close, "high": close * 1.02, "low": close * 0.98, "close": close,
+                         "volume": 1e6}, index=idx)
+    out = NZ.reference_block(bars, atr=1.0)
+    assert out["available"] is False and "x the last close" in out["reason"]
+    assert NZ.node_zones(bars) == []
+
+
 def test_grade_cuts():
     assert NZ.grade(0.1) == "weak" and NZ.grade(0.5) == "medium"
     assert NZ.grade(0.8) == "strong" and NZ.grade(2.5) == "very_strong"

@@ -110,9 +110,13 @@ def test_block_keys_are_calendar_months_across_symbols():
     rows = _rows()
     keys = B.block_keys(rows)
     assert len(keys) == len(rows)
-    assert set(keys) == {f"{y}-{m:02d}" for y in (2019, 2020, 2021) for m in (1, 2)}
+    assert set(keys) == {y * 100 + m for y in (2019, 2020, 2021) for m in (1, 2)}
     jan = rows["date"].dt.strftime("%Y-%m") == "2020-01"
-    assert set(rows.loc[jan, "symbol"]) == {"A", "B"} and set(keys[jan.to_numpy()]) == {"2020-01"}
+    assert set(rows.loc[jan, "symbol"]) == {"A", "B"} and set(keys[jan.to_numpy()]) == {202001}
+    # 3-month blocks: Jan-Mar, Apr-Jun, ...; the hourly timestamps of a day share its block
+    d = pd.DataFrame({"date": pd.to_datetime(["2020-01-02 09:30", "2020-03-31 15:30", "2020-04-01 00:00", "2020-12-31 12:00"])})
+    assert list(B.block_keys(d, 3)) == [202001, 202001, 202004, 202010]
+    assert B.blocks_text(1).startswith("calendar-month") and B.blocks_text(3).startswith("3-month")
 
 
 def test_periods_split():

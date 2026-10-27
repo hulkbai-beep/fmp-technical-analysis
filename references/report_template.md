@@ -177,9 +177,11 @@ Do not invent conflicts, and do not drop any.
 4. A small node-zone table under its own line, "~3-year node zones (reference only)" (Chinese: 约 3 年
    成交密集区（仅供参考，回测无优势）), top to bottom: `above` farthest first, the `at_close` zone with
    "holds the close" as its distance, then `below`. Columns: Zone | Distance (% / ATR, to the near edge) |
-   Grade | Volume share. Grades in Chinese: weak 弱, medium 中, strong 强, very_strong 超强. Quote
-   `levels.node_zones.notes` (e.g. no zone above the close). When it is not available, one line with the
-   reason instead.
+   Volume density | Volume share. Show `grade` as a density, never as a strength: weak → low, medium →
+   medium, strong → high, very_strong → very high (Chinese column 成交密度: 低 / 中 / 高 / 很高; the sample
+   table these zones come from called them 弱 / 中 / 强 / 超强, which may be named once in the note, never
+   as the label). Quote `levels.node_zones.notes` (e.g. no zone above the close). When it is not
+   available, one line with the reason instead.
 
 **Labels:** call the volume profile and VWAPs "daily-bar approximations". If a side has fewer than 3
 levels, quote the note (e.g. "price at an all-time high (available history): no resistance levels
@@ -195,8 +197,8 @@ and are not the key levels: they do not feed the scorecard, scenarios or stops. 
 the volume in the zone was (`density`, multiples of the window's average), not how likely it is to hold:
 in tests, buying or shorting at them for 1-3 months did no better than the same zones at other prices,
 the grades did not sort the outcomes, and as tranche prices they matched a fixed ladder of the same depth
-(`levels.node_zones.evidence.note`). Say so in one line under the table, and never call a very strong
-zone a better place to buy.
+(`levels.node_zones.evidence.note`). Say so in one line under the table, and never call a high-density
+zone stronger support or a better place to buy.
 
 ### 7. Signal statistics (信号统计)
 **Fields:**
@@ -405,14 +407,14 @@ to other prices.
 POC 3,540.12; value area 3,402.55-3,781.20 (daily-bar approximation, last 126 bars).
 
 ~3-year node zones (reference only), 756 bars from 2023-10-19:
-| Zone | Distance | Grade | Volume share |
+| Zone | Distance | Volume density | Volume share |
 |---|---|---|---|
-| 4,610.00-4,688.20 | +3.0% / +1.4 ATR | weak | 2.1% |
-| 4,402.70-4,521.30 | holds the close | strong | 9.4% |
-| 4,120.50-4,236.80 | -5.3% / -2.5 ATR | very_strong | 6.8% |
+| 4,610.00-4,688.20 | +3.0% / +1.4 ATR | low | 2.1% |
+| 4,402.70-4,521.30 | holds the close | high | 9.4% |
+| 4,120.50-4,236.80 | -5.3% / -2.5 ATR | very high | 6.8% |
 
-Grades show how much volume traded in the zone, not how likely it is to hold: in tests these zones did no
-better than the same zones at other prices.
+Density shows how much volume traded in the zone, not how likely it is to hold: in tests these zones did
+no better than the same zones at other prices.
 
 ## 7. Signal statistics
 | Signal | Fired | Regime | n | Hit | Median | Same-regime | Edge | Confidence |

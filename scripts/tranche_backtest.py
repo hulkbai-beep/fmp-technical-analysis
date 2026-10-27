@@ -33,7 +33,7 @@ Pre-registered hypotheses (written before the first run):
   node_vs_placebo: mean node gain - mean placebo gain;
   node_vs_atr, node_vs_pct: the mean of node gain - atr (pct) gain on the same dates.
 Each passes the screen when it is at least MIN_EDGE_PCT percent, its 90% cluster-bootstrap interval
-over calendar-month blocks lies above 0 and it is positive in each period (--split); it passes the
+over 3-month calendar blocks (BLOCK_MONTHS; (symbol, year) blocks before a review) lies above 0 and it is positive in each period (--split); it passes the
 multiple-testing gate when its (1 - 0.10 / 3) interval lies above 0. The other comparisons
 (dca, lump, node_mid, fill rates) are context.
 
@@ -57,6 +57,7 @@ import node_zones as NZ
 PCT_LADDER = (0.05, 0.10)
 ATR_LADDER = (2.0, 4.0)
 MIN_EDGE_PCT = 0.25
+BLOCK_MONTHS = 3            # bootstrap blocks: each row's window is 63 bars, about 3 months
 HYPOTHESES = ("node_vs_placebo", "node_vs_atr", "node_vs_pct")
 PLANS = ("node", "node_mid", "pct", "atr", "dca", "lump")
 
@@ -128,7 +129,7 @@ def walk(bars: pd.DataFrame, step: int = 5, window: int = 63, symbol: str = "",
 
 # ----------------------------------------------------------------------------- statistics
 def _blocks(g: pd.DataFrame) -> np.ndarray:
-    return B.block_keys(g)
+    return B.block_keys(g, BLOCK_MONTHS)
 
 
 def _boot(blocks: np.ndarray, stat, ci: float) -> tuple[float, float]:
@@ -213,7 +214,7 @@ def _fmt(df: pd.DataFrame) -> str:
 def report(rows: pd.DataFrame, meta: dict) -> str:
     out = ["# Tranche buying at node zones", ""] + [f"- {k}: {v}" for k, v in meta.items()]
     out += ["", "gain = log(close at t / average cost) in percent; positive = cheaper than buying all at t. "
-            f"Intervals: {B.BOOT_CI:.0%} cluster bootstrap over {B.BOOT_BLOCKS}; bonf_lo at "
+            f"Intervals: {B.BOOT_CI:.0%} cluster bootstrap over {B.blocks_text(BLOCK_MONTHS)}; bonf_lo at "
             f"{1 - 0.10 / len(HYPOTHESES):.2%}.", "", "## Verdict, main sample", "", _fmt(verdict(rows)), "",
             "## Plans, main sample", "", _fmt(plan_table(rows)), "",
             f"Buying it all at t returned {rows['ret_lump'].mean():.2f}% on average over the window "

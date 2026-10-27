@@ -367,7 +367,8 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   reaction and closes beyond the far edge counts as held (the close is the bar's last print); on the
   touching bar itself the reaction counts only if the bar opened in or beyond the zone, otherwise the
   outcome is `ambiguous` and left out. Each zone is compared with the same zone shape moved to other
-  dates; the edge gets a 90% cluster-bootstrap interval over (symbol, year) blocks, and tables are split
+  dates; the edge gets a 90% cluster-bootstrap interval over calendar-month blocks (all symbols' rows of
+  a month together, `block_keys`; (symbol, year) blocks before 2026-10-27, see H.2), and tables are split
   by rank, symbol, daily direction at the build bar and period (`--split`). `scripts/fetch_csv.py` saves
   the 32-symbol baseline universe (trending, declining, sideways, high-volatility stocks and ETFs) as CSVs
   for it. On six large-cap stocks (1995-2018 daily bars, with the earlier one-sided touch rule) neither
@@ -398,6 +399,13 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   +1.2, unfilled gaps +0.8, 52-week high/low -1.5, SMA50 -0.8, SMA200 -1.1 (all intervals include 0).
   The scorecard's structural stop (S1 zone_low - 0.5 ATR) was hit within 20 bars as often as a stop at the
   same ATR distance on other dates (edge 0.0 points, -0.2 to +0.3, ~61,000 stops).
+- **The same, by calendar month** (2026-10-27, on the cleaned data of H.1; the intervals above used
+  (symbol, year) blocks): key levels 46.8% vs 47.1%, edge -0.3 points (-0.9 to +0.3); S2 -1.5 (-3.4 to
+  +0.4) and S3 -2.0 (-4.5 to +0.6), so "below the placebo" no longer clears 0. Boxes -1.4 (-3.3 to +0.5).
+  Box breakouts -0.4 (-3.2 to +2.2), measured move -2.1 (-4.9 to +0.6), 20-bar extremes +0.3 (-1.6 to
+  +2.1). Sources in the train period: none above 0 (pivots +0.3, weekly pivots +0.8, POC +1.0, gaps +0.7,
+  52-week high/low -1.7, SMA50 -1.0, SMA200 -1.2). Structural stop 0.0 (-0.7 to +0.7, ~58,000 stops).
+  No pre-registered verdict changed.
 - **Short side:** if a side has fewer than 3 levels, a note says so, naming an all-time or 52-week
   extreme when price is at one.
 - **Reference only:** `levels.evidence` = `{backtested_edge: false, note}` (`LEVELS_EVIDENCE_NOTE`), for the
@@ -476,31 +484,37 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   +0.09. Hold rates: S1 +0.2 points, R1 −1.2. Every interval includes 0. A same-date check (fixed 1- and
   2-ATR slabs wholly on a node vs wholly off one, date and distance fixed effects) also found no
   difference (S1 63 bars +0.02 and +0.05 ATR, intervals including 0).
-- **Intervals:** every backtest now resamples calendar-month blocks (all symbols' rows of a month
-  together, `levels_backtest.block_keys`). The earlier (symbol, year) blocks treated symbols in the same
-  year as independent, but zone and placebo come from different dates, so market-wide moves stay in the
-  edge, and those intervals were 1.5-2 times too narrow. By month: S1 ret21 −0.19 to +0.21, ret63 −0.32 to
-  +0.42. So "no edge" rules out edges above about 0.4 ATR (about 0.8% of price) per 63-bar trade, not
-  smaller ones. A 63-bar outcome spans three months, so neighbouring blocks still share some of it and
-  even these intervals may be a little narrow.
+- **Intervals:** this test and the tranche test resample 3-month calendar blocks (all symbols' rows of
+  each quarter together, `block_keys(g, 3)`); the backtests whose outcomes last 20 bars or less use
+  1-month blocks. The first runs used (symbol, year) blocks, which treat symbols in the same year as
+  independent although zone and placebo come from different dates, so market-wide moves stay in the
+  edge; and a wait of up to 21 bars plus a 63-bar hold spans 3-4 months, so 1-month blocks still share
+  outcomes. From (symbol, year) to 1-month to 3-month blocks, S1 ret63 widened from −0.18..+0.28 to
+  −0.32..+0.42 to −0.50..+0.55, and ret21 from −0.10..+0.11 to −0.19..+0.21 to −0.23..+0.24. The blocking
+  was changed after the first run, on review; every hypothesis had already failed under the narrowest
+  intervals, so no verdict changed. "No edge" rules out edges above about 0.55 ATR (about 1% of price)
+  per 63-bar trade and about 0.25 ATR per 21-bar trade, not smaller ones. The numbers below are 3-month
+  blocks.
 - **Drawdown:** after an S1 buy the 63-bar drawdown was 3.97 ATR vs 4.10 at the placebo, edge +0.13
-  (about 0.25% of price). The earlier (symbol, year) interval (+0.01 to +0.25) put it through the screen, but by
-  month it is −0.17 to +0.41, about half of it is a calendar effect shared by other symbols, and with
-  504- or 1008-bar windows it is +0.08 (intervals including 0). It is not a result.
-- **Secondary rows** (not pre-registered; the report's tables hold about 40 such edges): by month,
-  S2's hold rate is 3.5 points above its placebo (+1.1 to +5.8), though its returns match it (63 bars
-  −0.07 ATR, −0.55 to +0.42), and shorts at R2 had a shallower 63-bar drawdown (+0.67 ATR, +0.31 to
-  +1.01). Among 40 edges a few 90% intervals clear 0 by chance; these would need a new pre-registered
-  test before being read as findings.
+  (about 0.25% of price). The (symbol, year) interval (+0.01 to +0.25) put it through the screen, but
+  with 3-month blocks it is −0.32 to +0.52 (1-month −0.17 to +0.41), about half of it is a calendar effect
+  shared by other symbols, and with 504- or 1008-bar windows it is +0.08 (intervals including 0). It is
+  not a result.
+- **Secondary rows** (not pre-registered; the report's tables hold about 40 such edges): S2's hold rate
+  is 3.5 points above its placebo (+0.9 to +5.9), though its returns match it (63 bars −0.07 ATR, −0.72
+  to +0.58), and shorts at R2 had a shallower 63-bar drawdown (+0.67 ATR, +0.22 to +1.12). Among 40 edges
+  a few 90% intervals clear 0 by chance; these would need a new pre-registered test before being read as
+  findings.
 - **Grades do not sort outcomes:** S1 63-bar return edge weak +0.06, medium +0.02, strong −0.01, very
-  strong +0.25 (−0.31 to +0.81); at 21 bars weak is best. Rank correlations of density with each edge are
+  strong +0.25 (−0.44 to +0.96); at 21 bars weak is best. Rank correlations of density with each edge are
   about 0. Raw hold rates do rise with grade, because higher grades are wider zones; the same-shape
   placebo rises the same way.
 - **Tranche buying** (`scripts/tranche_backtest.py`, same data, 23,177 dates, 3 hypotheses written before
   the run): a third bought at the close, two limit orders over the next 63 bars, unfilled parts bought at
   bar 63's close, so plans differ only in average cost. Node ladder (tops of S1 and S2, median 2.6% and
-  7.5% below the close) vs the same offsets on other dates: −0.07% (by month −0.38 to +0.24). Its raw lead over a
-  5% / 10% ladder (+0.21%) and a 2 / 4 ATR ladder (+0.19%) is exposure: its nearer limits keep it
+  7.5% below the close) vs the same offsets on other dates: −0.07% (−0.53 to +0.38). Its raw lead over a
+  5% / 10% ladder (+0.21%, +0.11 to +0.32) and a 2 / 4 ATR ladder (+0.19%, +0.05 to +0.35), both under the
+  0.25% gate, is exposure: its nearer limits keep it
   invested 63% of the window vs 54% and 58% in a sample that rose 2.9% per window (+0.93% vs 5/10% in
   rising windows, −0.91% in falling ones). With each symbol's drift removed the three ladders tie
   (+0.01% and −0.03%, intervals including 0); a fixed 2.5% / 7.5% ladder matches the node ladder in every

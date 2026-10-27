@@ -67,7 +67,17 @@ PLACEBO_OFFSETS = (17, 41)  # placebo as-of bars: this many test steps later (cy
 BOOT_REPS = 2000            # cluster-bootstrap resamples for the edge interval
 BOOT_CI = 0.90              # two-sided coverage of that interval
 BOOT_SEED = 20261026        # fixed, so a report is reproducible
-BOOT_BLOCKS = "calendar-month blocks (all symbols' rows of a month together)"
+BOOT_MONTHS = 1             # bootstrap block: this many calendar months, all symbols together
+
+
+def blocks_text(months: int = BOOT_MONTHS) -> str:
+    """How the report describes block_keys(months)."""
+    if months == 1:
+        return "calendar-month blocks (all symbols' rows of a month together)"
+    return f"{months}-month calendar blocks (all symbols' rows of each {months} months together)"
+
+
+BOOT_BLOCKS = blocks_text()
 RESOLVED = ("held", "broken")
 
 
@@ -239,18 +249,22 @@ def _edge(c: np.ndarray) -> np.ndarray:
         return c[..., 0] / (c[..., 0] + c[..., 1]) - c[..., 2] / (c[..., 2] + c[..., 3])
 
 
-def block_keys(g: pd.DataFrame) -> np.ndarray:
-    """Bootstrap block of each row: the calendar month of its date, all symbols together (an
-    earlier (symbol, year) blocking treated symbols in the same year as independent and gave
-    intervals 1.5-2 times too narrow)."""
-    return pd.DatetimeIndex(g["date"]).strftime("%Y-%m").to_numpy()
+def block_keys(g: pd.DataFrame, months: int = BOOT_MONTHS) -> np.ndarray:
+    """Bootstrap block of each row: the run of `months` calendar months holding its date (Jan-Mar,
+    Apr-Jun, ... for 3), all symbols together. Rows of the same month share the market's moves;
+    tests whose outcomes run over several months (node_zones_backtest, tranche_backtest) use
+    3-month blocks so that neighbouring blocks share less. An earlier (symbol, year) blocking
+    treated symbols in the same year as independent and gave intervals 1.5-2 times too narrow.
+    Keys are YYYYMM of the block's first month."""
+    d = pd.DatetimeIndex(g["date"])
+    return (d.year * 100 + (d.month - 1) // months * months + 1).to_numpy()
 
 
 def edge_interval(g: pd.DataFrame, reps: int = BOOT_REPS, ci: float = BOOT_CI,
-                  seed: int = BOOT_SEED) -> tuple[float, float]:
-    """Cluster-bootstrap interval for the edge, resampling block_keys blocks whole;
+                  seed: int = BOOT_SEED, months: int = BOOT_MONTHS) -> tuple[float, float]:
+    """Cluster-bootstrap interval for the edge, resampling block_keys(months) blocks whole;
     (nan, nan) with fewer than two blocks."""
-    blocks = np.array([_counts(b) for _, b in g.groupby(block_keys(g), sort=True)])
+    blocks = np.array([_counts(b) for _, b in g.groupby(block_keys(g, months), sort=True)])
     if len(blocks) < 2:
         return np.nan, np.nan
     rng = np.random.default_rng(seed)
@@ -263,11 +277,11 @@ def edge_interval(g: pd.DataFrame, reps: int = BOOT_REPS, ci: float = BOOT_CI,
     return float(np.quantile(e, a)), float(np.quantile(e, 1 - a))
 
 
-def _stats(g: pd.DataFrame, interval: bool = True) -> dict:
+def _stats(g: pd.DataFrame, interval: bool = True, months: int = BOOT_MONTHS) -> dict:
     held, broken, p_held, p_broken = _counts(g)
     hold = held / (held + broken) if held + broken else np.nan
     p_hold = p_held / (p_held + p_broken) if p_held + p_broken else np.nan
-    lo, hi = edge_interval(g) if interval else (np.nan, np.nan)
+    lo, hi = edge_interval(g, months=months) if interval else (np.nan, np.nan)
     return {"n": len(g), "touch_rate": g["outcome"].isin(["held", "broken", "open", "ambiguous"]).mean(),
             "gap": int((g["outcome"] == "gap").sum()), "ambiguous": int((g["outcome"] == "ambiguous").sum()),
             "resolved": int(held + broken), "hold_rate": hold, "placebo_hold": p_hold, "edge": hold - p_hold,
@@ -275,18 +289,19 @@ def _stats(g: pd.DataFrame, interval: bool = True) -> dict:
             "width_atr": g["width_atr"].median(), "dist_atr": g["dist_atr"].median()}
 
 
-def summarize(rows: pd.DataFrame, by: str | None = None, interval: bool = True) -> pd.DataFrame:
+def summarize(rows: pd.DataFrame, by: str | None = None, interval: bool = True,
+              months: int = BOOT_MONTHS) -> pd.DataFrame:
     """Observations, touch rate, gap and ambiguous counts, hold rate, placebo hold rate, edge with
-    its bootstrap interval, median width and distance in ATRs: per rank (S1..S3 and R1..R3) by
-    default, else per value of column `by`; then all rows."""
+    its bootstrap interval (block_keys(months) blocks), median width and distance in ATRs: per rank
+    (S1..S3 and R1..R3) by default, else per value of column `by`; then all rows."""
     if rows.empty:
         return pd.DataFrame()
     if by is None:
-        out = {f"{'S' if s == 'support' else 'R'}{r}": _stats(g, interval)
+        out = {f"{'S' if s == 'support' else 'R'}{r}": _stats(g, interval, months)
                for (s, r), g in rows.groupby(["side", "rank"], sort=True)}
     else:
-        out = {str(k): _stats(g, interval) for k, g in rows.groupby(by, sort=True)}
-    out["all"] = _stats(rows, interval)
+        out = {str(k): _stats(g, interval, months) for k, g in rows.groupby(by, sort=True)}
+    out["all"] = _stats(rows, interval, months)
     return pd.DataFrame(out).T
 
 

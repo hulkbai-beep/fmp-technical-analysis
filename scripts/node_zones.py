@@ -47,6 +47,8 @@ MIN_NODE_SHARE = 0.005      # nodes holding less of the window's volume are drop
 GRADE_CUTS = ((1.9, "very_strong"), (0.8, "strong"), (0.5, "medium"), (0.0, "weak"))
 GRADES = ("weak", "medium", "strong", "very_strong")
 PER_SIDE = 3                # zones listed above and below the close in levels.node_zones
+MAX_BINS = 12000            # no zones when the window's range needs more bins (> 30x the close): the
+                            # binning holds bars x bins floats (the 32-symbol tests peak at 9,129)
 NOTE = ("reference only: about 3 years of daily bars, each bar's volume spread over its range; the grade is the "
         "zone's volume density, not a strength. In walk-forward tests on 32 US stocks and ETFs (daily bars "
         "2008-2026), buying or shorting at these zones for 1-3 months did no better than at the same zones moved "
@@ -97,6 +99,8 @@ def node_zones(bars: pd.DataFrame, lookback: int = LOOKBACK) -> list[dict]:
     if hi <= lo or close <= 0:
         return []
     bins = max(1, int(np.ceil((hi - lo) / (BIN_SHARE * close))))
+    if bins > MAX_BINS:
+        return []
     vol = np.clip(d["volume"].to_numpy(dtype=float), 0.0, None)
     edges, v = L._bin_volumes(d["high"].to_numpy(dtype=float), d["low"].to_numpy(dtype=float), vol, bins)
     if v.sum() <= 0:
@@ -127,6 +131,12 @@ def reference_block(bars: pd.DataFrame, atr: float | None, lookback: int = LOOKB
     edge from the close (% and ATRs). Reference only (NOTE)."""
     d = bars[["high", "low", "close", "volume"]].dropna().iloc[-lookback:]
     notes = [] if len(d) >= lookback else [f"node-zone window has only {len(d)} bars (lookback {lookback})"]
+    if len(d) >= 2 and d["close"].iloc[-1] > 0:
+        ratio = (d["high"].max() - d["low"].min()) / d["close"].iloc[-1]
+        if ratio > MAX_BINS * BIN_SHARE:
+            return {"available": False, "notes": notes,
+                    "reason": f"the window's price range is {ratio:.0f}x the last close (a collapse, reverse "
+                              f"splits or a bad print), more than the {MAX_BINS * BIN_SHARE:g}x the bins allow"}
     zones = node_zones(d, lookback)
     if not zones:
         return {"available": False, "reason": "no volume profile (too few bars, no range or no volume)",
