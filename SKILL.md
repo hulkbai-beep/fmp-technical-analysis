@@ -1,6 +1,6 @@
 ---
 name: fmp-technical-analysis
-description: Technical analysis of one US-listed stock or ETF from Financial Modeling Prep (FMP) daily data - market regime, trend and moving averages, RSI, MACD, momentum, relative strength vs SPY and the sector ETF, volume flow, volatility, support/resistance levels, back-tested signal statistics, Al Brooks-style price action (trend vs trading range, H2/L2, wedges, failed breakouts, measured moves) and candlestick patterns with their own back-tested statistics, earnings event risk, scenarios and risk arithmetic, plus three interactive charts. Use it when the user asks for technical analysis, a chart, support/resistance, moving averages, RSI, MACD, momentum, price action, Al Brooks, candlestick patterns or the trend of a ticker, including in Chinese (技术面, 技术分析, K线, K线形态, 价格行为, 支撑阻力, 均线, 趋势, 走势).
+description: Technical analysis of one US-listed stock or ETF from Financial Modeling Prep (FMP) daily data - market regime, trend and moving averages, RSI, MACD, momentum, relative strength vs SPY and the sector ETF, volume flow, volatility, support/resistance levels, back-tested signal statistics, Al Brooks-style price action (trend vs trading range, H2/L2, wedges, failed breakouts, measured moves) and candlestick patterns with their own back-tested statistics, earnings event risk, scenarios and risk arithmetic, a reference ladder for staged limit orders, plus three interactive charts. Use it when the user asks for technical analysis, a chart, support/resistance, moving averages, RSI, MACD, momentum, price action, Al Brooks, candlestick patterns, staged entry orders or the trend of a ticker, including in Chinese (技术面, 技术分析, K线, K线形态, 价格行为, 支撑阻力, 均线, 趋势, 走势, 分批挂单).
 ---
 
 # Technical analysis (FMP)
@@ -67,6 +67,8 @@ does the explaining. The output describes conditions and historical base rates. 
      tests the zones held no more often than the same zones moved to other prices;
    - the horizon's 1σ range and calibrated 95% range (±2.4σ, not ±2σ), and the volatility stop with
      how often a stop that far away was touched in calibration;
+   - when the user asks about staged entries or limit orders (分批, 挂单), the reference ladder
+     `risk.ladder_ref` (see Interpretation rules);
    - any active signals, each with its n;
    - the price-action state and always-in direction, and any setup or candlestick pattern that fired
      in the last 3 bars, each with its n (context, not part of the scorecard);
@@ -107,6 +109,16 @@ does the explaining. The output describes conditions and historical base rates. 
   - read them with the same statistics rules as the signals; a pattern with no edge on this stock is
     reported as such;
   - measured-move targets are zones, never price targets presented as advice.
+- **Staged entries** (`risk.ladder_ref`): the zones are a map, not order prices. In ladder test V3 (50
+  S&P 500 stocks, 2008-2026, a 1:2:4:1 split with a stop and scaling out) limit orders at the support
+  zones returned no more over 12 months than the same orders shifted at random, so the reference ladder
+  sits at fixed depths below the last close: 4.6%, 9.7%, 14.7% and 19.5%, the four parts of that split.
+  - copy its prices from `metrics.json`; it is the test's default, picked over volatility spacing on the
+    same sample, not a confirmed result, and it is illustrative arithmetic like the risk section;
+  - write "if staged limit orders are used, the tested default puts them at …", never that the user
+    should place them, and never call a zone a better place for an order;
+  - quote every note after the first: the test started plans only above the 200-day average and after
+    756 bars (about 3 years) of history, and only on stocks, so such a close is outside what it tested.
 - **Report every conflict** in `scorecard.conflicts`, with its typical meaning. Do not add your own.
 - **Data source:** if `data_source` names a third-party proxy, say so and suggest verifying key
   figures.
@@ -195,7 +207,7 @@ Tools that build on this skill (a decision engine, a screener) read the **ta-1.2
 - `references/report_template.md`: the report's section order, key paths and wording rules. Read
   it before writing `report.md`.
 - `references/methodology.md`: data, adjustments, indicators, modules, the scorecard, scenarios
-  and approximations, and what the support/resistance and volatility-band back-tests found.
+  and approximations, and what the support/resistance, volatility-band and ladder back-tests found.
 - `references/signals.md`: the 14 pre-registered signal rules and how their statistics are
   computed.
 - `references/patterns.md`: the price-action readings and setups (chart 2) and the candlestick

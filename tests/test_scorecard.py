@@ -5,6 +5,7 @@ import json
 import math
 import re
 
+import pandas as pd
 import pytest
 
 import config as C
@@ -571,6 +572,42 @@ def test_risk_arithmetic_exact():
     assert sh["position_size_example"]["by_stop"]["structural"]["shares"] == 83
     assert risk["label"] == S.ILLUSTRATIVE and C.DISCLAIMER in risk["notes"]
     assert any("reference only" in n for n in risk["notes"])
+
+
+def test_ladder_sits_at_the_fixed_depths_whatever_the_zones():
+    m = modules_for(1)
+    lad = S.build_risk(ctx_for(), m, None)["ladder_ref"]
+    assert lad["entry_ref"] == 100.0 and lad["split_tested"] == "1:2:4:1" and lad["confirmed"] is False
+    assert [x["part"] for x in lad["levels"]] == [1, 2, 3, 4]          # the parts of the tested 1:2:4:1 split
+    assert [x["depth_pct"] for x in lad["levels"]] == list(C.LADDER_DEPTHS)
+    assert [x["price"] for x in lad["levels"]] == pytest.approx([100 * (1 - d) for d in C.LADDER_DEPTHS])
+    assert [x["distance_atr"] for x in lad["levels"]] == pytest.approx([-100 * d / ATR for d in C.LADDER_DEPTHS])
+    assert lad["above_sma200"] is True and lad["notes"] == [C.LADDER_NOTE]
+    m["levels"]["supports"] = [{"price": 99.0, "zone_low": 98.0, "zone_high": 99.5, "sources": ["poc"]}]
+    assert S.build_risk(ctx_for(), m, None)["ladder_ref"]["levels"] == lad["levels"]
+
+
+def test_ladder_flags_starts_the_test_did_not_cover():
+    m = modules_for(-1)                                     # close below its 200-day average
+    lad = S.build_risk(ctx_for(is_etf=True), m, None)["ladder_ref"]
+    assert lad["above_sma200"] is False
+    assert lad["notes"] == [C.LADDER_NOTE, "the close is at or below its 200-day average, where the test started no plan",
+                            "ETF: the test used S&P 500 stocks only"]
+    m["trend_momentum"]["sma"]["sma200"] = None
+    m["regime"]["direction"]["sma200"] = None
+    lad = S.build_risk(ctx_for(), m, None)["ladder_ref"]
+    assert lad["above_sma200"] is None
+    assert lad["notes"] == [C.LADDER_NOTE, "200-day average unavailable: the test started plans only above it"]
+    ctx = ctx_for()
+    ctx["bars"] = pd.DataFrame({"high": CLOSE, "low": CLOSE, "close": CLOSE},
+                               index=pd.bdate_range("2025-01-02", periods=400))
+    lad = S.build_risk(ctx, modules_for(1), None)["ladder_ref"]
+    assert lad["above_sma200"] is True
+    assert lad["notes"] == [C.LADDER_NOTE, "only 400 bars of history: the test started plans only with at least 756 "
+                                           "(about 3 years)"]
+    ctx["bars"] = pd.DataFrame({"high": CLOSE, "low": CLOSE, "close": CLOSE},
+                               index=pd.bdate_range("2020-01-02", periods=C.LADDER_MIN_BARS))
+    assert S.build_risk(ctx, modules_for(1), None)["ladder_ref"]["notes"] == [C.LADDER_NOTE]
 
 
 def test_touch_rate_interpolates_the_calibration():
