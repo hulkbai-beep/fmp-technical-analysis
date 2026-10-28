@@ -46,3 +46,10 @@ main sample before held out, in list order.
 
 The held-out prices stay on the user's computer, in a folder of their own, until step 7; only
 `verify`'s statuses (counts, no prices) come back before then.
+
+Run on 2026-10-28 (`verify.json`): all 136 fetched companies (main 50, held out 50, spares 36) have
+plan months and none duplicates another, so nothing was replaced and `main.txt` and `holdout.txt`
+are final. The 120 reserve companies were not fetched; they are only needed if the power check asks
+for more stocks. For held-out companies `verify.json` keeps only what the rule needs (no counts of
+zero-volume bars or large moves). `data_manifest.json` lists the md5 of every FMP file of the main
+sample, the spares and the previously tested stocks (bars from 2005-01-03 to 2026-10-27).
