@@ -474,7 +474,7 @@ shared by every statistic on that set. Percentiles (the 5th of S14.1, the `0.05/
 | B | 10,000 |
 | data end | 2026-10-27 |
 | D_1 .. D_5 (fixed group) | 4.5715%, 9.7441%, 14.7084%, 19.5311%, 24.2840% (4,772 plan starts of the 50 main-sample stocks, k = 5; `references/ladder_v3/fixed_depths.json`; recomputed by S6's rule if batches are added) |
-| MDE80, batches added | step 5 |
+| MDE80, batches added | 0.41 pp: the 80th percentile of the 20 SE_k, 0.157 pp, times 2.60 (G = 18, 4,512 plans counted at 252 bars; `references/ladder_v3/power_main.json`); no batches added (step 5, 2026-10-28) |
 
 ## 18. Departures from the plan's wording, for the user's sign-off
 
