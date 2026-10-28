@@ -53,3 +53,41 @@ are final. The 120 reserve companies were not fetched; they are only needed if t
 for more stocks. For held-out companies `verify.json` keeps only what the rule needs (no counts of
 zero-volume bars or large moves). `data_manifest.json` lists the md5 of every FMP file of the main
 sample, the spares and the previously tested stocks (bars from 2005-01-03 to 2026-10-27).
+
+## Steps 3 and 4: the code, the self-tests and the registration
+
+The rules are `references/ladder_v3_spec.md`, with the constants of its section 17. They are run by
+`scripts/ladder_sim.py` (cleaning, zones, plan starts, the groups and the bar loop of S1-S12),
+`scripts/ladder_stats.py` (the calendar-block bootstrap, Holm, MDE80), `scripts/ladder_analysis.py`
+(the tests of S14 on the cached runs), `scripts/ladder_run.py` (the driver) and
+`scripts/ladder_selftest.py` (S15). The unit tests (`tests/test_ladder_sim.py`, `test_ladder_stats.py`,
+`test_ladder_analysis.py`) use hand-made bars and plan tables, no FMP data. The step-4 commit holds all
+of them before any outcome of the main sample is computed. A change after it is a commit of its own
+that gives the reason and names the results it touches.
+
+| File | What it holds |
+|---|---|
+| `selftest1.json` | self-test 1 (no future data) on the 50 main-sample stocks: pass/fail and coverage counts only, no returns. The code as registered passes all three parts (inputs, kernel, audit), each of the 11 planted leaks is caught, reruns are identical and every level moves with MASTER |
+| `selftest2.json` | self-test 2 (planted levels that truly hold) on synthetic stocks resampled from 20 previously tested stocks: theta +0.00 pp at q = 0 (screen passed 0 of 10 times), +4.60 pp at q = 0.5 (5 of 5), +5.41 pp at q = 1 (5 of 5), placebo -0.57 pp; fill-break share 36.5%, 15.3%, 6.1%; all eight gates pass |
+| `fixed_depths.json` | D_1..D_5 of the fixed group (S6): the median depth of each zone-ladder level at the 4,772 plan starts of the main sample, from the ladders alone |
+
+Two reviews of the code and the rules came before the registration, each finding checked by a second
+reader. The first (22 findings, none of high severity) led to fixes in the statistics and the reports.
+The second found the main test and the statistics right, and 10 issues in the variants' inputs and the
+rules' wording, all addressed before the commit: FMP placeholder dates in the income and earnings files
+(S12, S13), quarters missing from the trailing EPS (S13), the cap of a 200-day level 1 on random's up
+draws (S13), which items enter the held-out confirmation (S14.4; the one issue that could change the
+final decision), and wording in S11, S12, S14.1 and S16. The self-tests ran after each
+round; the files here are from the code as registered, and self-test 2 gave the same numbers every
+time, to 1e-14. An early trial of self-test 2 on three source stocks put theta below 0 at q = 0. On
+all 20 sources it is 0.00 pp in the block-resampled worlds, -0.14 pp with bars resampled one at a
+time and +0.07 pp with the zones of an unrelated synthetic path, so the trial's value was noise.
+
+Steps 5 to 7 add `power_main.json` (S14.2), `results_main.json` (the main test, the 27 or 23 secondary
+items and the descriptive tables) and `confirm_holdout.json` (S14.4):
+
+    python scripts/ladder_run.py zones --set main
+    python scripts/ladder_run.py power --set main
+    python scripts/ladder_run.py simulate --set main
+    python scripts/ladder_run.py report --set main          # --no-valuation: m = 23
+    python scripts/ladder_run.py confirm --set holdout      # step 7, after the held-out run

@@ -1,0 +1,379 @@
+{
+ "what": "self-test 1 of references/ladder_v3_spec.md S15 (no future data); pass/fail and coverage counts only, no returns",
+ "data_end": "2026-10-27",
+ "main": {
+  "leak": 0,
+  "parts": [
+   "inputs",
+   "kernel",
+   "audit"
+  ],
+  "stocks": 50,
+  "inputs": {
+   "cuts": 11058,
+   "arrays_compared": 309615,
+   "mismatches": {}
+  },
+  "kernel": {
+   "pairs": 1053,
+   "runs_compared_per_version": 188974,
+   "pairs_differing": 0,
+   "coverage": {
+    "fill": 170,
+    "stop signal": 146,
+    "scale-out start": 166,
+    "sale signal": 139,
+    "replacement": 160,
+    "ex-dividend": 112,
+    "horizon": 153,
+    "start": 98
+   },
+   "coverage_ok": true
+  },
+  "audit": {
+   "runs": 535689,
+   "violations": {},
+   "rate_dated_after_previous_bar": 0,
+   "income_known_by_period_end": 0,
+   "earnings_inputs_of_the_simulator": []
+  },
+  "failed_parts": [],
+  "passes": true
+ },
+ "positive_controls": {
+  "1": {
+   "leak": "zones of d+1",
+   "caught": true,
+   "failed_parts": [
+    "kernel"
+   ],
+   "detail": {
+    "kernel": {
+     "pairs": 1054,
+     "runs_compared_per_version": 189237,
+     "pairs_differing": 565,
+     "coverage": {
+      "fill": 172,
+      "stop signal": 147,
+      "scale-out start": 165,
+      "sale signal": 137,
+      "replacement": 160,
+      "ex-dividend": 112,
+      "horizon": 152,
+      "start": 98
+     },
+     "coverage_ok": true
+    },
+    "audit": {
+     "runs": 535942,
+     "violations": {},
+     "rate_dated_after_previous_bar": 0,
+     "income_known_by_period_end": 0,
+     "earnings_inputs_of_the_simulator": []
+    }
+   }
+  },
+  "2": {
+   "leak": "C[d+1] in stop condition 1",
+   "caught": true,
+   "failed_parts": [
+    "kernel"
+   ],
+   "detail": {
+    "kernel": {
+     "pairs": 1051,
+     "runs_compared_per_version": 188448,
+     "pairs_differing": 289,
+     "coverage": {
+      "fill": 165,
+      "stop signal": 150,
+      "scale-out start": 165,
+      "sale signal": 132,
+      "replacement": 159,
+      "ex-dividend": 112,
+      "horizon": 153,
+      "start": 98
+     },
+     "coverage_ok": true
+    },
+    "audit": {
+     "runs": 535183,
+     "violations": {},
+     "rate_dated_after_previous_bar": 0,
+     "income_known_by_period_end": 0,
+     "earnings_inputs_of_the_simulator": []
+    }
+   }
+  },
+  "3": {
+   "leak": "SMA200[d+1] in the start condition",
+   "caught": true,
+   "failed_parts": [
+    "inputs"
+   ],
+   "detail": {
+    "inputs": {
+     "cuts": 11066,
+     "arrays_compared": 254518,
+     "mismatches": {
+      "plan starts (main)": 3
+     }
+    },
+    "audit": {
+     "runs": 353917,
+     "violations": {},
+     "rate_dated_after_previous_bar": 0,
+     "income_known_by_period_end": 0,
+     "earnings_inputs_of_the_simulator": []
+    }
+   }
+  },
+  "4": {
+   "leak": "sig3m[d+1] in vol",
+   "caught": true,
+   "failed_parts": [
+    "kernel"
+   ],
+   "detail": {
+    "kernel": {
+     "pairs": 1053,
+     "runs_compared_per_version": 188974,
+     "pairs_differing": 198,
+     "coverage": {
+      "fill": 171,
+      "stop signal": 146,
+      "scale-out start": 174,
+      "sale signal": 145,
+      "replacement": 164,
+      "ex-dividend": 118,
+      "horizon": 154,
+      "start": 98
+     },
+     "coverage_ok": true
+    },
+    "audit": {
+     "runs": 535689,
+     "violations": {},
+     "rate_dated_after_previous_bar": 0,
+     "income_known_by_period_end": 0,
+     "earnings_inputs_of_the_simulator": []
+    }
+   }
+  },
+  "5": {
+   "leak": "C[d+1] in the detector",
+   "caught": true,
+   "failed_parts": [
+    "inputs"
+   ],
+   "detail": {
+    "inputs": {
+     "cuts": 11064,
+     "arrays_compared": 254472,
+     "mismatches": {
+      "detector watched low": 2457,
+      "detector watched high": 2417,
+      "detector counter": 410,
+      "detector brk": 149,
+      "detector broken low": 149,
+      "detector broken high": 149,
+      "plan starts (breakout start)": 146
+     }
+    },
+    "audit": {
+     "runs": 353960,
+     "violations": {},
+     "rate_dated_after_previous_bar": 0,
+     "income_known_by_period_end": 0,
+     "earnings_inputs_of_the_simulator": []
+    }
+   }
+  },
+  "6": {
+   "leak": "SPY[d+1] in stop condition 3",
+   "caught": true,
+   "failed_parts": [
+    "kernel"
+   ],
+   "detail": {
+    "kernel": {
+     "pairs": 1053,
+     "runs_compared_per_version": 188974,
+     "pairs_differing": 158,
+     "coverage": {
+      "fill": 172,
+      "stop signal": 149,
+      "scale-out start": 165,
+      "sale signal": 139,
+      "replacement": 161,
+      "ex-dividend": 111,
+      "horizon": 154,
+      "start": 98
+     },
+     "coverage_ok": true
+    },
+    "audit": {
+     "runs": 535689,
+     "violations": {},
+     "rate_dated_after_previous_bar": 0,
+     "income_known_by_period_end": 0,
+     "earnings_inputs_of_the_simulator": []
+    }
+   }
+  },
+  "7": {
+   "leak": "a limit filled on its own bar",
+   "caught": true,
+   "failed_parts": [
+    "audit"
+   ],
+   "detail": {
+    "kernel": {
+     "pairs": 1052,
+     "runs_compared_per_version": 188952,
+     "pairs_differing": 0,
+     "coverage": {
+      "fill": 186,
+      "stop signal": 144,
+      "scale-out start": 164,
+      "sale signal": 130,
+      "replacement": 159,
+      "ex-dividend": 117,
+      "horizon": 151,
+      "start": 98
+     },
+     "coverage_ok": true
+    },
+    "audit": {
+     "runs": 535668,
+     "violations": {
+      "order filled at or before the close that created it": 55389
+     },
+     "rate_dated_after_previous_bar": 0,
+     "income_known_by_period_end": 0,
+     "earnings_inputs_of_the_simulator": []
+    }
+   }
+  },
+  "8": {
+   "leak": "a stop sold at its own open",
+   "caught": true,
+   "failed_parts": [
+    "audit"
+   ],
+   "detail": {
+    "kernel": {
+     "pairs": 1053,
+     "runs_compared_per_version": 188974,
+     "pairs_differing": 0,
+     "coverage": {
+      "fill": 170,
+      "stop signal": 146,
+      "scale-out start": 166,
+      "sale signal": 139,
+      "replacement": 160,
+      "ex-dividend": 112,
+      "horizon": 153,
+      "start": 98
+     },
+     "coverage_ok": true
+    },
+    "audit": {
+     "runs": 535689,
+     "violations": {
+      "sale at or before its signal close": 155090
+     },
+     "rate_dated_after_previous_bar": 0,
+     "income_known_by_period_end": 0,
+     "earnings_inputs_of_the_simulator": []
+    }
+   }
+  },
+  "9": {
+   "leak": "a dividend on shares bought on the ex-date",
+   "caught": true,
+   "failed_parts": [
+    "audit"
+   ],
+   "detail": {
+    "kernel": {
+     "pairs": 1053,
+     "runs_compared_per_version": 188974,
+     "pairs_differing": 0,
+     "coverage": {
+      "fill": 170,
+      "stop signal": 146,
+      "scale-out start": 166,
+      "sale signal": 139,
+      "replacement": 160,
+      "ex-dividend": 112,
+      "horizon": 153,
+      "start": 98
+     },
+     "coverage_ok": true
+    },
+    "audit": {
+     "runs": 535689,
+     "violations": {
+      "dividend not on the shares of the previous close": 30245
+     },
+     "rate_dated_after_previous_bar": 0,
+     "income_known_by_period_end": 0,
+     "earnings_inputs_of_the_simulator": []
+    }
+   }
+  },
+  "10": {
+   "leak": "interest at the bar's own date",
+   "caught": true,
+   "failed_parts": [
+    "audit"
+   ],
+   "detail": {
+    "inputs": {
+     "cuts": 11058,
+     "arrays_compared": 254334,
+     "mismatches": {}
+    },
+    "audit": {
+     "runs": 353960,
+     "violations": {},
+     "rate_dated_after_previous_bar": 249710,
+     "income_known_by_period_end": 0,
+     "earnings_inputs_of_the_simulator": []
+    }
+   }
+  },
+  "11": {
+   "leak": "EPS known at the period end",
+   "caught": true,
+   "failed_parts": [
+    "inputs"
+   ],
+   "detail": {
+    "inputs": {
+     "cuts": 11058,
+     "arrays_compared": 254334,
+     "mismatches": {
+      "pe": 4417
+     }
+    },
+    "audit": {
+     "runs": 353960,
+     "violations": {},
+     "rate_dated_after_previous_bar": 0,
+     "income_known_by_period_end": 0,
+     "earnings_inputs_of_the_simulator": []
+    }
+   }
+  }
+ },
+ "seeds": {
+  "identical_reruns": true,
+  "levels_moved_by_master": 5196,
+  "levels_not_moved": 0,
+  "passes": true
+ },
+ "passes": true,
+ "seconds": 1549
+}
