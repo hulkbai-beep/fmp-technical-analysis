@@ -583,6 +583,7 @@ def test_ladder_sits_at_the_fixed_depths_whatever_the_zones():
     assert [x["price"] for x in lad["levels"]] == pytest.approx([100 * (1 - d) for d in C.LADDER_DEPTHS])
     assert [x["distance_atr"] for x in lad["levels"]] == pytest.approx([-100 * d / ATR for d in C.LADDER_DEPTHS])
     assert lad["above_sma200"] is True and lad["notes"] == [C.LADDER_NOTE]
+    assert "shifted at random" in lad["notes"][0] and "all of the capital at the start" in lad["notes"][0]
     m["levels"]["supports"] = [{"price": 99.0, "zone_low": 98.0, "zone_high": 99.5, "sources": ["poc"]}]
     assert S.build_risk(ctx_for(), m, None)["ladder_ref"]["levels"] == lad["levels"]
 

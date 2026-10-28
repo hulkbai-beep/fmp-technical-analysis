@@ -308,7 +308,10 @@ LADDER_MIN_BARS = 756             # the test started plans only with this many b
 LADDER_NOTE = ("reference only: in ladder test V3 (50 S&P 500 stocks, 2008-2026, monthly starts above the 200-day "
                "average, the 1:2:4:1 split with a stop and scaling out), limit orders at the support zones returned "
                "-0.03 pp over 12 months against the same orders shifted at random (90% interval -0.21 to +0.15), so "
-               "the zones stay a map. These depths are the median depths of that test's zone ladders; fixed depths "
+               "the zones stay a map. Staging added no return either: investing all of the capital at the start "
+               "close returned 3.65 pp more than the zone ladder (1.46 to 5.84, not significant after the Holm "
+               "correction), with a deeper worst drop below its average cost (-13.5% against -10.9%). These depths "
+               "are the median depths of that test's zone ladders; fixed depths "
                "returned 1.27 pp more than volatility spacing (0.28 to 2.26) and were chosen on the same sample: a "
                "default, not a confirmed result (references/methodology.md H.3)")
 

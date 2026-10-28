@@ -115,6 +115,9 @@ does the explaining. The output describes conditions and historical base rates. 
   sits at fixed depths below the last close: 4.6%, 9.7%, 14.7% and 19.5%, the four parts of that split.
   - copy its prices from `metrics.json`; it is the test's default, picked over volatility spacing on the
     same sample, not a confirmed result, and it is illustrative arithmetic like the risk section;
+  - say that staging added no return in that test: investing all of the capital at the start returned
+    3.65 points more over 12 months (not significant after the Holm correction), with a deeper worst drop
+    below the average cost (-13.5% against -10.9%), so never present the ladder as a way to earn more;
   - write "if staged limit orders are used, the tested default puts them at …", never that the user
     should place them, and never call a zone a better place for an order;
   - quote every note after the first: the test started plans only above the 200-day average and after

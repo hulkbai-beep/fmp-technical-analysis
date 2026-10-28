@@ -332,9 +332,10 @@ structural stop (reference), target (1σ), level target (reference), touch rates
 Then the staged-order ladder: a line "Staged limit orders, fixed depths (reference; the ladder test's
 default, not a confirmed result)" (Chinese: 分批挂单参考：固定百分比（回测的默认选择，未经确认）) and a
 table Part | Depth | Price | Distance (ATR) with its four parts, those of the `split_tested` (1:2:4:1)
-split; the test placed no fifth order, so there is no fifth depth. Below it, the first note in one or two
+split; the test placed no fifth order, so there is no fifth depth. Below it, the first note in two or three
 sentences (the zone ladder returned no more than the same orders shifted at random, so the zones stay a
-map; fixed depths were chosen over volatility spacing on the same sample) and every other note in full.
+map; investing all of the capital at the start returned more, with a deeper worst drop below the average
+cost; fixed depths were chosen over volatility spacing on the same sample) and every other note in full.
 
 **Framing:** say this shows what a 1% risk on a hypothetical $100,000 account would mean. It is not
 a suggestion to trade. Say what the touch rates mean: how often ordinary moves reached that price within
@@ -345,7 +346,10 @@ about a third of the time, the 95% band stop about 4%).
 
 The ladder is the same kind of arithmetic: where the test's default would put staged limit orders from the
 last close, not a suggestion to place them. Write "if staged limit orders are used, the tested default
-puts them at …", never that the user should buy there, and never call the depths support. The notes after
+puts them at …", never that the user should buy there, and never call the depths support. Never present
+staging as a way to earn more: in the test, investing all of the capital at the start returned 3.65 points
+more over 12 months (not significant after the Holm correction), and what the ladder changed was a smaller
+worst drop below the average cost (-10.9% against -13.5%). The notes after
 the first name what the test did not cover: a close at or below the 200-day average (or none computed), a
 history under 756 bars and an ETF; say that the test started plans only above the 200-day average, after
 756 bars, on stocks, so this close is outside what it tested.
@@ -493,8 +497,10 @@ Staged limit orders, fixed depths (reference; the ladder test's default, not a c
 
 If staged limit orders are used, the tested default puts them at these depths below the last close. In the
 test (50 S&P 500 stocks, 2008-2026), orders at the support zones returned no more over 12 months than the
-same orders shifted at random (-0.03 points), so the zones stay a map; fixed depths were chosen over
-volatility spacing on the same sample.
+same orders shifted at random (-0.03 points), so the zones stay a map. Investing all of the capital at the
+start close returned 3.65 points more (not significant after the Holm correction), with a deeper worst drop
+below the average cost (-13.5% against -10.9%). Fixed depths were chosen over volatility spacing on the
+same sample.
 
 ## 12. Methodology & caveats
 - Prices: split-adjusted FMP /full for levels, indicators and signals; dividend-adjusted closes for
