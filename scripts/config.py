@@ -296,6 +296,24 @@ VOL_PAIR_ODDS = {5: (0.302, 0.039, 0.658), 10: (0.314, 0.041, 0.644), 20: (0.322
 LEVELS_EVIDENCE_NOTE = ("reference only: in walk-forward tests on 32 US stocks and ETFs (daily bars 2005-2026, "
                         "hourly bars 2010-2021), zones like these held no more often than the same zones moved to "
                         "other prices, and none of 52 method variants passed (references/methodology.md)")
+# Staged entry orders (ladder test V3, references/methodology.md H.3): limit orders at the ~3-year support zones did
+# no better than the same orders shifted at random, so the zones stay a map and the reference ladder sits at fixed depths
+# below the last close: the median depth of each zone-ladder level at the test's 4,772 plan starts, D_1..D_4 of
+# references/ladder_v3/fixed_depths.json (its D_5 was never placed: the fixed group ran only at 1:2:4:1). Of the two
+# the plan allowed, fixed depths returned more over 12 months than volatility spacing; that choice is a default, not a
+# confirmed result.
+LADDER_DEPTHS = (0.045715, 0.097441, 0.147084, 0.195311)
+LADDER_SPLIT_TESTED = "1:2:4:1"   # the test's split of the capital over the four depths
+LADDER_MIN_BARS = 756             # the test started plans only with this many bars of history (spec S3)
+LADDER_NOTE = ("reference only: in ladder test V3 (50 S&P 500 stocks, 2008-2026, monthly starts above the 200-day "
+               "average, the 1:2:4:1 split with a stop and scaling out), limit orders at the support zones returned "
+               "-0.03 pp over 12 months against the same orders shifted at random (90% interval -0.21 to +0.15), so "
+               "the zones stay a map. Staging added no return either: investing all of the capital at the start "
+               "close returned 3.65 pp more than the zone ladder (1.46 to 5.84, not significant after the Holm "
+               "correction), with a deeper worst drop below its average cost (-13.5% against -10.9%). These depths "
+               "are the median depths of that test's zone ladders; fixed depths "
+               "returned 1.27 pp more than volatility spacing (0.28 to 2.26) and were chosen on the same sample: a "
+               "default, not a confirmed result (references/methodology.md H.3)")
 
 # ---------------------------------------------------------------------------- chart (chart.html)
 CHART_PRICE_DECIMALS = 4          # decimals kept for prices (candles, SMAs, AVWAPs, levels)

@@ -172,7 +172,7 @@ def config_snapshot(horizon: str) -> dict:
         "risk": {"trigger_rvol": C.TRIGGER_RVOL, "stop_atr_mult": C.STOP_ATR_MULT,
                  "structure_stop_buffer_atr": C.STRUCTURE_STOP_BUFFER_ATR, "account_size": C.ACCOUNT_SIZE,
                  "risk_per_trade": C.RISK_PER_TRADE, "vol_band_k95": C.VOL_BAND_K95, "vol_stop_k": C.VOL_STOP_K,
-                 "vol_target_k": C.VOL_TARGET_K},
+                 "vol_target_k": C.VOL_TARGET_K, "ladder_depths": list(C.LADDER_DEPTHS)},
     }
 
 

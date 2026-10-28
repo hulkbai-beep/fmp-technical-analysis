@@ -28,7 +28,9 @@ at 0.5 or more); the table's zones moved 2-8% at random reach about 0.43. A time
 
 analyze.py shows them as levels.node_zones (reference_block), reference only: bought or shorted for
 1-3 months they did no better than the same zones at other prices, and the grades did not sort the
-outcomes (node_zones_backtest.py, tranche_backtest.py; methodology.md H.2).
+outcomes (node_zones_backtest.py, tranche_backtest.py; methodology.md H.2); as a ladder of limit
+orders run for 12 months with a stop and scaling out, they did no better than the same ladder shifted
+at random (ladder_sim.py; methodology.md H.3).
 """
 from __future__ import annotations
 
@@ -54,7 +56,9 @@ NOTE = ("reference only: about 3 years of daily bars, each bar's volume spread o
         "zone's volume density, not a strength. In walk-forward tests on 32 US stocks and ETFs (daily bars "
         "2008-2026), buying or shorting at these zones for 1-3 months did no better than at the same zones moved "
         "to other prices, the grades did not sort the outcomes, and as tranche prices they matched a fixed ladder "
-        "of the same depth (references/methodology.md H.2)")
+        "of the same depth (references/methodology.md H.2). On 50 S&P 500 stocks (2008-2026), a ladder of limit "
+        "orders at the support zones, run 12 months with a stop and scaling out, did no better than the same "
+        "ladder shifted at random (H.3)")
 
 
 def smooth(x: np.ndarray, sigma: float = SMOOTH_BINS) -> np.ndarray:

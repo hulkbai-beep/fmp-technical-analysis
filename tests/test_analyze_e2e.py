@@ -90,9 +90,13 @@ def test_stock_swing_run():
     assert sum(sc["weights"].values()) == pytest.approx(1.0)
     assert m["scenarios"]["horizon_days"] == 10 and m["scenarios"]["bull"]["text"].startswith("If ACME")
     assert m["risk"]["long_side"]["position_size_example"]["risk_dollars"] == pytest.approx(1000.0)
+    lad = m["risk"]["ladder_ref"]
+    assert [x["price"] for x in lad["levels"]] == pytest.approx([lad["entry_ref"] * (1 - d) for d in C.LADDER_DEPTHS],
+                                                                rel=1e-5)
 
     cfg = meta["config_snapshot"]
     assert cfg["horizon"]["name"] == "swing" and cfg["signals"]["confidence_n_normal"] == C.CONFIDENCE_N_NORMAL
+    assert cfg["risk"]["ladder_depths"] == list(C.LADDER_DEPTHS)
 
     assert chart_data["default_timeframe"] == "daily"
     assert len(chart_data["candles"]) == C.HORIZONS["swing"]["chart_bars"]

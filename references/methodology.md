@@ -536,6 +536,70 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   price, the grades did not help, and as tranche prices they behave like a fixed ladder of the same
   depth. The skill's levels stay reference only.
 
+### H.3 Staged entries at the node zones: ladder test V3 (2026-10-28)
+- **Question** (plan "支撑压力测试计划 V3"): with a full set of rules for a staged entry, a stop and
+  scaling out, do limit orders at the ~3-year support zones of H.2 return more over 12 months than the
+  same orders at random prices? The rules, constants and seeds were committed before any outcome was
+  computed: `references/ladder_v3_spec.md` (run by `scripts/ladder_sim.py`, `ladder_stats.py`,
+  `ladder_analysis.py` and `ladder_run.py`); the stock lists, self-tests and results are in
+  `references/ladder_v3/`, whose README, `results_main.json` and `fixed_depths.json` give every result
+  below.
+- **Sample:** 50 S&P 500 companies: the seven large caps, which earlier tests used too, and 43 drawn
+  by sector from the members of 2008-01 to 2025-10, none of them among the 96 stocks of earlier tests;
+  split-adjusted daily bars 2005-2026, delisted companies included (liquidated at their last close). 50
+  more were drawn the same way and held out for a confirmation run.
+- **Plans:** one per stock and month from 2008-02, at the close of the month's first bar, when the
+  company was a member or worth more than $200 billion, had 756 bars of history and closed above its
+  200-day average: 4,772 starts, 4,512 of them counted at 12 months (252 bars). 2008-09 and 2020 stay in.
+- **Rules of every plan:** the capital is split 1:2:4:1 over up to four limit orders; the zone ladder
+  takes the tops of the zones wholly below the close, each at least 2% below the close and 2% below the
+  previous level, none more than 35% below. After a confirmed breakout (two closes above the nearest
+  resistance zone) the unfilled orders are re-placed from that close. A stop sells everything when three
+  conditions hold at once: the close is 15% under the average cost, two closes sit under the lowest zone
+  low of the ladder, and the stock trails SPY by 5 points since the start. From +50% on the average cost,
+  a third is sold at each of the next three resistance zones (3-month 1σ steps when no zone is left).
+  Cash earns the 3-month Treasury rate; each trade costs 0.05%.
+- **Groups** (same stock, start, split and exits; only the order prices differ): zone; random (the zone
+  ladder shifted as a whole by 1% to half its smallest gap, in 10 up/down pairs: the main control);
+  gaps only (each level moved out of the zones); vol (level i at i × 0.5 of the 3-month σ below the
+  close); fixed (level i at the median depth D_i of the zone ladders at all starts: 4.6%, 9.7%, 14.7%,
+  19.5%; the D_5 of a five-level ladder, 24.3%, was never placed, since the fixed group ran only at
+  1:2:4:1); lump (everything at the start close). Ladder groups place as many levels as the zone ladder
+  has that day: all four at 92% of the 4,772 starts, fewer than four at 389 (none at 12).
+- **Main test (registered):** theta = mean R_252(zone) − R_252(random) passes when the lower bound of its
+  90% interval (calendar-year blocks, 18 of them) is above 0, theta ≥ +1 point, and the 6-month theta
+  and theta on the 43 drawn stocks have the same sign. Power check: MDE80 = 0.41 points, so no stocks
+  were added.
+- **Result: no edge.** theta = −0.03 points (90% interval −0.21 to +0.15, p 0.78); at 6 months −0.005,
+  on the 43 stocks +0.03. With 2-year blocks −0.19 to +0.14; leaving out one year at a time −0.07 to
+  +0.01. Random's orders sat at the zones' depth (13.20% vs 13.19% below the close, part-weighted).
+- **Secondary items** (27, Holm at family-wise 0.10): two rejected, neither a better rule. Zone − gaps
+  only, +3.66 points, is exposure: gaps-only orders sat deeper (21.4% below the close) and invested 35%
+  of the capital against the zone ladder's 87%. In the 200-day variant (a 200-day average level in the
+  ladder) zone − random was −0.27 points. Nothing else survived Holm: the variants (fills confirmed by
+  the close, a start at a confirmed breakout, a 2-month time limit, a 20% stop, splits 1:2:3:2:2 and
+  1:2:4), the subsets without the 2008-09 and 2020 crashes or without earnings, and two trailing P/E
+  filters (FMP has no point-in-time forward P/E): below the 5-year median (1,615 plans), and within 10%
+  above its 10th percentile (341). Zone − lump was −3.65 points (−5.84 to −1.46, raw p 0.010, Holm p
+  0.25), the sample's upward drift as in H.2; lump's safety margin (the worst low below the average cost)
+  was −13.5% against the zone ladder's −10.9%.
+- **Held-out confirmation:** no rule qualified, so the held-out stocks were never simulated or opened.
+- **Order depths** (step 8 of the plan: the one with the higher 12-month mean of vol and fixed): mean
+  R_252 fixed 8.48%, vol 7.21% (zone 8.43%, random 8.46%, lump 12.08%); vol − fixed −1.27 points
+  (−2.26 to −0.28, p 0.04). Fixed invested 86.1% of the capital against vol's 80.2%, with shallower
+  orders (12.5% vs 17.2% part-weighted); zone − fixed was −0.05 points (p 0.77). The choice was made on
+  the same sample and is a default, not a confirmed result.
+- **Reading:** the support zones are a map of where price traded, not better order prices: limit orders
+  at them, with this stop and scaling out, did as well as the same orders shifted a percent or two (by 1%
+  to half the ladder's smallest gap). The skill's reference ladder (`risk.ladder_ref`, section 6)
+  therefore sits at the four fixed depths below the last close, whatever the zones. In the test the fixed
+  group placed only as many orders as the zone ladder had levels, the orders stayed live until filled,
+  re-placed after a breakout, or cancelled by the stop or scaling out, and plans started only above the
+  200-day average, after 756 bars; `risk.ladder_ref` flags a close at or below that average, a shorter
+  history and an ETF. Staging itself added no return: against investing all of the capital at the start
+  the ladder gave up 3.65 points of 12-month return (not significant after Holm) for a smaller worst drop
+  below the average cost.
+
 ### I. Multi-timeframe (`multi_timeframe`)
 - **Weekly bars:** W-FRI, with SMA10w, SMA40w and Wilder RSI(14) on weekly closes.
 - **Weekly direction** (needs 40 weekly bars):
@@ -776,6 +840,7 @@ targets come from the key levels, so `scenarios.notes` says they are reference o
 | Pair odds | the 1σ target and 95% stop played from the close in calibration: target first, stop first, neither within h days (10 days: 31.4% / 4.1% / 64.4%; 60 days: 33.7% / 5.1% / 61.3%) |
 | Reward/risk | (target - entry) / (entry - stop), for each stop |
 | Position-size example | risk $ = `ACCOUNT_SIZE` × `RISK_PER_TRADE` = $100,000 × 1% = $1,000; shares = floor(risk $ / (entry - stop)); notional and % of account; flagged when above 100% of the account |
+| Staged-order ladder (`ladder_ref`, long side only) | part i at entry × (1 - `LADDER_DEPTHS`[i]): 4.6%, 9.7%, 14.7% and 19.5% below the last close, the depths of the fixed group of ladder test V3 (H.3); no zone enters it. `above_sma200` is false or null, with a note, when the close is not above its 200-day average, where the test started no plan; a history under `LADDER_MIN_BARS` (756) bars and an ETF get a note too |
 
 The headline example uses the volatility stop when it exists, otherwise the ATR stop; `by_stop` sizes all
 three. With no measured edge a stop/target pair is worth about zero before costs whatever its reward/risk
@@ -783,6 +848,17 @@ three. With no measured edge a stop/target pair is worth about zero before costs
 64% of paths that reached neither within the horizon make up the difference). The touch rates show the
 trade-off between a near and a far stop. No commissions, slippage, financing or
 borrow are modelled. A gap can fill a stop well beyond its level.
+
+The ladder is reference arithmetic too. In ladder test V3 limit orders at the support zones returned no
+more than the same orders shifted at random, so the zones stay a map and the depths are fixed. Staging
+added no return either: investing all of the capital at the start close returned 3.65 points more over 12
+months (90% interval 1.46 to 5.84, not significant after Holm), with a deeper worst drop below the average
+cost (safety margin −13.5% against −10.9%). Of the two
+spacings the plan allowed, fixed depths had the higher 12-month mean on the test's sample (vol − fixed
+−1.27 points, 90% interval −2.26 to −0.28): a default, not a confirmed result. The test split the capital
+1:2:4:1 over the four depths but placed only as many orders as the zone ladder had levels (fewer than four
+at 389 of 4,772 starts, none at 12), kept the orders live until they filled, a confirmed breakout
+re-placed them from the new close, or its stop or scaling out cancelled them; none of that is modelled here.
 
 ---
 

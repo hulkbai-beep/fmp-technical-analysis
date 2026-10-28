@@ -1,0 +1,19 @@
+{
+ "what": "fixed group depths D_1..D_5 (spec S6): median depth of the i-th zone-ladder level at the plan starts, k = 5, ladders only",
+ "set": "main",
+ "plans": 4772,
+ "levels_present": [
+  4760,
+  4704,
+  4596,
+  4383,
+  3984
+ ],
+ "D": [
+  0.045715,
+  0.097441,
+  0.147084,
+  0.195311,
+  0.24284
+ ]
+}

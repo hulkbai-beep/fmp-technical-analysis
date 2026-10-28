@@ -198,9 +198,11 @@ The node zones are a separate, longer map (where price traded over about 3 years
 and are not the key levels: they do not feed the scorecard, scenarios or stops. Their grade is how dense
 the volume in the zone was (`density`, multiples of the window's average), not how likely it is to hold:
 in tests, buying or shorting at them for 1-3 months did no better than the same zones at other prices,
-the grades did not sort the outcomes, and as tranche prices they matched a fixed ladder of the same depth
-(`levels.node_zones.evidence.note`). Say so in one line under the table, and never call a high-density
-zone stronger support or a better place to buy.
+the grades did not sort the outcomes, as tranche prices they matched a fixed ladder of the same depth, and a
+12-month ladder of limit orders at the support zones, with a stop and scaling out, did no better than the
+same ladder shifted at random (`levels.node_zones.evidence.note`). Say so in one line under the table, and
+never call a high-density zone stronger support, a better place to buy or a place for staged orders: the
+reference ladder of section 11 does not use the zones.
 
 ### 7. Signal statistics (信号统计)
 **Fields:**
@@ -319,11 +321,21 @@ edges (`scenarios.notes`).
 - `reward_risk.vol/structural/atr`;
 - `position_size_example.risk_dollars`, `.stop_basis`, `.shares`, `.notional`, `.notional_pct_account`,
   `.flag`;
-- `risk.label` and `risk.notes`.
+- `risk.label` and `risk.notes`;
+- the staged-order ladder `risk.ladder_ref`: `entry_ref`, `levels[*].part`, `.depth_pct`, `.price`,
+  `.distance_atr`, `split_tested`, `above_sma200`, `confirmed` (always false) and `notes`.
 
 **Layout:** a table with columns Item | Long side | Short side, rows: volatility stop (primary), ATR stop,
 structural stop (reference), target (1σ), level target (reference), touch rates, target first / stop first
 / neither, reward/risk, position size. Head it with "{risk.label}". Then the notes as bullets.
+
+Then the staged-order ladder: a line "Staged limit orders, fixed depths (reference; the ladder test's
+default, not a confirmed result)" (Chinese: 分批挂单参考：固定百分比（回测的默认选择，未经确认）) and a
+table Part | Depth | Price | Distance (ATR) with its four parts, those of the `split_tested` (1:2:4:1)
+split; the test placed no fifth order, so there is no fifth depth. Below it, the first note in two or three
+sentences (the zone ladder returned no more than the same orders shifted at random, so the zones stay a
+map; investing all of the capital at the start returned more, with a deeper worst drop below the average
+cost; fixed depths were chosen over volatility spacing on the same sample) and every other note in full.
 
 **Framing:** say this shows what a 1% risk on a hypothetical $100,000 account would mean. It is not
 a suggestion to trade. Say what the touch rates mean: how often ordinary moves reached that price within
@@ -331,6 +343,16 @@ the horizon in the calibration sample, not a forecast for this stock. A reward/r
 far stop is not "worse" than one above 1 with a near stop: with no measured edge both are worth about
 zero before costs, and the touch rates show the trade-off (e.g. a 2 ATR stop was touched within 10 days
 about a third of the time, the 95% band stop about 4%).
+
+The ladder is the same kind of arithmetic: where the test's default would put staged limit orders from the
+last close, not a suggestion to place them. Write "if staged limit orders are used, the tested default
+puts them at …", never that the user should buy there, and never call the depths support. Never present
+staging as a way to earn more: in the test, investing all of the capital at the start returned 3.65 points
+more over 12 months (not significant after the Holm correction), and what the ladder changed was a smaller
+worst drop below the average cost (-10.9% against -13.5%). The notes after
+the first name what the test did not cover: a close at or below the 200-day average (or none computed), a
+history under 756 bars and an ETF; say that the test started plans only above the 200-day average, after
+756 bars, on stocks, so this close is outside what it tested.
 
 ### 12. Methodology & caveats (方法与说明)
 **Content:**
@@ -464,6 +486,21 @@ Illustrative arithmetic, not a recommendation.
 | Target (1σ) | 4699.87 (touched 31.5%) | 4250.80 (touched 31.5%) |
 | Target first / stop first / neither | 31.4% / 4.1% / 64.4% | 31.4% / 4.1% / 64.4% |
 | … | | |
+
+Staged limit orders, fixed depths (reference; the ladder test's default, not a confirmed result):
+| Part | Depth | Price | Distance |
+|---|---|---|---|
+| 1 | 4.6% | 4270.75 | -2.1 ATR |
+| 2 | 9.7% | 4039.26 | -4.5 ATR |
+| 3 | 14.7% | 3817.09 | -6.8 ATR |
+| 4 | 19.5% | 3601.26 | -9.1 ATR |
+
+If staged limit orders are used, the tested default puts them at these depths below the last close. In the
+test (50 S&P 500 stocks, 2008-2026), orders at the support zones returned no more over 12 months than the
+same orders shifted at random (-0.03 points), so the zones stay a map. Investing all of the capital at the
+start close returned 3.65 points more (not significant after the Holm correction), with a deeper worst drop
+below the average cost (-13.5% against -10.9%). Fixed depths were chosen over volatility spacing on the
+same sample.
 
 ## 12. Methodology & caveats
 - Prices: split-adjusted FMP /full for levels, indicators and signals; dividend-adjusted closes for
