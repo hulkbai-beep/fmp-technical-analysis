@@ -254,7 +254,7 @@ SCENARIO_PROJECTION_ATR = (1.0, 2.0)   # target projections (ATRs from the trigg
 INVALIDATION_MIN_ATR = 0.5        # invalidation sits at least this many ATRs back through the trigger
 # Volatility bands: close x (1 +- k x sigma_h), sigma_h = rv20 x sqrt(h / 252). Stops and targets come from
 # these bands; the tables below, measured once on the VOL_CALIBRATION sample, say how often ordinary moves
-# reached each one.
+# reached each one (measured by scripts/vol_bands.py, removed on 2026-11-04; in git history at commit 145a174).
 VOL_BAND_K95 = 2.4                # k whose band held 95% of h-day closes (2 held only 92-93%)
 VOL_STOP_K = VOL_BAND_K95         # volatility stop: entry -+ k sigma_h (the 95% band edge)
 VOL_TARGET_K = 1.0                # volatility target: entry +- k sigma_h (the 1-sigma band edge)

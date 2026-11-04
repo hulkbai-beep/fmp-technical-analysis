@@ -56,7 +56,9 @@ set `FMP_TLS_VERIFY=0`, for that process only (see `SKILL.md` > Setup). Never st
 | `tests/` | offline pytest suite with a fake FMP client (`tests/fakes.py`) |
 
 The research back-tests that used to live in this repository (support/resistance and node-zone tests,
-staged-entry ladder tests, data cleaning) were removed on 2026-11-04 to keep the skill to technical analysis.
-They remain in the git history (commit 145a174).
+staged-entry ladder tests, data cleaning) were removed on 2026-11-04 to keep the skill to technical analysis,
+together with `scripts/vol_bands.py`, which measured the volatility-band tables still used in
+`scripts/config.py` (`VOL_BAND_COVER`, `VOL_TOUCH`, `VOL_PAIR_ODDS`). They remain in the git history
+(commit 145a174).
 
 Output is technical analysis for information only, not investment advice.

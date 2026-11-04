@@ -247,7 +247,7 @@ def _scenario(s):
     return {"trigger": _num(t.get("level")), "condition": t.get("condition"), "volume": t.get("volume"),
             "trigger_distance_pct": _num(t.get("distance_pct")), "trigger_basis": t.get("basis"),
             # kind "level" = an actual support/resistance zone; "projection" = no level beyond the trigger, so the
-            # target is the trigger +- a multiple of ATR (a caller may prefer a valuation range or a wider projection)
+            # target is the trigger +- a multiple of ATR (a caller may prefer a wider projection)
             "targets": [{"kind": x.get("kind"), "price": _num(x.get("price")), "low": _num(x.get("zone_low")),
                          "high": _num(x.get("zone_high")), "label": x.get("label"),
                          "distance_pct": _num(x.get("distance_pct"))}
