@@ -1,6 +1,6 @@
 ---
 name: fmp-technical-analysis
-description: Technical analysis of one US-listed stock or ETF from Financial Modeling Prep (FMP) daily data - market regime, trend and moving averages, RSI, MACD, momentum, relative strength vs SPY and the sector ETF, volume flow, volatility, support/resistance levels, back-tested signal statistics, Al Brooks-style price action (trend vs trading range, H2/L2, wedges, failed breakouts, measured moves) and candlestick patterns with their own back-tested statistics, earnings event risk, scenarios and risk arithmetic, a reference ladder for staged limit orders, plus three interactive charts. Use it when the user asks for technical analysis, a chart, support/resistance, moving averages, RSI, MACD, momentum, price action, Al Brooks, candlestick patterns, staged entry orders or the trend of a ticker, including in Chinese (技术面, 技术分析, K线, K线形态, 价格行为, 支撑阻力, 均线, 趋势, 走势, 分批挂单).
+description: Technical analysis of one US-listed stock or ETF from Financial Modeling Prep (FMP) daily data - market regime, trend and moving averages, RSI, MACD, momentum, relative strength vs SPY and the sector ETF, volume flow, volatility, support/resistance levels, back-tested signal statistics, Al Brooks-style price action (trend vs trading range, H2/L2, wedges, failed breakouts, measured moves) and candlestick patterns with their own back-tested statistics, earnings event risk, scenarios and risk arithmetic, plus three interactive charts. Use it when the user asks for technical analysis, a chart, support/resistance, moving averages, RSI, MACD, momentum, price action, Al Brooks, candlestick patterns or the trend of a ticker, including in Chinese (技术面, 技术分析, K线, K线形态, 价格行为, 支撑阻力, 均线, 趋势, 走势).
 ---
 
 # Technical analysis (FMP)
@@ -50,7 +50,7 @@ does the explaining. The output describes conditions and historical base rates. 
 2. **Run** from the skill folder:
    `python scripts/analyze.py TICKER --horizon swing|position [--out DIR] [--refresh] [--history-start YYYY-MM-DD] [--contract PATH]`.
    - Output goes to `./ta-output/<TICKER>_<as_of>/` by default.
-   - Add `--contract PATH` only when another tool needs the ta-1.2 contract: the other horizon also runs,
+   - Add `--contract PATH` only when another tool needs the ta-2.0 contract: the other horizon also runs,
      from the cache, and the contract covers both (see "Contract for other tools").
    - An uncached run makes 10 API calls for a stock, 8 for an ETF and 7 for SPY. A same-day
      re-run makes 0.
@@ -63,12 +63,9 @@ does the explaining. The output describes conditions and historical base rates. 
    user's language.
 5. **Reply** with a short summary:
    - regime, bias and confidence;
-   - the nearest support and resistance, labelled reference only (仅供参考，回测无优势): in walk-forward
-     tests the zones held no more often than the same zones moved to other prices;
+   - the nearest support and resistance, labelled reference only (仅供参考);
    - the horizon's 1σ range and calibrated 95% range (±2.4σ, not ±2σ), and the volatility stop with
      how often a stop that far away was touched in calibration;
-   - when the user asks about staged entries or limit orders (分批, 挂单), the reference ladder
-     `risk.ladder_ref` (see Interpretation rules);
    - any active signals, each with its n;
    - the price-action state and always-in direction, and any setup or candlestick pattern that fired
      in the last 3 bars, each with its n (context, not part of the scorecard);
@@ -109,19 +106,6 @@ does the explaining. The output describes conditions and historical base rates. 
   - read them with the same statistics rules as the signals; a pattern with no edge on this stock is
     reported as such;
   - measured-move targets are zones, never price targets presented as advice.
-- **Staged entries** (`risk.ladder_ref`): the zones are a map, not order prices. In ladder test V3 (50
-  S&P 500 stocks, 2008-2026, a 1:2:4:1 split with a stop and scaling out) limit orders at the support
-  zones returned no more over 12 months than the same orders shifted at random, so the reference ladder
-  sits at fixed depths below the last close: 4.6%, 9.7%, 14.7% and 19.5%, the four parts of that split.
-  - copy its prices from `metrics.json`; it is the test's default, picked over volatility spacing on the
-    same sample, not a confirmed result, and it is illustrative arithmetic like the risk section;
-  - say that staging added no return in that test: investing all of the capital at the start returned
-    3.65 points more over 12 months (not significant after the Holm correction), with a deeper worst drop
-    below the average cost (-13.5% against -10.9%), so never present the ladder as a way to earn more;
-  - write "if staged limit orders are used, the tested default puts them at …", never that the user
-    should place them, and never call a zone a better place for an order;
-  - quote every note after the first: the test started plans only above the 200-day average and after
-    756 bars (about 3 years) of history, and only on stocks, so such a close is outside what it tested.
 - **Report every conflict** in `scorecard.conflicts`, with its typical meaning. Do not add your own.
 - **Data source:** if `data_source` names a third-party proxy, say so and suggest verifying key
   figures.
@@ -138,7 +122,7 @@ does the explaining. The output describes conditions and historical base rates. 
 | `--out` | folder | `./ta-output/<TICKER>_<as_of>/` | where `metrics.json` and `chart.html` go |
 | `--refresh` | flag | off | ignore the cache and fetch everything again |
 | `--history-start` | `YYYY-MM-DD` | IPO date | ignore the symbol's history before this date (e.g. a pre-merger SPAC shell) |
-| `--contract` | file path | off | also write the ta-1.2 contract for another tool (both horizons; see below) |
+| `--contract` | file path | off | also write the ta-2.0 contract for another tool (both horizons; see below) |
 | `FMP_BASE_URL` | URL | unset (official FMP) | only for a third-party proxy |
 | `FMP_TLS_VERIFY` | `0` / `1` | `1` | `0` only per process, only for a proxy; ignored for the official host |
 | `FMP_CACHE_DIR` | folder | `~/.cache/fmp-technical` | response cache (never contains the key) |
@@ -147,30 +131,31 @@ does the explaining. The output describes conditions and historical base rates. 
 All analysis thresholds live in `scripts/config.py`, and each run records them in
 `meta.config_snapshot`.
 
-## Contract for other tools (ta-1.2)
+## Contract for other tools (ta-2.0)
 
-Tools that build on this skill (a decision engine, a screener) read the **ta-1.2 contract**, not
+Tools that build on this skill (a decision engine, a screener) read the **ta-2.0 contract**, not
 `metrics.json`, whose layout is internal and may change.
 - `python scripts/analyze.py TICKER --contract out.json` writes it: the requested horizon runs as usual and
   the other one runs from the same-day cache, so it costs no extra API calls.
 - `python scripts/contract.py SWING/metrics.json POSITION/metrics.json [-o out.json]` builds it from two saved
   runs of the same ticker and day. Give each run its own `--out`: by default both horizons write to the same
   folder.
-- `contracts/ta-1.2.schema.json` describes every field. Horizon-independent blocks (data quality, market,
+- `contracts/ta-2.0.schema.json` describes every field. Horizon-independent blocks (data quality, market,
   earnings, volatility, extension, trend, regime, RS, flow, weekly, price-action context) sit at the top;
   the scorecard, zones (`low` / `high`), `price_location`, scenarios, reference stops, earnings inside the
   horizon and signal and pattern statistics (with `confirmed`, the scorecard's same-regime edge test) sit
   under `horizons.swing` and `horizons.position`.
 - 1.1 adds `event.last_earnings` (the latest report on or before `as_of`, with the days since and its
-  two-day move), so a caller can tell when fundamentals predate the newest statements, and the `kind` of each
-  scenario target: `level` for a support/resistance zone, `projection` when no level lies beyond the trigger
-  and the target is the trigger plus or minus a multiple of ATR.
-- 1.2 adds `levels_note`, `range_95` (the calibrated 95% band, about 2.4σ) and, in `stops_ref`, the
-  volatility-band stop and target (`vol`, `vol_target`), how often prices that far away were touched in
-  calibration (`touch_rate`, `target_touch_rate`) and the stop the risk example uses (`primary`). The zones
-  are reference only: in walk-forward tests they showed no edge over the same zones moved to other prices.
-- It selects facts and judges nothing; position sizing is left to the caller. Fields are only ever added;
-  renaming or removing one means ta-2.0, and `tests/test_contract.py` checks the output against the schema.
+  two-day move) and the `kind` of each scenario target: `level` for a support/resistance zone, `projection`
+  when no level lies beyond the trigger and the target is the trigger plus or minus a multiple of ATR.
+- 1.2 adds `levels_note` (the note that the zones are reference only), `range_95` (the calibrated 95% band,
+  about 2.4σ) and, in `stops_ref`, the volatility-band stop and target (`vol`, `vol_target`), how often prices
+  that far away were touched in calibration (`touch_rate`, `target_touch_rate`) and the stop the risk example
+  uses (`primary`).
+- 2.0 removes `event.eps_estimated` (the skill carries no fundamentals).
+- It selects facts and judges nothing; position sizing is left to the caller. Fields are only ever added
+  within a major version; renaming or removing one means ta-3.0, and `tests/test_contract.py` checks the
+  output against the schema.
 
 ## Edge cases
 
@@ -210,7 +195,7 @@ Tools that build on this skill (a decision engine, a screener) read the **ta-1.2
 - `references/report_template.md`: the report's section order, key paths and wording rules. Read
   it before writing `report.md`.
 - `references/methodology.md`: data, adjustments, indicators, modules, the scorecard, scenarios
-  and approximations, and what the support/resistance, volatility-band and ladder back-tests found.
+  and approximations.
 - `references/signals.md`: the 14 pre-registered signal rules and how their statistics are
   computed.
 - `references/patterns.md`: the price-action readings and setups (chart 2) and the candlestick

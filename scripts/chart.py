@@ -3,7 +3,7 @@ Chart data and the self-contained chart.html.
 
 build_chart_data(ctx, modules) turns the analysis context and the module outputs into one
 JSON-safe dict: the last ctx["hz"]["chart_bars"] daily bars (split-adjusted OHLCV), weekly
-candles over the same span, indicator series, levels, the ~3-year node zones, the volume profile,
+candles over the same span, indicator series, levels, the volume profile,
 earnings markers and the summary panels (regime, scorecard, signal statistics, key numbers, data notes).
 Every number is computed here or in the modules; ui/chart.js only draws.
 
@@ -24,7 +24,6 @@ import pandas as pd
 import candlesticks as CS
 import config as C
 import indicators as I
-import node_zones as NZ
 import price_action as PA
 
 UI_DIR = Path(__file__).resolve().parents[1] / "ui"
@@ -35,7 +34,6 @@ PROFILE_NOTE = ("Volume profile is a daily-bar approximation: each bar's volume 
                 "its high-low range.")
 LEVEL_KEYS = ("price", "zone_low", "zone_high", "sources", "touches", "holds", "breaks", "flips", "fresh",
               "volume_share", "score", "distance_pct", "distance_atr")
-NODE_KEYS = ("zone_low", "zone_high", "grade", "density", "share", "distance_pct", "distance_atr")
 MODULE_NAMES = ("market_context", "regime", "trend_momentum", "relative_strength", "mean_reversion",
                 "volume_flow", "volatility", "levels", "multi_timeframe", "event_risk", "signals",
                 "price_action", "candlesticks", "scorecard", "scenarios", "risk")
@@ -203,17 +201,15 @@ def _earnings(ctx, modules: dict, bars: pd.DataFrame, start: pd.Timestamp) -> li
         if pd.isna(d):
             continue
         d = d.normalize()
-        row = {"date": _iso(d), "eps_actual": _num(r.get("eps_actual")),
-               "eps_estimated": _num(r.get("eps_estimated"))}
-        if d > as_of or (d == as_of and row["eps_actual"] is None):
+        row = {"date": _iso(d)}
+        if d > as_of or (d == as_of and not r.get("reported")):
             upcoming.append(row)
         elif d >= start:
             row.update(kind="past", bar_date=_iso(bars.index[bars.index.searchsorted(d)]))
             out.append(row)
     upcoming.sort(key=lambda r: r["date"])
     if nxt.get("date"):
-        out.append({"date": nxt["date"], "kind": "next", "eps_actual": None,
-                    "eps_estimated": _num(nxt.get("eps_estimated")),
+        out.append({"date": nxt["date"], "kind": "next",
                     "calendar_days": nxt.get("calendar_days"), "trading_days_est": nxt.get("trading_days_est")})
     elif upcoming:
         nb = upcoming[0]
@@ -234,24 +230,6 @@ def _levels(lv: dict) -> dict:
             "high_52w": lv.get("high_52w"), "low_52w": lv.get("low_52w"),
             "lookback_bars": lv.get("lookback_bars"), "window_start": lv.get("window_start"),
             "notes": lv.get("notes") or []}
-
-
-def _node_zones(lv: dict) -> dict:
-    """levels.node_zones (~3-year node zones, reference only). The side follows the position: the
-    zones above the close are resistance, the one holding it and those below support."""
-    nz = lv.get("node_zones") or {}
-    if not nz.get("available"):
-        return {"available": False,
-                "reason": nz.get("reason") or ("node zones unavailable" if lv else "levels module unavailable")}
-
-    def rows(xs, side):
-        return [{**{k: x.get(k) for k in NODE_KEYS}, "side": side} for x in xs or [] if isinstance(x, dict)]
-
-    at = rows([nz.get("at_close")] if nz.get("at_close") else [], "support")
-    return {"available": True, "lookback": NZ.LOOKBACK, "lookback_bars": nz.get("lookback_bars"),
-            "window_start": nz.get("window_start"),
-            "above": rows(nz.get("above"), "resistance"), "at_close": at[0] if at else None,
-            "below": rows(nz.get("below"), "support"), "note": _get(nz, "evidence", "note")}
 
 
 def _volume_profile(lv: dict) -> dict:
@@ -442,7 +420,6 @@ def build_chart_data(ctx, modules: dict) -> dict:
         "avwap_anchors": avwap_anchors,
         "levels": levels,
         "volume_profile": _volume_profile(lv) if lv else {"available": False, "reason": "levels module unavailable"},
-        "node_zones": _node_zones(lv),
         "rvol": _pairs(iw["rvol50"], 3),
         "rsi14": _pairs(iw["rsi14"], 2),
         "rs_spy": rs,

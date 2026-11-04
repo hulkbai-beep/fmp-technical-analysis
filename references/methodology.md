@@ -28,7 +28,7 @@ How every number in `metrics.json` is produced. Parameter names in `CODE` refer 
 | Stock adjusted prices | `historical-price-eod/dividend-adjusted` | `adj_open, adj_high, adj_low, adj_close`, left-joined onto the /full dates | returns, realized volatility, beta, forward returns, earnings reactions |
 | SPY, sector ETF | `historical-price-eod/dividend-adjusted`, last `BENCHMARK_YEARS` = 5 years, one request each | `open..close` = adjusted prices; `adj_*` = the same | market context, relative strength |
 | ^VIX | `historical-price-eod/full`, last 5 years | volume is 0 | VIX level and percentile |
-| Profile, quote, earnings | `profile`, `quote`, `earnings` | as returned | name, sector, ETF flag, IPO date; snapshot quote; earnings calendar |
+| Profile, quote, earnings | `profile`, `quote`, `earnings` | as returned; earnings: report dates only (`date`, `reported`) | name, sector, ETF flag, IPO date; snapshot quote; earnings calendar |
 
 - `^VIX` (with the caret) is the VIX index on FMP; `VIX` is a different instrument.
 - FMP's daily `vwap` field is (O+H+L+C)/4. It is ignored.
@@ -359,246 +359,11 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   - per side: the nearest qualifying zone, then the highest-scoring other qualifying zones within reach
     of the close; the nearest zones beyond reach fill any shortfall;
   - listed nearest first, each with its score, `distance_pct` and `distance_atr` (negative below the close).
-- **Walk-forward check** (`scripts/levels_backtest.py`): builds the levels every 5 bars from past bars only
-  and records whether each zone held (price trades 1 ATR beyond its near edge before a close beyond its far
-  edge). A zone counts as touched when a bar's range overlaps it within 20 bars of the build date; a zone
-  that price skips past without trading in it is a `gap`, counted on its own. The outcome is then read over
-  the next 20 bars from that touch, so it can end up to 39 bars after the build. A bar that reaches the
-  reaction and closes beyond the far edge counts as held (the close is the bar's last print); on the
-  touching bar itself the reaction counts only if the bar opened in or beyond the zone, otherwise the
-  outcome is `ambiguous` and left out. Each zone is compared with the same zone shape moved to other
-  dates; the edge gets a 90% cluster-bootstrap interval over calendar-month blocks (all symbols' rows of
-  a month together, `block_keys`; (symbol, year) blocks until the reruns of 2026-10-27, see H.2), and tables are split
-  by rank, symbol, daily direction at the build bar and period (`--split`). `scripts/fetch_csv.py` saves
-  the 32-symbol baseline universe (trending, declining, sideways, high-volatility stocks and ETFs) as CSVs
-  for it. On six large-cap stocks (1995-2018 daily bars, with the earlier one-sided touch rule) neither
-  these zones nor the earlier fractal-pivot clusters held more often than the moved ones (edge within about
-  ±2 percentage points), while zones at levels planted in synthetic data showed about +23 points. Read the
-  zones as where price has reacted before, not as predictions.
-- **Trading-range boxes V2** (`scripts/trading_ranges.py`, experimental, not yet in the analysis output): a box
-  is a run of alternating ATR ZigZag pivots (`TR_SWING_ATR` = 1 ATR) with at least 2 highs in one band and
-  2 lows in another, each band at most 1 ATR wide, 2-8 ATR apart (ATR at confirmation). It is confirmed on
-  the bar that confirms its last pivot and its edges are frozen there; two closes in a row more than 0.25
-  ATR beyond a band break it, a breach that closes back inside is a failed breakout, and 120 bars without a
-  new test expire it. Boxes are searched from the start of the series, so the boxes known at a date never
-  change later. `levels_backtest.py --source boxes` scores the active box's edges like the key levels.
-- **Baseline (2026-10-26, swing, 32 symbols, 2005-2026 daily bars, `scripts/fetch_csv.py` universe):**
-  key levels held 46.7% vs 47.0% for the moved zones, edge -0.3 points (90% interval -0.7 to +0.1,
-  ~157,000 zones); S2/S3 were below the placebo (-1.4 and -2.3 points). Active-box edges (box active on
-  ~20% of build dates) held 42.8% vs 43.7%, edge -0.9 points (-2.7 to +0.8, 10,000 zones). Neither is a
-  better place for a reaction than a zone of the same shape elsewhere.
-- **Breakout follow-through** (`scripts/breakout_backtest.py`, same data): from the close that confirms a box
-  breakout, the first of +-2 ATR hit within 20 bars in the breakout's direction 50.3% of the time vs 50.8%
-  for the same barriers on other dates (edge -0.5 points, 90% interval -2.7 to +1.7, 2,233 resolved); the
-  measured-move target before the box midline 56.2% vs 58.4% (-2.2, interval -4.2 to 0.0). A plain
-  20-bar-extreme breakout did about the same (+0.6, interval -0.6 to +1.9). Up breakouts continue more often
-  than down ones only because prices drift up; the placebo shows the same split.
-- **Source screen and stop test** (`scripts/sr_screen.py`, same data): each candidate source alone (nearest
-  candidate per side as a fixed 0.5-ATR zone within 4 ATR) against its moved-zone placebo. In the train
-  period (2005-2016) no source's 90% interval lay above 0: pivots +0.2 points, weekly pivots +0.6, POC
-  +1.2, unfilled gaps +0.8, 52-week high/low -1.5, SMA50 -0.8, SMA200 -1.1 (all intervals include 0).
-  The scorecard's structural stop (S1 zone_low - 0.5 ATR) was hit within 20 bars as often as a stop at the
-  same ATR distance on other dates (edge 0.0 points, -0.2 to +0.3, ~61,000 stops).
-- **The same, by calendar month** (2026-10-27, on the cleaned data of H.1; the intervals above used
-  (symbol, year) blocks): key levels 46.8% vs 47.1%, edge -0.3 points (-0.9 to +0.3); S2 -1.5 (-3.4 to
-  +0.4) and S3 -2.0 (-4.5 to +0.6), so "below the placebo" no longer clears 0. Boxes -1.4 (-3.3 to +0.5).
-  Box breakouts -0.4 (-3.2 to +2.2), measured move -2.1 (-4.9 to +0.6), 20-bar extremes +0.3 (-1.6 to
-  +2.1). Sources in the train period: none above 0 (pivots +0.3, weekly pivots +0.8, POC +1.0, gaps +0.7,
-  52-week high/low -1.7, SMA50 -1.0, SMA200 -1.2). Structural stop 0.0 (-0.7 to +0.7, ~58,000 stops).
-  No pre-registered verdict changed.
 - **Short side:** if a side has fewer than 3 levels, a note says so, naming an all-time or 52-week
   extreme when price is at one.
-- **Reference only:** `levels.evidence` = `{backtested_edge: false, note}` (`LEVELS_EVIDENCE_NOTE`), for the
-  reasons in H.1. The report, the chart and the contract (`levels_note`) carry the note.
-- **Node zones (reference):** `levels.node_zones` adds the ~3-year node zones of H.2 (`scripts/node_zones.py`,
-  the last 756 daily bars whatever the horizon): the zone holding the close (`at_close`) and the nearest
-  `PER_SIDE` = 3 zones wholly above and wholly below it, each with its grade, volume share and the distance
-  of its near edge from the close (% and ATRs). The zones above the close are resistance; the one holding
-  the close and those below are support. It carries its own `evidence` (`node_zones.NOTE`, for the
-  reasons in H.2), feeds nothing else (scorecard, scenarios, stops) and is not in the contract; an error
-  there leaves the key levels as they are, with a note.
-
-### H.1 Do the levels hold? (test plan V2, 2026-10-27)
-- **Data:** the 32-symbol universe, daily bars 2005-2026 and regular-session hourly bars 2010-2026 (no pre- or
-  post-market), cleaned by `scripts/clean_data.py`:
-  - each hourly session is put on the daily bars' price basis (a centred 11-session median of daily close /
-    last hourly close; volume is rescaled only when that ratio is a split fraction n/m with m ≤ 4), which
-    fixed spin-off and dividend basis steps (MMM, PFE, VZ, XLU);
-  - sessions whose last close or range disagrees with the daily bar, or with fewer than 4 bars, are excluded;
-  - daily placeholders are dropped, moves over 50% must be confirmed by the hourly bars, and windows where
-    more than half of 20 bars traded under $10M are flagged illiquid;
-  - every exclusion is a row of `exclusions.csv` (symbol, applies, start, end, reason), read with
-    `--exclusions`; the 2020 crash (2020-02-20 to 2020-04-30) is excluded everywhere with `--exclude`.
-- **Gates, written before the run:** edge ≥ 2 points, 90% cluster-bootstrap interval above 0 and a
-  positive edge in each of three periods; a Bonferroni 99.5% interval for the 20 daily hypotheses. Edge =
-  hold rate − the moved-zone placebo (Fibonacci ratios: − the other ratios of the same swings).
-- **Daily** (`scripts/sr_methods.py`, 13 hypotheses): fresh vs tested once, twice or 3+ times; role
-  flips; confirmation by a close or a wick back out of the zone; Fibonacci retracements (0.382, 0.5, 0.618)
-  vs 0.30 / 0.45 / 0.70 of the same swings; Fibonacci extensions (1.272, 1.618) vs 1.15 / 1.45 / 1.80;
-  weekly and monthly floor pivots and Camarilla levels; the Ichimoku cloud and Kijun. **None passed.**
-  Fibonacci retracements did slightly worse than the other ratios (−1.1 points, interval −1.8 to −0.4);
-  extensions +1.4 (−0.5 to +3.2). A limit-order trade at each zone (stop 0.5 ATR beyond, target 1 ATR,
-  0.05% cost per side) lost 0.03-0.09 ATR per trade in every family, about as much as the same trade at
-  the moved zones.
-- **Hourly, 2010-2021** (39 items; `intraday_levels.py`, `sr_methods.py --hourly`, `round_cross.py`,
-  `confluence_test.py`): prior-day and overnight levels, the session VWAP, the opening gap, daily pivots
-  and Camarilla, the daily methods on hourly bars, round-number crosses and confluence. **None passed**;
-  the best edge was about +0.6 points. The session VWAP was −6.6, the opening gap −1.4 and zones where 3+
-  families agree −1.4. After crossing a round number, price continued 49.4% of the time, the same as after
-  crossing a non-round price.
-- **Holdout:** hourly bars from 2022 on were kept out of every screen. Since nothing passed, they were
-  never read.
-- **Earlier baselines** (key levels, boxes, breakouts, sources, structural stop, regimes) moved by less
-  than 0.5 points on the cleaned data.
-- **Intervals by calendar month** (rerun 2026-10-27; the first runs used (symbol, year) blocks, see H.2;
-  the intervals in this section are the month ones): no verdict changed in any of the 13 daily or 39
-  hourly items. Fibonacci retracements stay below their comparison, which uses other ratios of the same
-  swings, so market-wide moves cancel. The one by-side row that had met the interval and period
-  conditions under (symbol, year) blocks, hourly opening-range support (+0.8 points, under the 2-point
-  gate), no longer clears 0 (−0.2 to +1.8). Across these and the baseline reports of H, about 40 of
-  some 750 intervals moved across 0, in both directions: mostly rows by symbol, side or period, plus a
-  few main- and full-sample rows such as the measured-move target; none is a pre-registered verdict.
-- **Reading:** 52 method variants, none better than the same zone at other prices. The zones are kept as
-  reference prices (where price has traded and reacted before), not as places likely to hold. Stops and
-  targets come from the calibrated volatility bands in section 6.
-
-### H.2 Long-window node zones for 1-3 month holds (2026-10-27)
-- **Where they come from:** a sample table of 71 support/resistance zones (12 symbols, 2026-10-23/26) was
-  reverse-engineered. `scripts/node_zones.py` rebuilds it: a ~3-year (756-bar) daily profile with bins
-  0.25% of the close, each bar's volume spread over its high-low range, smoothed (Gaussian, 2 bins) and
-  cut at its local minima; each node's zone is its run of bins at ≥ 30% of its peak.
-  - Locations: mean overlap (IoU) with the table 0.61, 50 of 71 zones at ≥ 0.5, against about 0.43 for
-    the table's zones moved 2-8% at random (still clear after allowing for the 648-setting search). A
-    time-at-price profile without volume matches as well (0.60-0.61), so the locations show "where price
-    traded, each bar spread over its range", not volume as such; close-only histograms (0.51-0.53) and
-    swing-pivot densities (below their own null) do worse. Windows of 630-1260 bars fit about equally.
-  - Grades (weak / medium / strong / very_strong): the zone's volume density in multiples of the
-    window's average (cuts 0.5, 0.8, 1.9). Spearman with the table's grades 0.75 (time-at-price density
-    0.65; volume detached from price at most 0.71), so the grades are where volume shows. The cuts were
-    fitted on the 50 matched zones (64% exact in sample); refitted leaving one symbol out, 58-60% exact
-    against 42% for always "strong", and very strong zones are under-called (30-40% recall). Windows of
-    3-10 years rank the grades about equally well.
-  - The rest of the table: 36% of its integer edges are multiples of 5 (about 20% by chance), so some
-    edges were rounded by hand. Merging neighbouring nodes or adding short windows raises the random
-    baseline as much as the fit, so those explanations are not supported.
-- **Test** (`scripts/node_zones_backtest.py`, 32 symbols, daily 2008-2026, same exclusions, split
-  2017/2022, 8 hypotheses written before the run): buy at the nearest support zone wholly below the
-  close (S1) on the first touch within 21 bars, hold 21 or 63 bars, no stop; short the nearest resistance
-  (R1) the same way. Edge = mean return in ATRs (after 0.05% per side) − the same trade at the same ATR
-  offsets on other dates of the symbol; drawdown edge = placebo depth − zone depth. Nodes cover about 85%
-  of the window's range, so the placebo usually lies on another node: the test asks whether the nearest
-  node's exact edges matter. The zone holding the close (90% of dates) is not traded.
-- **Result: no edge on returns.** S1, 21 bars: +0.01 ATR per trade; 63 bars: +0.04 (zone +1.78 ATR vs
-  placebo +1.74, 61% winners); S1 graded strong or very strong, 63 bars: +0.04. R1 shorts: −0.03 and
-  +0.09. Hold rates: S1 +0.2 points, R1 −1.2. Every interval includes 0. A same-date check (fixed 1- and
-  2-ATR slabs wholly on a node vs wholly off one, date and distance fixed effects) also found no
-  difference (S1 63 bars +0.02 and +0.05 ATR, intervals including 0).
-- **Intervals:** this test and the tranche test resample 3-month calendar blocks (all symbols' rows of
-  each quarter together, `block_keys(g, 3)`); the backtests whose outcomes last 20 bars or less use
-  1-month blocks. The first runs used (symbol, year) blocks, which treat symbols in the same year as
-  independent although zone and placebo come from different dates, so market-wide moves stay in the
-  edge; and a wait of up to 21 bars plus a 63-bar hold spans 3-4 months, so 1-month blocks still share
-  outcomes. From (symbol, year) to 1-month to 3-month blocks, S1 ret63 widened from −0.18..+0.28 to
-  −0.32..+0.42 to −0.50..+0.55, and ret21 from −0.10..+0.11 to −0.19..+0.21 to −0.23..+0.24. The blocking
-  was changed after the first run, on review. Nothing had passed the Bonferroni gate even under the
-  narrowest intervals; the one screen pass, the S1 63-bar drawdown (below), did not survive the wider
-  blocks. "No edge" rules out edges above about 0.55 ATR (about 1% of price)
-  per 63-bar trade and about 0.25 ATR per 21-bar trade, not smaller ones. The numbers below are 3-month
-  blocks.
-- **Drawdown:** after an S1 buy the 63-bar drawdown was 3.97 ATR vs 4.10 at the placebo, edge +0.13
-  (about 0.25% of price). The (symbol, year) interval (+0.01 to +0.25) put it through the screen, but
-  with 3-month blocks it is −0.32 to +0.52 (1-month −0.17 to +0.41), about half of it is a calendar effect
-  shared by other symbols, and with 504- or 1008-bar windows it is +0.08 (intervals including 0). It is
-  not a result.
-- **Secondary rows** (not pre-registered; the report's tables hold about 40 such edges): S2's hold rate
-  is 3.5 points above its placebo (+0.9 to +5.9), though its returns match it (63 bars −0.07 ATR, −0.72
-  to +0.58), and shorts at R2 had a shallower 63-bar drawdown (+0.67 ATR, +0.22 to +1.12). Among 40 edges
-  a few 90% intervals clear 0 by chance; these would need a new pre-registered test before being read as
-  findings.
-- **Grades do not sort outcomes:** S1 63-bar return edge weak +0.06, medium +0.02, strong −0.01, very
-  strong +0.25 (−0.44 to +0.96); at 21 bars weak is best. Rank correlations of density with each edge are
-  about 0. Raw hold rates do rise with grade, because higher grades are wider zones; the same-shape
-  placebo rises the same way.
-- **Tranche buying** (`scripts/tranche_backtest.py`, same data, 23,177 dates, 3 hypotheses written before
-  the run): a third bought at the close, two limit orders over the next 63 bars, unfilled parts bought at
-  bar 63's close, so plans differ only in average cost. Node ladder (tops of S1 and S2, median 2.6% and
-  7.5% below the close) vs the same offsets on other dates: −0.07% (−0.53 to +0.38). Its raw lead over a
-  5% / 10% ladder (+0.21%, +0.11 to +0.32) and a 2 / 4 ATR ladder (+0.19%, +0.05 to +0.35), both under the
-  0.25% gate, is exposure: its nearer limits keep it
-  invested 63% of the window vs 54% and 58% in a sample that rose 2.9% per window (+0.93% vs 5/10% in
-  rising windows, −0.91% in falling ones). With each symbol's drift removed the three ladders tie
-  (+0.01% and −0.03%, intervals including 0); a fixed 2.5% / 7.5% ladder matches the node ladder in every
-  version. Against buying it all at once every ladder cost 0.6-0.8% on average, which is the same drift:
-  with it removed the ladders were 0.26-0.30% cheaper, and they cut the bad tail (5th-percentile 63-bar
-  return −13.6% for the node ladder vs −17.9%).
-- **Reading:** the zones describe where price traded over about three years, and their grades how much
-  volume traded there. Buying them for one to three months did no better than the same zone at another
-  price, the grades did not help, and as tranche prices they behave like a fixed ladder of the same
-  depth. The skill's levels stay reference only.
-
-### H.3 Staged entries at the node zones: ladder test V3 (2026-10-28)
-- **Question** (plan "支撑压力测试计划 V3"): with a full set of rules for a staged entry, a stop and
-  scaling out, do limit orders at the ~3-year support zones of H.2 return more over 12 months than the
-  same orders at random prices? The rules, constants and seeds were committed before any outcome was
-  computed: `references/ladder_v3_spec.md` (run by `scripts/ladder_sim.py`, `ladder_stats.py`,
-  `ladder_analysis.py` and `ladder_run.py`); the stock lists, self-tests and results are in
-  `references/ladder_v3/`, whose README, `results_main.json` and `fixed_depths.json` give every result
-  below.
-- **Sample:** 50 S&P 500 companies: the seven large caps, which earlier tests used too, and 43 drawn
-  by sector from the members of 2008-01 to 2025-10, none of them among the 96 stocks of earlier tests;
-  split-adjusted daily bars 2005-2026, delisted companies included (liquidated at their last close). 50
-  more were drawn the same way and held out for a confirmation run.
-- **Plans:** one per stock and month from 2008-02, at the close of the month's first bar, when the
-  company was a member or worth more than $200 billion, had 756 bars of history and closed above its
-  200-day average: 4,772 starts, 4,512 of them counted at 12 months (252 bars). 2008-09 and 2020 stay in.
-- **Rules of every plan:** the capital is split 1:2:4:1 over up to four limit orders; the zone ladder
-  takes the tops of the zones wholly below the close, each at least 2% below the close and 2% below the
-  previous level, none more than 35% below. After a confirmed breakout (two closes above the nearest
-  resistance zone) the unfilled orders are re-placed from that close. A stop sells everything when three
-  conditions hold at once: the close is 15% under the average cost, two closes sit under the lowest zone
-  low of the ladder, and the stock trails SPY by 5 points since the start. From +50% on the average cost,
-  a third is sold at each of the next three resistance zones (3-month 1σ steps when no zone is left).
-  Cash earns the 3-month Treasury rate; each trade costs 0.05%.
-- **Groups** (same stock, start, split and exits; only the order prices differ): zone; random (the zone
-  ladder shifted as a whole by 1% to half its smallest gap, in 10 up/down pairs: the main control);
-  gaps only (each level moved out of the zones); vol (level i at i × 0.5 of the 3-month σ below the
-  close); fixed (level i at the median depth D_i of the zone ladders at all starts: 4.6%, 9.7%, 14.7%,
-  19.5%; the D_5 of a five-level ladder, 24.3%, was never placed, since the fixed group ran only at
-  1:2:4:1); lump (everything at the start close). Ladder groups place as many levels as the zone ladder
-  has that day: all four at 92% of the 4,772 starts, fewer than four at 389 (none at 12).
-- **Main test (registered):** theta = mean R_252(zone) − R_252(random) passes when the lower bound of its
-  90% interval (calendar-year blocks, 18 of them) is above 0, theta ≥ +1 point, and the 6-month theta
-  and theta on the 43 drawn stocks have the same sign. Power check: MDE80 = 0.41 points, so no stocks
-  were added.
-- **Result: no edge.** theta = −0.03 points (90% interval −0.21 to +0.15, p 0.78); at 6 months −0.005,
-  on the 43 stocks +0.03. With 2-year blocks −0.19 to +0.14; leaving out one year at a time −0.07 to
-  +0.01. Random's orders sat at the zones' depth (13.20% vs 13.19% below the close, part-weighted).
-- **Secondary items** (27, Holm at family-wise 0.10): two rejected, neither a better rule. Zone − gaps
-  only, +3.66 points, is exposure: gaps-only orders sat deeper (21.4% below the close) and invested 35%
-  of the capital against the zone ladder's 87%. In the 200-day variant (a 200-day average level in the
-  ladder) zone − random was −0.27 points. Nothing else survived Holm: the variants (fills confirmed by
-  the close, a start at a confirmed breakout, a 2-month time limit, a 20% stop, splits 1:2:3:2:2 and
-  1:2:4), the subsets without the 2008-09 and 2020 crashes or without earnings, and two trailing P/E
-  filters (FMP has no point-in-time forward P/E): below the 5-year median (1,615 plans), and within 10%
-  above its 10th percentile (341). Zone − lump was −3.65 points (−5.84 to −1.46, raw p 0.010, Holm p
-  0.25), the sample's upward drift as in H.2; lump's safety margin (the worst low below the average cost)
-  was −13.5% against the zone ladder's −10.9%.
-- **Held-out confirmation:** no rule qualified, so the held-out stocks were never simulated or opened.
-- **Order depths** (step 8 of the plan: the one with the higher 12-month mean of vol and fixed): mean
-  R_252 fixed 8.48%, vol 7.21% (zone 8.43%, random 8.46%, lump 12.08%); vol − fixed −1.27 points
-  (−2.26 to −0.28, p 0.04). Fixed invested 86.1% of the capital against vol's 80.2%, with shallower
-  orders (12.5% vs 17.2% part-weighted); zone − fixed was −0.05 points (p 0.77). The choice was made on
-  the same sample and is a default, not a confirmed result.
-- **Reading:** the support zones are a map of where price traded, not better order prices: limit orders
-  at them, with this stop and scaling out, did as well as the same orders shifted a percent or two (by 1%
-  to half the ladder's smallest gap). The skill's reference ladder (`risk.ladder_ref`, section 6)
-  therefore sits at the four fixed depths below the last close, whatever the zones. In the test the fixed
-  group placed only as many orders as the zone ladder had levels, the orders stayed live until filled,
-  re-placed after a breakout, or cancelled by the stop or scaling out, and plans started only above the
-  200-day average, after 756 bars; `risk.ladder_ref` flags a close at or below that average, a shorter
-  history and an ETF. Staging itself added no return: against investing all of the capital at the start
-  the ladder gave up 3.65 points of 12-month return (not significant after Holm) for a smaller worst drop
-  below the average cost.
+- **Reference only:** `levels.evidence` = `{note}` (`LEVELS_EVIDENCE_NOTE`). The report, the chart and the
+  contract (`levels_note`) carry the note. Read the zones as where price has traded or turned before, not
+  as predictions.
 
 ### I. Multi-timeframe (`multi_timeframe`)
 - **Weekly bars:** W-FRI, with SMA10w, SMA40w and Wilder RSI(14) on weekly closes.
@@ -613,14 +378,13 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
 - **Partial week:** a week still in progress is flagged.
 
 ### J. Event risk (`event_risk`, stocks only)
-- **Next earnings:** the earliest report after `as_of`, or one dated `as_of` without actual EPS.
+- **Next earnings:** the earliest report after `as_of`, or one dated `as_of` that is not reported yet.
   - Calendar days to the report.
   - Estimated trading days: numpy business days, with no holiday calendar.
   - `within_horizon`: trading days ≤ the primary horizon. `within_stat_horizons` gives the same flag
     for each stat horizon.
 - **Last earnings:** the latest report on or before `as_of` (`last_earnings`: date, calendar days ago and
-  its two-day move, `null` while the bar after the report is missing). A caller compares it with the
-  fundamental skill's latest statement period to tell when the fundamentals are out of date.
+  its two-day move, `null` while the bar after the report is missing).
 - **Reactions** (approximation, section 7): the two-day move, adj close of the first bar after the
   report date / adj close of the last bar before it - 1.
   - Up to `EARNINGS_REACTIONS_MAX` = 12 latest reports, giving n, median and mean absolute move.
@@ -800,10 +564,10 @@ split-adjusted, and ATR is ATR(14).
   (below).
 - If earnings fall inside the horizon, `earnings_caveat` gives the date and the median two-day reaction.
 
-**Volatility-band calibration** (`scripts/vol_bands.py`, the skill-bands tables; 32 symbols, daily bars
-2005-2026 cleaned as in H.1, the 2020 crash and flagged windows excluded, a start every 5 bars, up and down
-moves pooled; ~29,000 starts per horizon). Cover = share of h-day closes inside close × (1 ± kσ_h); touch =
-share of paths whose high (low) reached the upper (lower) edge within h days.
+**Volatility-band calibration** (`VOL_CALIBRATION`; measured once on 32 US stocks and ETFs, daily bars
+2005-2026, the 2020 crash and illiquid windows excluded, a start every 5 bars, up and down moves pooled;
+~29,000 starts per horizon). Cover = share of h-day closes inside close × (1 ± kσ_h); touch = share of
+paths whose high (low) reached the upper (lower) edge within h days.
 
 | k | cover 10 d | touch 10 d | cover 60 d | touch 60 d | normal model (cover / touch) |
 |---|---|---|---|---|---|
@@ -818,7 +582,7 @@ share of paths whose high (low) reached the upper (lower) edge within h days.
   on a log scale.
 - Up moves reached their edge more often than down moves (10 days, k = 1: 34.0% vs 29.0%; 60 days 40.0% vs
   27.5%): the sample's upward drift. The pooled number assumes no drift, like the base case.
-- For comparison, the old 2 ATR stop was touched within 10 days in 34% of cases and within 60 days in 71%.
+- For comparison, the 2 ATR stop (`atr_stop`) was touched within 10 days in 34% of cases and within 60 days in 71%.
 
 **Wording.** Each scenario carries a conditional `text`, e.g. "If X closes above Y (basis) on
 RVOL ≥ 1.5, the next zones are …; the scenario is invalidated by a close back below Z." `leaning`
@@ -840,25 +604,14 @@ targets come from the key levels, so `scenarios.notes` says they are reference o
 | Pair odds | the 1σ target and 95% stop played from the close in calibration: target first, stop first, neither within h days (10 days: 31.4% / 4.1% / 64.4%; 60 days: 33.7% / 5.1% / 61.3%) |
 | Reward/risk | (target - entry) / (entry - stop), for each stop |
 | Position-size example | risk $ = `ACCOUNT_SIZE` × `RISK_PER_TRADE` = $100,000 × 1% = $1,000; shares = floor(risk $ / (entry - stop)); notional and % of account; flagged when above 100% of the account |
-| Staged-order ladder (`ladder_ref`, long side only) | part i at entry × (1 - `LADDER_DEPTHS`[i]): 4.6%, 9.7%, 14.7% and 19.5% below the last close, the depths of the fixed group of ladder test V3 (H.3); no zone enters it. `above_sma200` is false or null, with a note, when the close is not above its 200-day average, where the test started no plan; a history under `LADDER_MIN_BARS` (756) bars and an ETF get a note too |
 
-The headline example uses the volatility stop when it exists, otherwise the ATR stop; `by_stop` sizes all
-three. With no measured edge a stop/target pair is worth about zero before costs whatever its reward/risk
-(the 1σ / 2.4σ pair has reward/risk 0.42 and reached its target first 7.6 times as often as its stop; the
-64% of paths that reached neither within the horizon make up the difference). The touch rates show the
-trade-off between a near and a far stop. No commissions, slippage, financing or
-borrow are modelled. A gap can fill a stop well beyond its level.
-
-The ladder is reference arithmetic too. In ladder test V3 limit orders at the support zones returned no
-more than the same orders shifted at random, so the zones stay a map and the depths are fixed. Staging
-added no return either: investing all of the capital at the start close returned 3.65 points more over 12
-months (90% interval 1.46 to 5.84, not significant after Holm), with a deeper worst drop below the average
-cost (safety margin −13.5% against −10.9%). Of the two
-spacings the plan allowed, fixed depths had the higher 12-month mean on the test's sample (vol − fixed
-−1.27 points, 90% interval −2.26 to −0.28): a default, not a confirmed result. The test split the capital
-1:2:4:1 over the four depths but placed only as many orders as the zone ladder had levels (fewer than four
-at 389 of 4,772 starts, none at 12), kept the orders live until they filled, a confirmed breakout
-re-placed them from the new close, or its stop or scaling out cancelled them; none of that is modelled here.
+Stops and the first target come from the volatility bands; the structural stop and the level target come
+from the key levels and are shown for reference only. The headline example uses the volatility stop when it
+exists, otherwise the ATR stop; `by_stop` sizes all three. With no measured edge a stop/target pair is worth
+about zero before costs whatever its reward/risk (the 1σ / 2.4σ pair has reward/risk 0.42 and reached its
+target first 7.6 times as often as its stop; the 64% of paths that reached neither within the horizon make
+up the difference). The touch rates show the trade-off between a near and a far stop. No commissions,
+slippage, financing or borrow are modelled. A gap can fill a stop well beyond its level.
 
 ---
 
@@ -881,9 +634,6 @@ re-placed them from the new close, or its stop or scaling out cancelled them; no
   split-adjusted candles, with:
   - SMA20/50/200 and the anchored VWAPs;
   - the nearest 3 supports and resistances as zones;
-  - the ~3-year node zones (`node_zones` in the chart data, from `levels.node_zones`) as fainter bands with
-    dashed edges, red above the close and green holding it or below, shaded by density; they do not set
-    the price scale, can be switched off from the legend, and are listed in a card under the key levels;
   - earnings markers;
   - a volume-profile sidebar (POC, value area);
   - volume with RVOL, RSI(14) with 30/70 lines, and the RS line vs SPY rebased to 100 at the window start.

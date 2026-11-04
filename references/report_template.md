@@ -160,14 +160,9 @@ Do not invent conflicts, and do not drop any.
 - volume profile: `levels.volume_profile.poc`, `.value_area_low`, `.value_area_high`;
 - the 52-week range: `levels.high_52w` / `levels.high_52w_date` and `levels.low_52w` / `levels.low_52w_date`;
 - `levels.extremes` and `levels.notes`;
-- `levels.evidence.note` (why the zones are reference only);
+- `levels.evidence.note` (the zones are reference only);
 - anchored VWAPs: `volume_flow.anchored_vwaps[*]` with `anchor`, `anchor_date`, `vwap`,
-  `price_vs_vwap_pct`, `price_vs_vwap_atr`;
-- ~3-year node zones: `levels.node_zones` with `available` (else `reason`), `lookback_bars`,
-  `window_start`, `at_close` (the zone holding the close, or null), `above[*]` and `below[*]` (nearest
-  first), each with `zone_low`, `zone_high`, `side` (`resistance` for the zones above the close, `support`
-  for the one holding it and those below), `grade`, `share`, `distance_pct`, `distance_atr`; and
-  `evidence.note`, `notes`.
+  `price_vs_vwap_pct`, `price_vs_vwap_atr`.
 
 **Layout:**
 1. One table, top to bottom: R3, R2, R1, **Close**, S1, S2, S3. Columns: Level | Price | Zone | Distance
@@ -175,34 +170,14 @@ Do not invent conflicts, and do not drop any.
    when `fresh`).
 2. One line with the POC and value area.
 3. A small anchored-VWAP table.
-4. A small node-zone table under its own line, "~3-year node zones (reference only)" (Chinese: 约 3 年
-   成交密集区（仅供参考，回测无优势）), top to bottom: `above` farthest first, the `at_close` zone with
-   "holds the close" as its distance (or a **Close** row when it is null), then `below`. Columns: Side |
-   Zone | Distance (% / ATR, to the near edge) | Volume density | Volume share. Side is `side`: Resistance
-   (压力) above the close, Support (支撑) for the zone holding it and those below. Show `grade` as a density, never as a strength: weak → low, medium →
-   medium, strong → high, very_strong → very high (Chinese column 成交密度: 低 / 中 / 高 / 很高; the sample
-   table these zones come from called them 弱 / 中 / 强 / 超强, which may be named once in the note, never
-   as the label). Quote `levels.node_zones.notes` (e.g. no zone above the close). When it is not
-   available, one line with the reason instead.
 
 **Labels:** call the volume profile and VWAPs "daily-bar approximations". If a side has fewer than 3
 levels, quote the note (e.g. "price at an all-time high (available history): no resistance levels
 above the last close in the window").
 
-**Reference only.** Head the section with `levels.evidence.note`, translated (Chinese: 仅供参考，回测无优势).
-In walk-forward tests these zones held no more often than the same zones moved to other prices, so never
-say a zone "should hold", "is strong support" or "is likely to cap the price". `touches` / `holds` /
-`breaks` are a count of what happened, not evidence that the next test will go the same way.
-
-The node zones are a separate, longer map (where price traded over about 3 years, whatever the horizon)
-and are not the key levels: they do not feed the scorecard, scenarios or stops. Their grade is how dense
-the volume in the zone was (`density`, multiples of the window's average), not how likely it is to hold:
-in tests, buying or shorting at them for 1-3 months did no better than the same zones at other prices,
-the grades did not sort the outcomes, as tranche prices they matched a fixed ladder of the same depth, and a
-12-month ladder of limit orders at the support zones, with a stop and scaling out, did no better than the
-same ladder shifted at random (`levels.node_zones.evidence.note`). Say so in one line under the table, and
-never call a high-density zone stronger support, a better place to buy or a place for staged orders: the
-reference ladder of section 11 does not use the zones.
+**Reference only.** Head the section with `levels.evidence.note`, translated (Chinese: 仅供参考), in one
+line. Never say a zone "should hold", "is strong support" or "is likely to cap the price": `touches` /
+`holds` / `breaks` are a count of what happened, not evidence that the next test will go the same way.
 
 ### 7. Signal statistics (信号统计)
 **Fields:**
@@ -302,8 +277,7 @@ as "the scorecard bias leans toward the {bull|bear} scenario", not as a forecast
 **Bands:** the 95% band is ±`band_95_k`σ (about 2.4σ), not ±2σ: fat tails mean ±2σ held only
 `coverage.within_2sd` of closes in calibration. Never call ±2σ a 95% range. Give each band's coverage
 ("the 1σ band held 68% of 10-day closes in calibration"). The bull and bear triggers and their level
-targets are built from the key levels, so add one line that they are reference prices, not tested
-edges (`scenarios.notes`).
+targets are built from the key levels, so add one line that they are reference only (`scenarios.notes`).
 
 ### 11. Risk (风险测算)
 **Fields:** for `risk.long_side` and `risk.short_side`:
@@ -321,21 +295,11 @@ edges (`scenarios.notes`).
 - `reward_risk.vol/structural/atr`;
 - `position_size_example.risk_dollars`, `.stop_basis`, `.shares`, `.notional`, `.notional_pct_account`,
   `.flag`;
-- `risk.label` and `risk.notes`;
-- the staged-order ladder `risk.ladder_ref`: `entry_ref`, `levels[*].part`, `.depth_pct`, `.price`,
-  `.distance_atr`, `split_tested`, `above_sma200`, `confirmed` (always false) and `notes`.
+- `risk.label` and `risk.notes`.
 
 **Layout:** a table with columns Item | Long side | Short side, rows: volatility stop (primary), ATR stop,
 structural stop (reference), target (1σ), level target (reference), touch rates, target first / stop first
 / neither, reward/risk, position size. Head it with "{risk.label}". Then the notes as bullets.
-
-Then the staged-order ladder: a line "Staged limit orders, fixed depths (reference; the ladder test's
-default, not a confirmed result)" (Chinese: 分批挂单参考：固定百分比（回测的默认选择，未经确认）) and a
-table Part | Depth | Price | Distance (ATR) with its four parts, those of the `split_tested` (1:2:4:1)
-split; the test placed no fifth order, so there is no fifth depth. Below it, the first note in two or three
-sentences (the zone ladder returned no more than the same orders shifted at random, so the zones stay a
-map; investing all of the capital at the start returned more, with a deeper worst drop below the average
-cost; fixed depths were chosen over volatility spacing on the same sample) and every other note in full.
 
 **Framing:** say this shows what a 1% risk on a hypothetical $100,000 account would mean. It is not
 a suggestion to trade. Say what the touch rates mean: how often ordinary moves reached that price within
@@ -343,16 +307,6 @@ the horizon in the calibration sample, not a forecast for this stock. A reward/r
 far stop is not "worse" than one above 1 with a near stop: with no measured edge both are worth about
 zero before costs, and the touch rates show the trade-off (e.g. a 2 ATR stop was touched within 10 days
 about a third of the time, the 95% band stop about 4%).
-
-The ladder is the same kind of arithmetic: where the test's default would put staged limit orders from the
-last close, not a suggestion to place them. Write "if staged limit orders are used, the tested default
-puts them at …", never that the user should buy there, and never call the depths support. Never present
-staging as a way to earn more: in the test, investing all of the capital at the start returned 3.65 points
-more over 12 months (not significant after the Holm correction), and what the ladder changed was a smaller
-worst drop below the average cost (-10.9% against -13.5%). The notes after
-the first name what the test did not cover: a close at or below the 200-day average (or none computed), a
-history under 756 bars and an ETF; say that the test started plans only above the 200-day average, after
-756 bars, on stocks, so this close is outside what it tested.
 
 ### 12. Methodology & caveats (方法与说明)
 **Content:**
@@ -420,8 +374,7 @@ Weighted score +1.25 → **Bullish**; confidence **high**
   consolidation or a shallow pullback rather than a reversal.
 
 ## 6. Key levels
-Reference only: in walk-forward tests, zones like these held no more often than the same zones moved
-to other prices.
+Reference only: zones where price traded or turned before, not a forecast of where it will turn next.
 | Level | Price | Zone | Distance | Sources | Tests |
 |---|---|---|---|---|---|
 | R1 | 4509.87 | 4502.10-4517.40 | +0.8% / +0.4 ATR | AVWAP 52-week high | 1 (1 held, 0 broken) |
@@ -429,16 +382,6 @@ to other prices.
 | S1 | 4266.35 | … | -4.7% / -2.2 ATR | gap-up top | 2 (1 held, 1 broken) |
 
 POC 3,540.12; value area 3,402.55-3,781.20 (daily-bar approximation, last 126 bars).
-
-~3-year node zones (reference only), 756 bars from 2023-10-19:
-| Side | Zone | Distance | Volume density | Volume share |
-|---|---|---|---|---|
-| Resistance | 4,610.00-4,688.20 | +3.0% / +1.4 ATR | low | 2.1% |
-| Support | 4,402.70-4,521.30 | holds the close | high | 9.4% |
-| Support | 4,120.50-4,236.80 | -5.3% / -2.5 ATR | very high | 6.8% |
-
-Density shows how much volume traded in the zone, not how likely it is to hold: in tests these zones did
-no better than the same zones at other prices.
 
 ## 7. Signal statistics
 | Signal | Fired | Regime | n | Hit | Median | Same-regime | Edge | Confidence |
@@ -475,7 +418,7 @@ absolute two-day reaction over the last 12 reports was 1.6%.
 | Base 1σ (10 days) | — | 4250.80-4699.87 (±5.0%, 2.3 ATR; held 68.2% of closes) | — |
 | Base 95% (±2.4σ) | — | 3936.46-5014.22 (±12.0%; held 95.8%) | — |
 
-Triggers and level targets come from the key levels, which are reference prices, not tested edges.
+Triggers and level targets come from the key levels, which are reference only.
 
 ## 11. Risk
 Illustrative arithmetic, not a recommendation.
@@ -486,21 +429,6 @@ Illustrative arithmetic, not a recommendation.
 | Target (1σ) | 4699.87 (touched 31.5%) | 4250.80 (touched 31.5%) |
 | Target first / stop first / neither | 31.4% / 4.1% / 64.4% | 31.4% / 4.1% / 64.4% |
 | … | | |
-
-Staged limit orders, fixed depths (reference; the ladder test's default, not a confirmed result):
-| Part | Depth | Price | Distance |
-|---|---|---|---|
-| 1 | 4.6% | 4270.75 | -2.1 ATR |
-| 2 | 9.7% | 4039.26 | -4.5 ATR |
-| 3 | 14.7% | 3817.09 | -6.8 ATR |
-| 4 | 19.5% | 3601.26 | -9.1 ATR |
-
-If staged limit orders are used, the tested default puts them at these depths below the last close. In the
-test (50 S&P 500 stocks, 2008-2026), orders at the support zones returned no more over 12 months than the
-same orders shifted at random (-0.03 points), so the zones stay a map. Investing all of the capital at the
-start close returned 3.65 points more (not significant after the Holm correction), with a deeper worst drop
-below the average cost (-13.5% against -10.9%). Fixed depths were chosen over volatility spacing on the
-same sample.
 
 ## 12. Methodology & caveats
 - Prices: split-adjusted FMP /full for levels, indicators and signals; dividend-adjusted closes for

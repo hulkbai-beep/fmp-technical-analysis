@@ -4,8 +4,7 @@ Scorecard, scenarios and risk framing (step 5).
 build_scorecard turns the module outputs into six pillar scores (-2..+2), regime-dependent
 weights, a 5-step bias with a confidence level and an explicit list of conflicts.
 build_scenarios derives conditional bull / bear / base scenarios from the key levels, ATR and
-realized volatility; build_risk adds illustrative stop, reward/risk and position-size arithmetic and the
-reference staged-order ladder at fixed depths.
+realized volatility; build_risk adds illustrative stop, reward/risk and position-size arithmetic.
 Every input module may be missing or unavailable: the affected inputs are skipped and the reasons
 say so. Nothing here is a recommendation. Rules are documented in references/methodology.md.
 """
@@ -1086,8 +1085,7 @@ def _risk_side(d: int, mk: dict, scen_side: dict | None, h: int) -> dict:
             "sources": list(ref.get("sources") or []), "distance_atr": (float(ref["price"]) - entry) / atr,
             "distance_pct": float(ref["price"]) / entry - 1},
         "structural_stop_basis": (f"nearest {'support zone low -' if d > 0 else 'resistance zone high +'} "
-                                  f"{C.STRUCTURE_STOP_BUFFER_ATR:g} ATR (reference only: the levels showed no "
-                                  "back-tested edge)"),
+                                  f"{C.STRUCTURE_STOP_BUFFER_ATR:g} ATR (reference only)"),
         "atr_stop": atr_stop,
         "atr_stop_basis": f"entry {'-' if d > 0 else '+'} {C.STOP_ATR_MULT:g} ATR",
         "stop_distance_atr": dist_atr,
@@ -1107,35 +1105,8 @@ def _risk_side(d: int, mk: dict, scen_side: dict | None, h: int) -> dict:
     }
 
 
-def _ladder(ctx, modules, mk: dict) -> dict:
-    """Reference staged entry orders at C.LADDER_DEPTHS below the last close (ladder test V3,
-    references/methodology.md H.3). No level comes from a zone: limit orders at the support zones did no better than
-    the same orders at random prices, so the zones stay a map."""
-    entry, atr = mk["close"], mk["atr"]
-    tm, rg = _usable(modules, "trend_momentum"), _usable(modules, "regime")
-    sma200 = _first(_get(tm, "sma", "sma200"), _get(rg, "direction", "sma200"))
-    above = None if sma200 is None else entry > sma200
-    notes = [C.LADDER_NOTE]
-    if above is None:
-        notes.append("200-day average unavailable: the test started plans only above it")
-    elif not above:
-        notes.append("the close is at or below its 200-day average, where the test started no plan")
-    bars = (ctx or {}).get("bars")
-    if bars is not None and len(bars) < C.LADDER_MIN_BARS:
-        notes.append(f"only {len(bars)} bars of history: the test started plans only with at least "
-                     f"{C.LADDER_MIN_BARS} (about 3 years)")
-    if (ctx or {}).get("is_etf"):
-        notes.append("ETF: the test used S&P 500 stocks only")
-    return {"basis": "fixed depths below the last close (ladder test V3 default)", "entry_ref": entry,
-            "split_tested": C.LADDER_SPLIT_TESTED, "above_sma200": above, "confirmed": False,
-            "levels": [{"part": i, "depth_pct": dp, "price": entry * (1 - dp), "distance_atr": -dp * entry / atr}
-                       for i, dp in enumerate(C.LADDER_DEPTHS, 1)],
-            "notes": notes}
-
-
 def build_risk(ctx, modules, scenarios) -> dict:
-    """Illustrative long- and short-side stop, reward/risk and position-size arithmetic, and the reference
-    staged-order ladder."""
+    """Illustrative long- and short-side stop, reward/risk and position-size arithmetic."""
     modules = modules or {}
     mk = _market(ctx, modules)
     if mk["close"] is None or mk["atr"] is None or mk["atr"] <= 0:
@@ -1144,8 +1115,8 @@ def build_risk(ctx, modules, scenarios) -> dict:
     h = int(hz["primary"])
     notes = [ILLUSTRATIVE,
              "Stops and the first target are the calibrated volatility-band edges (stop at the 95% band, "
-             f"{C.VOL_STOP_K:g} sigma; target at 1 sigma). The structural stop and the level target are shown for "
-             "reference only: the support/resistance levels showed no back-tested edge.",
+             f"{C.VOL_STOP_K:g} sigma; target at 1 sigma). The structural stop and the level target come from the "
+             "key levels and are shown for reference only.",
              f"Touch rates say how often ordinary moves reached each price within {h} trading days in the "
              f"calibration sample ({C.VOL_CALIBRATION}). With no measured edge, a stop/target pair is worth about "
              "zero before costs whatever its reward/risk.",
@@ -1164,6 +1135,5 @@ def build_risk(ctx, modules, scenarios) -> dict:
         "horizon_days": h,
         "long_side": _risk_side(1, mk, _get(scenarios, "bull"), h),
         "short_side": _risk_side(-1, mk, _get(scenarios, "bear"), h),
-        "ladder_ref": _ladder(ctx, modules, mk),
         "notes": notes,
     }

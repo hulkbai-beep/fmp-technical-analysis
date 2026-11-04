@@ -252,7 +252,7 @@ def _updown_ratio(bars: pd.DataFrame, notes: list) -> float | None:
 def _split_earnings(ctx) -> tuple[list[pd.Timestamp], list[tuple[pd.Timestamp, dict]]]:
     """(past report dates ascending, upcoming rows ascending) relative to as_of.
 
-    Upcoming = date > as_of, or date == as_of without an actual EPS yet (reports after today's close).
+    Upcoming = date > as_of, or date == as_of and not reported yet (reports after today's close).
     """
     as_of = R.as_of(ctx)
     rows = []
@@ -261,7 +261,7 @@ def _split_earnings(ctx) -> tuple[list[pd.Timestamp], list[tuple[pd.Timestamp, d
         if not pd.isna(d):
             rows.append((d.normalize(), r))
     rows.sort(key=lambda x: x[0])
-    upcoming = [(d, r) for d, r in rows if d > as_of or (d == as_of and num(r.get("eps_actual")) is None)]
+    upcoming = [(d, r) for d, r in rows if d > as_of or (d == as_of and not r.get("reported"))]
     upcoming_dates = {d for d, _ in upcoming}
     past = sorted({d for d, _ in rows if d <= as_of and d not in upcoming_dates})
     return past, upcoming
@@ -404,11 +404,9 @@ def build_event_risk(ctx) -> dict:
 
     next_e = within = per_h = None
     if upcoming:
-        d, row = upcoming[0]
+        d = upcoming[0][0]
         td = int(np.busday_count(as_of.date(), d.date()))
-        next_e = {"date": iso(d), "calendar_days": (d - as_of).days, "trading_days_est": td,
-                  "eps_estimated": num(row.get("eps_estimated")),
-                  "revenue_estimated": num(row.get("revenue_estimated"))}
+        next_e = {"date": iso(d), "calendar_days": (d - as_of).days, "trading_days_est": td}
         within = td <= hz["primary"]
         per_h = {str(h): td <= h for h in hz["stat_horizons"]}
     else:

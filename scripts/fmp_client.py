@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Minimal client for the Financial Modeling Prep (FMP) *stable* API, used by the
-fmp-technical-analysis skill (a trimmed copy of the fundamental skill's client).
+fmp-technical-analysis skill.
 
 - Standard library only; works on Windows, macOS and Linux.
 - The API key is read from the FMP_API_KEY environment variable. It never appears
@@ -66,7 +66,7 @@ TTL_BY_ENDPOINT = {"profile": DAY}
 DEFAULT_TTL = DAY
 # Daily-bar endpoints, the quote and earnings: cached until the New York session they belong to
 # is over (see _same_session). The quote carries its own timestamp, which the snapshot reports;
-# earnings actuals posted after the close are picked up by the post-close refetch.
+# a report posted after the close is picked up as reported by the post-close refetch.
 SESSION_ENDPOINTS = ("historical-price-eod/", "technical-indicators/", "quote", "earnings")
 NETWORK_ATTEMPTS = 2   # tries per request when no HTTP response arrives (timeout, refused, DNS)
 HTTP_ATTEMPTS = 4      # tries per request on HTTP 429 / 5xx
