@@ -89,17 +89,14 @@ def _num(v):
 
 
 def _earnings(data) -> list[dict]:
-    """FMP earnings rows -> ascending list of {date, eps_actual, eps_estimated, revenue_actual, revenue_estimated}."""
+    """FMP earnings rows -> ascending list of {date, reported}. Only the report dates are kept; `reported`
+    says whether FMP already lists actual results for that date (a report dated today after the close is not
+    reported yet). No reported or estimated figure is kept."""
     by_date = {}
     for r in _rows(data):
         d = str(r["date"])[:10]
-        by_date[d] = {
-            "date": d,
-            "eps_actual": _num(r.get("epsActual")),
-            "eps_estimated": _num(r.get("epsEstimated")),
-            "revenue_actual": _num(r.get("revenueActual")),
-            "revenue_estimated": _num(r.get("revenueEstimated")),
-        }
+        by_date[d] = {"date": d,
+                      "reported": _num(r.get("epsActual")) is not None or _num(r.get("revenueActual")) is not None}
     return [by_date[d] for d in sorted(by_date)]
 
 

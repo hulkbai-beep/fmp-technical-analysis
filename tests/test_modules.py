@@ -243,9 +243,9 @@ def test_anchored_vwap_anchors():
     bars.loc[gap_d, "high"] = max(bars.loc[gap_d, "high"], bars.loc[gap_d, "open"])
     friday = next(d for d in idx[n - 80:] if d.dayofweek == 4)
     saturday, monday = friday + pd.Timedelta(days=1), idx[idx.get_loc(friday) + 1]
-    earnings = [{"date": day(idx[n - 200]), "eps_actual": 1.0},
-                {"date": day(saturday), "eps_actual": 1.1},
-                {"date": day(idx[-1] + pd.Timedelta(days=30)), "eps_actual": None}]
+    earnings = [{"date": day(idx[n - 200]), "reported": True},
+                {"date": day(saturday), "reported": True},
+                {"date": day(idx[-1] + pd.Timedelta(days=30)), "reported": False}]
     ctx = make_ctx(bars, earnings=earnings)
     out = M.build_volume_flow(ctx)
     got = {v["anchor"]: v for v in out["anchored_vwaps"]}
@@ -272,7 +272,7 @@ def test_anchored_vwap_anchors():
 
 
 def test_anchored_vwap_etf_has_no_earnings_anchor(bars):
-    earnings = [{"date": day(bars.index[-20]), "eps_actual": 1.0}]
+    earnings = [{"date": day(bars.index[-20]), "reported": True}]
     out = M.build_volume_flow(make_ctx(bars, is_etf=True, earnings=earnings))
     assert "last_earnings" not in {v["anchor"] for v in out["anchored_vwaps"]}
     assert any("ETF" in n for n in out["notes"])
@@ -314,10 +314,10 @@ def test_earnings_reaction_windows():
     friday = next(d for d in idx[230:] if d.dayofweek == 4)
     j = idx.get_loc(friday)
     trading_reports = [idx[50], idx[113], idx[176]]
-    earnings = ([{"date": day(d), "eps_actual": 1.0} for d in trading_reports]
-                + [{"date": day(friday + pd.Timedelta(days=1)), "eps_actual": 1.0},   # Saturday
-                   {"date": day(as_of), "eps_actual": 1.0},                            # today, pre-market
-                   {"date": day(as_of + pd.Timedelta(days=14)), "eps_actual": None, "eps_estimated": 2.0}])
+    earnings = ([{"date": day(d), "reported": True} for d in trading_reports]
+                + [{"date": day(friday + pd.Timedelta(days=1)), "reported": True},   # Saturday
+                   {"date": day(as_of), "reported": True},                            # today, pre-market
+                   {"date": day(as_of + pd.Timedelta(days=14)), "reported": False}])
     out = M.build_event_risk(make_ctx(bars, earnings=earnings))
     adj = bars["adj_close"]
     items = out["reactions"]["items"]
@@ -334,8 +334,7 @@ def test_earnings_reaction_windows():
     assert any("fewer than 8" in n for n in out["notes"])
 
     nxt = out["next_earnings"]
-    assert nxt == {"date": day(as_of + pd.Timedelta(days=14)), "calendar_days": 14, "trading_days_est": 10,
-                   "eps_estimated": 2.0, "revenue_estimated": None}
+    assert nxt == {"date": day(as_of + pd.Timedelta(days=14)), "calendar_days": 14, "trading_days_est": 10}
     assert out["within_horizon"] is True
     assert out["within_stat_horizons"] == {"5": False, "10": True, "20": True}
 
@@ -344,7 +343,7 @@ def test_earnings_reactions_capped_and_same_day_upcoming():
     bars = _calendar_bars()
     idx = bars.index
     past = [idx[i] for i in range(5, 290, 19)]  # 15 reports
-    earnings = [{"date": day(d), "eps_actual": 1.0} for d in past] + [{"date": day(idx[-1]), "eps_actual": None}]
+    earnings = [{"date": day(d), "reported": True} for d in past] + [{"date": day(idx[-1]), "reported": False}]
     out = M.build_event_risk(make_ctx(bars, earnings=earnings, horizon="position", hz=C.HORIZONS["position"]))
     assert out["reactions"]["n"] == C.EARNINGS_REACTIONS_MAX
     assert [it["date"] for it in out["reactions"]["items"]] == [day(d) for d in past[-12:]]
@@ -360,7 +359,7 @@ def test_event_risk_skips():
     none = M.build_event_risk(make_ctx(bars, skipped={"earnings": "HTTP 403: premium endpoint"}))
     assert not none["available"] and none["reason"] == "HTTP 403: premium endpoint"
 
-    past_only = M.build_event_risk(make_ctx(bars, earnings=[{"date": day(bars.index[100]), "eps_actual": 1.0}]))
+    past_only = M.build_event_risk(make_ctx(bars, earnings=[{"date": day(bars.index[100]), "reported": True}]))
     assert past_only["next_earnings"] is None and past_only["within_horizon"] is None
     assert any("no upcoming earnings" in n for n in past_only["notes"])
 
@@ -370,7 +369,7 @@ def _contexts():
     spy = synthetic_bars(900, seed=3, start="2019-10-01")
     vix = synthetic_bars(900, seed=5, start="2019-10-01", drift=0.0, vol=0.05, start_price=18.0)
     full = synthetic_bars(800)
-    earnings = [{"date": day(d), "eps_actual": 1.0} for d in full.index[::63]]
+    earnings = [{"date": day(d), "reported": True} for d in full.index[::63]]
     yield "full", make_ctx(full, spy=spy, sector=spy, vix=vix, earnings=earnings)
     for n in (25, 60, 150, 230):
         yield f"short{n}", make_ctx(synthetic_bars(n), spy=spy, sector=spy, vix=vix, earnings=earnings)

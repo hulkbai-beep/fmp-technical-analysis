@@ -204,12 +204,20 @@ def test_missing_price_history_raises():
         fetch.load_all(fake, "nope", now=NOW)
 
 
-def test_earnings_rows_are_ascending_with_contract_keys():
+def test_earnings_rows_keep_only_dates_and_whether_reported():
     out = fetch.load_all(market(), "ACME", now=NOW)
     rows = out["earnings"]
     assert [r["date"] for r in rows] == ["2026-05-01", "2026-07-30", "2026-11-02"]
-    assert set(rows[0]) == {"date", "eps_actual", "eps_estimated", "revenue_actual", "revenue_estimated"}
-    assert rows[-1]["eps_actual"] is None and rows[-1]["eps_estimated"] == 1.6
+    assert all(set(r) == {"date", "reported"} for r in rows)          # no EPS or revenue figures are kept
+    assert [r["reported"] for r in rows] == [True, True, False]
+
+
+def test_earnings_reported_flag_reads_either_actual():
+    rows = fetch._earnings([{"date": "2026-01-02", "epsActual": None, "revenueActual": 5.0e9},
+                            {"date": "2026-04-02", "epsActual": None, "revenueActual": None},
+                            {"date": "2025-10-02", "epsActual": 0.0, "revenueActual": None}])
+    assert rows == [{"date": "2025-10-02", "reported": True}, {"date": "2026-01-02", "reported": True},
+                    {"date": "2026-04-02", "reported": False}]
 
 
 def test_sector_etf_mapping():

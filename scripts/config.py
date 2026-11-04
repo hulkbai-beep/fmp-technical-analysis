@@ -202,21 +202,6 @@ PA_WEDGE_MIN_SPACING = 3          # bars between consecutive pushes, at least
 PA_MM_MAX_AGE = 120               # measured moves only from swings whose first point is at most this many bars old
 PA_ALWAYS_IN_BARS = 2             # consecutive strong trend bars that flip the always-in direction
 
-# ---------------------------------------------------------------------------- trading ranges V2 (trading_ranges.py)
-# A box = alternating ATR ZigZag pivots whose highs and lows each sit in one narrow band. Starting
-# values for experiments, not validated settings; trading_range_backtest.py measures them.
-TR_SWING_ATR = 1.0                # ZigZag reversal for box pivots (smaller than SWING_ATR: boxes are 2-8 ATR tall)
-TR_EDGE_ATR = 1.0                 # a box edge's pivots span at most this many ATRs (ATR at confirmation) ...
-TR_MIN_TESTS = 2                  # ... and each edge needs at least this many pivots
-TR_MIN_HEIGHT_ATR = 2.0           # box height (upper - lower) in ATRs, at least ...
-TR_MAX_HEIGHT_ATR = 8.0           # ... and at most this many
-TR_MIN_BAND_ATR = 0.25            # an edge band is widened to at least this many ATRs
-TR_TEST_ATR = 0.5                 # a later pivot within this many ATRs of an edge band is another test of it
-TR_BREAK_ATR = 0.25               # a close this many ATRs beyond an edge band breaches it ...
-TR_BREAK_CLOSES = 2               # ... this many breaching closes in a row break the box; fewer, then back inside: failed
-TR_EXPIRE_BARS = 120              # an active box with no new test for this many bars expires
-TR_RECENT_BOXES = 3               # completed boxes listed besides the active one
-
 # ---------------------------------------------------------------------------- candlestick patterns (candlesticks.py, chart 3)
 CS_TREND_BARS = 5                 # prior trend: close[t-k-1] vs close[t-k-1-this] before a k-bar pattern
 CS_LONG_BODY_ATR = 0.6            # long body: body >= this many ATRs (ATR of the bar before the pattern)
@@ -267,14 +252,14 @@ RISK_PER_TRADE = 0.01
 NO_LEVEL_TRIGGER_ATR = 1.0        # trigger = close +- this many ATRs when no level or 52-week extreme lies beyond it
 SCENARIO_PROJECTION_ATR = (1.0, 2.0)   # target projections (ATRs from the trigger) when no level lies beyond it
 INVALIDATION_MIN_ATR = 0.5        # invalidation sits at least this many ATRs back through the trigger
-# Volatility bands: close x (1 +- k x sigma_h), sigma_h = rv20 x sqrt(h / 252). The support/resistance levels
-# showed no back-tested edge (references/methodology.md, "Do the levels hold?"), so stops and targets come from
-# these bands, and the tables below say how often ordinary moves reached each one.
+# Volatility bands: close x (1 +- k x sigma_h), sigma_h = rv20 x sqrt(h / 252). Stops and targets come from
+# these bands; the tables below, measured once on the VOL_CALIBRATION sample, say how often ordinary moves
+# reached each one (measured by scripts/vol_bands.py, removed on 2026-11-04; in git history at commit 145a174).
 VOL_BAND_K95 = 2.4                # k whose band held 95% of h-day closes (2 held only 92-93%)
 VOL_STOP_K = VOL_BAND_K95         # volatility stop: entry -+ k sigma_h (the 95% band edge)
 VOL_TARGET_K = 1.0                # volatility target: entry +- k sigma_h (the 1-sigma band edge)
-VOL_CALIBRATION = ("32 US stocks and ETFs, daily bars 2005-2026 (cleaned; the 2020 crash and flagged windows "
-                   "excluded), up and down moves pooled; scripts/vol_bands.py")
+VOL_CALIBRATION = ("32 US stocks and ETFs, daily bars 2005-2026 (the 2020 crash and illiquid windows excluded), "
+                   "up and down moves pooled")
 # share of h-day closes inside close x (1 +- k sigma_h), by h then k
 VOL_BAND_COVER = {
     5: {1.0: 0.686, 2.0: 0.926, 2.4: 0.959},
@@ -293,27 +278,10 @@ VOL_TOUCH = {
 # the VOL_TARGET_K target and VOL_STOP_K stop played from the close: (target first, stop first, neither) in h days
 VOL_PAIR_ODDS = {5: (0.302, 0.039, 0.658), 10: (0.314, 0.041, 0.644), 20: (0.322, 0.044, 0.633),
                  60: (0.337, 0.051, 0.613)}
-LEVELS_EVIDENCE_NOTE = ("reference only: in walk-forward tests on 32 US stocks and ETFs (daily bars 2005-2026, "
-                        "hourly bars 2010-2021), zones like these held no more often than the same zones moved to "
-                        "other prices, and none of 52 method variants passed (references/methodology.md)")
-# Staged entry orders (ladder test V3, references/methodology.md H.3): limit orders at the ~3-year support zones did
-# no better than the same orders shifted at random, so the zones stay a map and the reference ladder sits at fixed depths
-# below the last close: the median depth of each zone-ladder level at the test's 4,772 plan starts, D_1..D_4 of
-# references/ladder_v3/fixed_depths.json (its D_5 was never placed: the fixed group ran only at 1:2:4:1). Of the two
-# the plan allowed, fixed depths returned more over 12 months than volatility spacing; that choice is a default, not a
-# confirmed result.
-LADDER_DEPTHS = (0.045715, 0.097441, 0.147084, 0.195311)
-LADDER_SPLIT_TESTED = "1:2:4:1"   # the test's split of the capital over the four depths
-LADDER_MIN_BARS = 756             # the test started plans only with this many bars of history (spec S3)
-LADDER_NOTE = ("reference only: in ladder test V3 (50 S&P 500 stocks, 2008-2026, monthly starts above the 200-day "
-               "average, the 1:2:4:1 split with a stop and scaling out), limit orders at the support zones returned "
-               "-0.03 pp over 12 months against the same orders shifted at random (90% interval -0.21 to +0.15), so "
-               "the zones stay a map. Staging added no return either: investing all of the capital at the start "
-               "close returned 3.65 pp more than the zone ladder (1.46 to 5.84, not significant after the Holm "
-               "correction), with a deeper worst drop below its average cost (-13.5% against -10.9%). These depths "
-               "are the median depths of that test's zone ladders; fixed depths "
-               "returned 1.27 pp more than volatility spacing (0.28 to 2.26) and were chosen on the same sample: a "
-               "default, not a confirmed result (references/methodology.md H.3)")
+# The key levels are a map of where price traded or turned before; they set the scenario triggers and the reference
+# structural stop and level target, while the primary stops and targets come from the volatility bands above.
+LEVELS_EVIDENCE_NOTE = ("reference only: zones where price traded or turned before, "
+                        "not a forecast of where it will turn next")
 
 # ---------------------------------------------------------------------------- chart (chart.html)
 CHART_PRICE_DECIMALS = 4          # decimals kept for prices (candles, SMAs, AVWAPs, levels)

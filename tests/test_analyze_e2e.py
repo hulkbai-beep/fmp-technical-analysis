@@ -1,6 +1,7 @@
 """End-to-end runs of analyze.run_analysis / analyze.main on a fake FMP (no network)."""
 import json
 import os
+import re
 from datetime import timedelta
 
 import numpy as np
@@ -20,6 +21,19 @@ TOP_KEYS = ["ticker", "as_of", "data_source", "horizon", "snapshot", "data_quali
 MODULES = TOP_KEYS[6:-1]
 META_KEYS = {"network_calls", "cache_hits", "restricted", "errors", "skipped", "notes", "connection",
              "config_snapshot"}
+# technical analysis only: no fundamentals (EPS, revenue) and none of the removed research blocks
+OFF_TOPIC_KEY = re.compile(r"(^|_)eps(_|$)|revenue|ladder|node_zone|backtest", re.IGNORECASE)
+
+
+def all_keys(obj):
+    """Every dict key in a nested JSON-like object."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            yield str(k)
+            yield from all_keys(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from all_keys(v)
 
 
 def stock_market(**kw):
@@ -52,6 +66,8 @@ def check_shape(metrics, chart_data):
     assert metrics["meta"]["errors"] == [], metrics["meta"]["errors"]   # no module may fail silently
     assert chart_data["meta"]["data_source"] == metrics["data_source"]
     assert chart_data["meta"]["as_of"] == metrics["as_of"]
+    off_topic = sorted({k for k in [*all_keys(metrics), *all_keys(chart_data)] if OFF_TOPIC_KEY.search(k)})
+    assert off_topic == [], off_topic
 
 
 def note_text(metrics, *modules):
@@ -90,13 +106,12 @@ def test_stock_swing_run():
     assert sum(sc["weights"].values()) == pytest.approx(1.0)
     assert m["scenarios"]["horizon_days"] == 10 and m["scenarios"]["bull"]["text"].startswith("If ACME")
     assert m["risk"]["long_side"]["position_size_example"]["risk_dollars"] == pytest.approx(1000.0)
-    lad = m["risk"]["ladder_ref"]
-    assert [x["price"] for x in lad["levels"]] == pytest.approx([lad["entry_ref"] * (1 - d) for d in C.LADDER_DEPTHS],
-                                                                rel=1e-5)
 
     cfg = meta["config_snapshot"]
     assert cfg["horizon"]["name"] == "swing" and cfg["signals"]["confidence_n_normal"] == C.CONFIDENCE_N_NORMAL
-    assert cfg["risk"]["ladder_depths"] == list(C.LADDER_DEPTHS)
+    assert cfg["risk"]["vol_stop_k"] == C.VOL_STOP_K
+    assert m["levels"]["evidence"] == {"note": C.LEVELS_EVIDENCE_NOTE}
+    assert set(m["event_risk"]["next_earnings"]) == {"date", "calendar_days", "trading_days_est"}
 
     assert chart_data["default_timeframe"] == "daily"
     assert len(chart_data["candles"]) == C.HORIZONS["swing"]["chart_bars"]

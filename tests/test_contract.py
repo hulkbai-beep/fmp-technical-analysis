@@ -1,4 +1,4 @@
-"""The ta-1.2 contract (scripts/contract.py, contracts/ta-1.2.schema.json) on a fake FMP (no network).
+"""The ta-2.0 contract (scripts/contract.py, contracts/ta-2.0.schema.json) on a fake FMP (no network).
 
 Every contract must match the schema, and its numbers must be the metrics' numbers. A small JSON Schema checker
 lives here so the tests need nothing beyond pandas, numpy and pytest.
@@ -98,6 +98,7 @@ def test_numbers_are_the_metrics(stock):
     assert c["regime"]["type"] == swing["regime"]["type"]
     assert c["extension"]["z20"] == swing["mean_reversion"]["z20"]
     assert c["event"]["next_earnings"] == swing["event_risk"]["next_earnings"]["date"]
+    assert "eps_estimated" not in c["event"]                       # 2.0: the contract carries no fundamentals
     for name, m in (("swing", swing), ("position", position)):
         h, sc = c["horizons"][name], m["scorecard"]
         assert h["horizon_days"] == m["signals"]["primary_horizon"]
