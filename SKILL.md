@@ -210,7 +210,8 @@ Tools that build on this skill (a decision engine, a screener) read the **ta-2.1
 - **Macro window:** one request covers about 89 days starting on `as_of` (FMP silently truncates
   longer windows), so a release after the `as_of` close is included. Past releases are not used: plans can refuse an early start date. FMP lists most
   releases only 6-8 weeks ahead, so for the position horizon `macro_events.coverage.complete` is often
-  false and the list is a lower bound.
+  false and the list is a lower bound. An answer without US rows leaves `macro_events` unavailable with
+  its `reason`: that is missing data, never "no macro events".
 - **SPAC history:** FMP dates a de-SPAC listing from the shell's first trading day (IONQ starts
   2021-01-04 near $10). `data_quality.spac_like_start` flags it; mention it, and offer a re-run with
   `--history-start <merger date>` so signal statistics exclude the shell.

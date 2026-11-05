@@ -463,6 +463,32 @@ def test_largest_gap_anchor_never_turns_an_ex_dividend_open_into_a_gap_up(move):
     assert ex["gap_atr"] == pytest.approx(0.10 * bars["close"].iloc[n - 61] / atr_prev)
 
 
+@pytest.mark.parametrize("move, share", [(0.85, 0.20), (0.88, 0.15)])
+def test_largest_gap_anchor_ignores_a_drop_the_dividend_explains(move, share):
+    # n-20 opens 15% (12%) down on an ex-date paying 20% (15%) of the prior close: without the dividend that drop is
+    # the largest gap; the dividend explains all of it, so it is no gap (0: neither the raw drop nor a gap up) and
+    # the 10% gap up at n-60 is the anchor. A dividend strictly above the drop keeps float rounding out of the case.
+    bars = _gap_bars(((60, 1.10), (20, move)))
+    n, idx = len(bars), bars.index
+    plain, _ = _largest_gap(bars)
+    assert plain["date"] == idx[n - 20] and plain["gap_pct"] == pytest.approx(move - 1)   # the case discriminates
+    div = pd.Series(0.0, index=idx)
+    div[idx[n - 20]] = share * bars["close"].iloc[n - 21]
+    ex, ctx = _largest_gap(bars.assign(dividend=div))
+    atr_prev = ctx["ind"]["atr14"].iloc[n - 61]
+    assert ex["date"] == idx[n - 60] and ex["gap_pct"] == pytest.approx(0.10)
+    assert ex["gap_atr"] == pytest.approx(0.10 * bars["close"].iloc[n - 61] / atr_prev)
+
+
+def test_largest_gap_anchor_takes_only_the_bars_own_dividend():
+    # a dividend going ex on the NEXT bar does not explain this bar's drop
+    bars = _gap_bars()
+    n, idx = len(bars), bars.index
+    div = pd.Series(0.0, index=idx)
+    div[idx[n - 29]] = 0.20 * bars["close"].iloc[n - 30]
+    assert _largest_gap(bars.assign(dividend=div))[0] == _largest_gap(bars)[0]
+
+
 def test_largest_gap_anchor_measures_a_gap_up_on_an_ex_dividend_bar_raw():
     bars = _gap_bars(((60, 1.10), (20, 1.20)))
     n, idx = len(bars), bars.index

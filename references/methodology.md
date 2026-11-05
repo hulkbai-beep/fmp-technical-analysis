@@ -88,8 +88,9 @@ dividend adjustment.
   - `MAX_CHUNKS` = 3 requests have been made (reported).
 - **A failed older chunk** keeps the rows already fetched and is noted.
 - **Requests per uncached run:**
-  - stock: 13 (profile, quote, holidays-by-exchange, earnings, /full ×2, /dividend-adjusted ×2, dividends,
-    SPY, sector ETF, ^VIX, economic-calendar)
+  - stock: 13 (profile, holidays-by-exchange, quote, earnings, /full ×2, /dividend-adjusted ×2, dividends,
+    SPY, sector ETF, ^VIX, economic-calendar), in that order: the holiday list comes before every request
+    cached by the session rule, whose cutoff it sets (section 1.4)
   - ETF: 11 (no earnings, no sector ETF)
   - SPY itself: 10 (no earnings, no sector ETF, no separate SPY request)
   - Histories under about 19 years need one request per price endpoint.
@@ -100,16 +101,24 @@ dividend adjustment.
   base URL, endpoint and sorted query parameters. The API key is never part of the key, the file name
   or the file contents. Files are written to a temporary name and then renamed.
 - **Price requests** carry `to=<today in New York>`, so each New York date is a new key.
-- **Session rule** (daily-bar endpoints, technical indicators, the quote and earnings): a cached copy is
-  valid only if it was written on the same New York date AND either it was written at or after
-  `MARKET_CLOSE_BUFFER` (16:15 New York), or it is still before 16:15. On weekends, the same date is
-  enough.
+- **Session rule** (daily-bar endpoints, technical indicators, the quote, earnings and dividends): a
+  cached copy is valid only if it was written on the same New York date AND either it was written at
+  or after the time that day's bar counts as complete, or it is still before that time. The time is
+  the one the partial-bar rule uses (section 1.5): the session's close plus `CLOSE_BUFFER_MINUTES` =
+  15 minutes, so 16:15, and 13:15 on a 13:00 early close (`fetch.load_all` gives the client the NYSE
+  calendar's cutoff before its first such request); a client without a calendar (`fmp_client.py get`,
+  `crosscheck.py`) uses `MARKET_CLOSE_BUFFER` = 16:15. On weekends, the same date is enough.
   - A same-day re-run makes zero requests.
-  - A run made during the session is refetched once after the close, so a partial bar is never frozen.
-  - The rule keeps 16:15 on early-close days: at most one extra refetch, which is harmless.
+  - A run made during the session is refetched once the bar is complete, so a partial bar is never
+    frozen: on an early-close day a copy cached at noon is refetched from 13:15, the moment validation
+    takes today's bar as complete.
+  - It matters for the benchmarks too: their cache keys are the same for every symbol on a given day,
+    so a morning run of any symbol caches SPY, the sector ETF and ^VIX for later runs of the others.
+  - Dividends follow the bars because FMP re-bases `adjDividend` on every split, as it does the
+    `/full` prices: both come from the same day, so a split between two runs cannot leave cached
+    amounts on the old basis against new bars.
 - **Other endpoints** use a time-to-live: profile 1 day, the NYSE holiday list 7 days
-  (`CALENDAR_TTL_SECONDS`), dividends 1 day (`DIVIDEND_TTL_SECONDS`), the economic calendar 12 hours
-  (`MACRO_TTL_SECONDS`).
+  (`CALENDAR_TTL_SECONDS`), the economic calendar 12 hours (`MACRO_TTL_SECONDS`).
   - The holiday request's parameters change once a year, so it is nearly always a cache hit.
   - The economic-calendar window depends on `as_of` only, not on the horizon, so the second horizon of
     `--contract` is served from the cache. A re-run more than 12 hours after the first requests it again.
@@ -152,7 +161,8 @@ keeps the weekday rules: 16:15 (`MARKET_CLOSE_BUFFER`), weekdays for the stale c
 
 - **Plan-restricted:** HTTP 402/403, or an FMP message mentioning restricted, premium, subscription,
   upgrade or exclusive. HTTP 401 means an invalid key and stops the run.
-- **Empty arrays** count as "no data".
+- **Empty arrays** count as "no data". So does an economic-calendar answer without a US row: an 89-day
+  window always lists US releases, so `macro_events` is unavailable with the reason, never "no events".
 - **Where it is recorded:** `meta.skipped[<module>]`, `meta.restricted` and the notes.
   - The analysis continues without the affected input and fills nothing in.
   - Skip keys: `profile`, `quote`, `earnings`, `sector`, `spy`, `vix`, `dividends`, `macro_events`.
@@ -544,7 +554,10 @@ Stocks, ETFs and SPY alike, from the parsed dividends (section 1.8) and the bars
 - **Merging:** the tier 1-2 rows of one group on one New York date form one event at the earliest row's
   time: the CPI MoM / YoY / core rows become one `cpi`, the FOMC decision at 14:00 and the press
   conference at 14:30 one `fomc`. `releases` lists the original names and `impact` the highest FMP label.
-  Tier 3 is one event per name and date.
+  Tier 3 is one event per release and date in the same way: FMP lists one release under several names
+  (Existing Home Sales and Existing Home Sales MoM; Durable Goods Orders MoM, Ex Transp MoM and Ex Defense
+  MoM), so rows whose names differ only by a trailing MoM, YoY or QoQ or an "Ex ..." qualifier are one
+  event, labelled with the release name ("Durable Goods Orders"), and the tier-3 count counts releases.
 - **Timing and session** (the first session the release can move):
 
   | `timing` | When | `session` |
@@ -575,7 +588,10 @@ Stocks, ETFs and SPY alike, from the parsed dividends (section 1.8) and the bars
   (`MACRO_CONTRACT_MAX_TIER` = 2); `metrics.json` lists all three.
 - **No history:** the plan rejects an early `from` (2025-11-01 was refused; dates from 2026-01-29 were
   accepted when tested on 2026-11-04), so past releases, and the stock's moves on them, are not available.
-- **Unavailable** (`available: false` with the reason) when the request is restricted or fails.
+- **Unavailable** (`available: false` with the reason; `events`, `within_horizon`, `next`, `counts` and
+  `coverage` null) when the request is restricted or fails, or returns no usable US row. FMP answers `[]`
+  without an error for a range it does not serve, and an 89-day window starting on `as_of` always lists
+  US releases, so an empty listing is missing data, not a window without events.
 
 ---
 

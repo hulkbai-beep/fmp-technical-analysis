@@ -1,7 +1,7 @@
 """Data layer tests: chunked fetch, validation, module skips and the client's cache rules (no network)."""
 import json
 import os
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -37,11 +37,20 @@ def test_normal_stock_uses_thirteen_calls():
     fake = market()
     out = fetch.load_all(fake, "ACME", now=NOW)
     assert out["calls"] == 13 == fake.stats["network_calls"]
-    assert [e for e, _ in fake.requests] == ["profile", "quote", HOLIDAYS, "earnings", FULL, FULL, ADJ, ADJ,
+    # the calendar comes before the quote and every other request cached by the session rule: it sets the cutoff
+    assert [e for e, _ in fake.requests] == ["profile", HOLIDAYS, "quote", "earnings", FULL, FULL, ADJ, ADJ,
                                              DIVIDENDS, ADJ, ADJ, FULL, ECON]
     assert out["sector_etf"] == "XLK" and out["sector"] is not None and out["spy"] is not None
     assert out["skipped"] == {}
     assert out["connection"] == fake.describe() and out["connection"]["route"] == "official FMP API"
+
+
+def test_load_all_gives_the_client_the_calendar_cutoff():
+    fake = market()
+    fetch.load_all(fake, "ACME", now=NOW)
+    assert fake.complete_from(date(2026, 11, 27)) == "13:15"      # the day after Thanksgiving closes at 13:00
+    assert fake.complete_from(date(2026, 12, 24)) == "13:15"
+    assert fake.complete_from(date(2026, 11, 25)) == "16:15"
 
 
 def test_ipo_date_short_circuits_the_older_chunk():
@@ -472,6 +481,17 @@ def test_restricted_economic_calendar_is_recorded():
     assert out["macro_window"] == {"from": "2026-10-16", "to": "2027-01-12"}
 
 
+@pytest.mark.parametrize("rows", [
+    [], macro_rows((("2026-10-29 12:15:00", "EU", "ECB Interest Rate Decision", "High"),))])
+def test_an_economic_calendar_without_us_rows_is_missing_data(rows):
+    # an 89-day window always lists US releases: [] (FMP's silent answer for a range it does not serve) or no US
+    # row means the listing is missing, not that no event is scheduled
+    out = fetch.load_all(market(macro=rows), "ACME", now=NOW)
+    why = "FMP economic-calendar returned no US rows for 2026-10-16 to 2027-01-12"
+    assert out["macro_rows"] is None and out["skipped"]["macro_events"] == why
+    assert f"macro_events: {why}" in out["notes"] and out["macro_window"] == {"from": "2026-10-16", "to": "2027-01-12"}
+
+
 # ---------------------------------------------------------------------------- validate()
 def _bars(n=120, start="2026-04-01", volume=1_000_000.0, price=50.0):
     df = synthetic_bars(n=n, seed=11, start=start, start_price=price)
@@ -601,16 +621,52 @@ def test_quote_follows_the_session_rule(client):
      "2026-10-10T10:00", "2026-10-16T09:00", 1),                  # 6 days: within the week
     (HOLIDAYS, {"exchange": "NYSE", "from": "1990-01-01", "to": "2027-12-31"},
      "2026-10-08T10:00", "2026-10-16T11:00", 2),                  # 8 days
-    (DIVIDENDS, {"symbol": "ACME"}, "2026-10-15T20:00", "2026-10-16T19:00", 1),   # 23 hours
-    (DIVIDENDS, {"symbol": "ACME"}, "2026-10-15T10:00", "2026-10-16T11:00", 2),   # 25 hours
     (ECON, {"from": "2026-10-16", "to": "2027-01-12"}, "2026-10-16T06:00", "2026-10-16T17:00", 1),   # 11 hours
     (ECON, {"from": "2026-10-16", "to": "2027-01-12"}, "2026-10-16T06:00", "2026-10-16T19:00", 2),   # 13 hours
 ])
-def test_calendar_dividends_and_macro_use_fixed_ttls(client, endpoint, params, written, now, calls):
+def test_calendar_and_macro_use_fixed_ttls(client, endpoint, params, written, now, calls):
     assert fmp_client.TTL_BY_ENDPOINT[HOLIDAYS] == C.CALENDAR_TTL_SECONDS == 7 * 86400
-    assert fmp_client.TTL_BY_ENDPOINT[DIVIDENDS] == C.DIVIDEND_TTL_SECONDS
     assert fmp_client.TTL_BY_ENDPOINT[ECON] == C.MACRO_TTL_SECONDS
     assert _get_at(client, written, now, endpoint, **params) == calls
+
+
+@pytest.mark.parametrize("written, now, calls", [
+    ("2026-10-15T20:00", "2026-10-15T23:00", 1),   # the same evening
+    ("2026-10-15T20:00", "2026-10-16T19:00", 2),   # a new New York date, 23 hours later: the bars are new too
+    ("2026-10-16T10:00", "2026-10-16T16:30", 2),   # an intraday copy, after the close buffer
+])
+def test_dividends_follow_the_session_rule(client, written, now, calls):
+    # FMP re-bases adjDividend on every split, as it does the /full bars: both come from the same day
+    assert DIVIDENDS not in fmp_client.TTL_BY_ENDPOINT and DIVIDENDS.startswith(fmp_client.SESSION_ENDPOINTS)
+    assert _get_at(client, written, now, DIVIDENDS, symbol="ACME") == calls
+
+
+@pytest.mark.parametrize("written, now, calls", [
+    ("2026-11-27T12:00", "2026-11-27T13:10", 1),   # 13:00 early close: still before 13:15
+    ("2026-11-27T12:00", "2026-11-27T14:00", 2),   # complete from 13:15: the noon copy holds a partial bar
+    ("2026-11-27T13:05", "2026-11-27T13:20", 2),   # written inside the buffer
+    ("2026-11-27T13:20", "2026-11-27T15:00", 1),   # written after 13:15: the complete bar
+    ("2026-11-25T12:00", "2026-11-25T14:00", 1),   # a regular day keeps 16:15
+    ("2026-11-25T12:00", "2026-11-25T16:20", 2),
+])
+def test_the_cache_cutoff_follows_the_calendar_on_early_closes(client, written, now, calls):
+    client.complete_from = lambda d: fetch._complete_from(CAL, d)
+    assert _get_at(client, written, now) == calls
+
+
+def test_without_a_calendar_the_cache_keeps_sixteen_fifteen(client):
+    assert client.complete_from is None
+    assert _get_at(client, "2026-11-27T12:00", "2026-11-27T14:00") == 1
+
+
+@pytest.mark.parametrize("day_", ["2026-11-27", "2026-12-24", "2026-11-25"])
+def test_cache_and_partial_bar_rule_share_one_cutoff(day_):
+    # a copy written a minute before the cutoff is stale exactly when validate() takes today's bar as complete
+    due = pd.Timestamp(f"{day_} {fetch._complete_from(CAL, day_)}", tz=NY)
+    written = (due - pd.Timedelta(minutes=1)).to_pydatetime()
+    for now in (due - pd.Timedelta(minutes=1), due):
+        fresh = fmp_client._same_session(written, now.to_pydatetime(), fetch._complete_from(CAL, day_))
+        assert fresh is not CAL.after_close(now), now
 
 
 def test_check_probes_the_new_endpoints():
@@ -666,6 +722,74 @@ def test_earnings_follow_the_session_rule(client):
     client._now_ny = lambda: _ny("2026-10-16T16:30")             # after the close: actuals may be new
     client.get("earnings", **params)
     assert client.stats["network_calls"] == 2
+
+
+# ---------------------------------------------------------------------------- real client, cache across runs
+def _load_at(client, fake, when, ticker="ACME"):
+    """fetch.load_all with the real client (disk cache, freshness rules) served by `fake` over HTTP, run at New
+    York time `when`; the cache files this run writes are stamped with that time. Returns (out, network calls)."""
+    now = pd.Timestamp(when, tz=NY)
+    client._http_get = fake.http_get
+    client._now_ny = lambda: now.to_pydatetime()
+    before = {f: f.stat().st_mtime_ns for f in client.cache_dir.glob("*.json")}
+    calls = client.stats["network_calls"]
+    out = fetch.load_all(client, ticker, now=now)
+    for f in client.cache_dir.glob("*.json"):
+        if before.get(f) != f.stat().st_mtime_ns:
+            os.utime(f, (now.timestamp(), now.timestamp()))
+    return out, client.stats["network_calls"] - calls
+
+
+def _noon_snapshot(df):
+    """`df` with its last bar as FMP serves it during the session: the open as the latest price, a third of the
+    day's volume."""
+    out, last = df.copy(), df.index[-1]
+    out.loc[last, ["close", "adj_close"]] = out.loc[last, ["open", "adj_open"]].to_numpy()
+    out.loc[last, "volume"] = out.loc[last, "volume"] / 3
+    return out
+
+
+def test_an_early_close_rerun_refetches_the_copy_cached_at_noon(client):
+    # the day after Thanksgiving closes at 13:00. A noon run caches FMP's intraday bars and drops today's as partial;
+    # at 14:00 the bar counts as complete (13:15), so the noon copies must be refetched, not taken as the close
+    final = {s: df.drop(pd.Timestamp("2026-11-26")) for s, df in market(end="2026-11-27").prices.items()}
+    fake = market(end="2026-11-27", prices={s: _noon_snapshot(df) for s, df in final.items()})
+    out, _ = _load_at(client, fake, "2026-11-27 12:00")
+    assert day(out["bars"].index[-1]) == "2026-11-25"
+    assert out["data_quality"]["partial_bar_excluded"]["date"] == "2026-11-27"
+
+    fake.prices = final                                           # FMP now serves the complete bars
+    out, calls = _load_at(client, fake, "2026-11-27 14:00")
+    last, acme = out["bars"].iloc[-1], final["ACME"].iloc[-1]
+    assert day(out["bars"].index[-1]) == "2026-11-27" and out["data_quality"]["partial_bar_excluded"] is None
+    assert (last["close"], last["volume"]) == (pytest.approx(acme["close"]), pytest.approx(acme["volume"]))
+    # SPY's cache key is the same for every symbol that day: its noon copy is refetched too
+    assert out["spy"]["close"].iloc[-1] == pytest.approx(final["SPY"]["adj_close"].iloc[-1])
+    assert out["vix"]["close"].iloc[-1] == pytest.approx(final[C.VIX]["close"].iloc[-1])
+    assert calls == 11                                            # all but the profile and the holiday list
+
+
+def _split(df, ratio):
+    """`df` as FMP serves it after a `ratio`:1 split: prices divided, volume multiplied."""
+    prices = [c for c in df.columns if c != "volume"]
+    return df.assign(**{c: df[c] / ratio for c in prices}, volume=df["volume"] * ratio)
+
+
+def test_a_split_between_two_runs_never_mixes_the_bases_of_bars_and_dividends(client):
+    # Thursday 18:00 caches ACME's bars and dividends; a 10:1 split takes effect Friday, when FMP divides the prices
+    # and every adjDividend by 10. Friday's run, 23.5 hours later, refetches the bars (a new date), and with them
+    # the dividends: a dividend still on the old basis would be 10 times too large against the bars
+    fake = market(end="2026-10-15")
+    out, _ = _load_at(client, fake, "2026-10-15 18:00")
+    assert out["bars"]["dividend"].max() == pytest.approx(0.5)
+
+    fake.prices["ACME"] = _split(series("1996-10-01", seed=3), 10)
+    fake.dividends["ACME"] = dividend_rows("ACME", amount=0.05)
+    out, _ = _load_at(client, fake, "2026-10-16 17:30")
+    assert day(out["bars"].index[-1]) == "2026-10-16"
+    assert out["bars"]["close"].iloc[-1] == pytest.approx(series("1996-10-01", seed=3)["close"].iloc[-1] / 10)
+    div = out["bars"]["dividend"]
+    assert set(div[div > 0].round(6)) == {0.05} and out["dividends"][-1]["amount"] == pytest.approx(0.05)
 
 
 def test_unreachable_host_fails_fast_for_the_rest_of_the_run(client, monkeypatch, capsys):

@@ -114,7 +114,7 @@
       "required": ["available", "reason", "window_from", "window_to", "listed_through", "events"],
       "properties": {
         "available": {"type": "boolean"},
-        "reason": {"$ref": "#/$defs/str", "description": "why not, e.g. a restricted plan"},
+        "reason": {"$ref": "#/$defs/str", "description": "why not: a restricted plan, a failed request, or an answer without US rows (missing data, not a window without events)"},
         "window_from": {"$ref": "#/$defs/str", "description": "first date requested (YYYY-MM-DD)"},
         "window_to": {"$ref": "#/$defs/str", "description": "last date requested; FMP returns at most ~90 days per request"},
         "listed_through": {"$ref": "#/$defs/str", "description": "FMP lists releases other than FOMC dates only some weeks ahead: the date of the last one listed; events after it may be missing"},
@@ -404,8 +404,8 @@
         "earnings_within_horizon": {"type": ["boolean", "null"]},
         "ex_dividend_within_horizon": {"type": ["boolean", "null"], "description": "the next ex-dividend date is at most horizon_days NYSE sessions away; null when unknown (none announced, or no dividend data); false for a symbol that pays none"},
         "macro_within_horizon": {"type": ["array", "null"], "items": {"$ref": "#/$defs/macro_brief"},
-                                 "description": "tier 1-2 macro events at most horizon_days NYSE sessions away, each with its date, New York time and timing; null when the economic calendar is unavailable"},
-        "macro_complete": {"type": ["boolean", "null"], "description": "whether FMP's listing reaches the horizon's end (macro.listed_through and the request window); false: events late in the horizon may be missing"},
+                                 "description": "tier 1-2 macro events at most horizon_days NYSE sessions away, each with its date, New York time and timing; null when the economic calendar is unavailable (restricted, failed or without US rows)"},
+        "macro_complete": {"type": ["boolean", "null"], "description": "whether FMP's listing reaches the horizon's end (macro.listed_through and the request window); false: events late in the horizon may be missing; null when the economic calendar is unavailable"},
         "signals": {"type": "array", "items": {"$ref": "#/$defs/evidence"}},
         "patterns": {"type": "array", "items": {"$ref": "#/$defs/evidence"}, "description": "context only, not scored"}
       }

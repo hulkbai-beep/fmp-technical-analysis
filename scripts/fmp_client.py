@@ -6,10 +6,13 @@ fmp-technical-analysis skill.
 - Standard library only; works on Windows, macOS and Linux.
 - The API key is read from the FMP_API_KEY environment variable. It never appears
   in cache files, file names or printed output.
-- Responses are cached on disk. Daily price data, the quote and the earnings calendar are
-  reused for the rest of the New York day (a same-day re-run makes no requests), except that
-  a response cached before the close buffer (config.MARKET_CLOSE_BUFFER) is refetched once
-  the close has passed, so an intraday run cannot freeze a partial bar.
+- Responses are cached on disk. Daily price data, the quote, the earnings calendar and the
+  dividends are reused for the rest of the New York day (a same-day re-run makes no requests),
+  except that a response cached before that day's bar is complete is refetched once that time
+  has passed, so an intraday run cannot freeze a partial bar. The time is `complete_from(date)`
+  when the caller sets it (fetch.load_all does, from the NYSE calendar: the session's close +
+  15 minutes, 13:15 on an early close, the same cutoff its partial-bar rule uses), else
+  config.MARKET_CLOSE_BUFFER (16:15).
 - Endpoints that your plan does not include raise RestrictedEndpoint
   (or return None via try_get) instead of crashing an analysis.
 - A host that sends no HTTP response (timeout, refused, DNS) is tried twice; after that the
@@ -65,14 +68,15 @@ DAY = 86400
 TTL_BY_ENDPOINT = {
     "profile": DAY,
     "holidays-by-exchange": C.CALENDAR_TTL_SECONDS,   # the exchange holiday list changes rarely
-    "dividends": C.DIVIDEND_TTL_SECONDS,              # ex-dates are declared weeks ahead
     "economic-calendar": C.MACRO_TTL_SECONDS,         # scheduled releases; times can be revised
 }
 DEFAULT_TTL = DAY
-# Daily-bar endpoints, the quote and earnings: cached until the New York session they belong to
-# is over (see _same_session). The quote carries its own timestamp, which the snapshot reports;
-# a report posted after the close is picked up as reported by the post-close refetch.
-SESSION_ENDPOINTS = ("historical-price-eod/", "technical-indicators/", "quote", "earnings")
+# Daily-bar endpoints, the quote, earnings and dividends: cached until the New York session they
+# belong to is over (see _same_session). The quote carries its own timestamp, which the snapshot
+# reports; a report posted after the close is picked up as reported by the post-close refetch.
+# Dividends follow the bars because FMP re-bases adjDividend on every split, as it does the /full
+# prices: both must come from the same day, or a split between two runs mixes the bases.
+SESSION_ENDPOINTS = ("historical-price-eod/", "technical-indicators/", "quote", "earnings", "dividends")
 NETWORK_ATTEMPTS = 2   # tries per request when no HTTP response arrives (timeout, refused, DNS)
 HTTP_ATTEMPTS = 4      # tries per request on HTTP 429 / 5xx
 
@@ -145,15 +149,16 @@ def _minutes(hhmm: str) -> int:
     return int(h) * 60 + int(m)
 
 
-def _same_session(written: datetime, now: datetime) -> bool:
+def _same_session(written: datetime, now: datetime, complete_from: str = C.MARKET_CLOSE_BUFFER) -> bool:
     """True if a daily-bar response written at `written` is still current at `now` (both NY time):
-    same calendar date, and not written before the close buffer when the buffer has since passed.
-    Weekends have no session, so any same-date copy stays valid."""
+    same calendar date, and not written before `complete_from` ("HH:MM", when that date's bar counts
+    as complete) once that time has passed. Weekends have no session, so any same-date copy stays
+    valid."""
     if written.date() != now.date():
         return False
     if now.weekday() >= 5:
         return True
-    close = _minutes(C.MARKET_CLOSE_BUFFER)
+    close = _minutes(complete_from)
     return written.hour * 60 + written.minute >= close or now.hour * 60 + now.minute < close
 
 
@@ -182,6 +187,10 @@ class FMPClient:
         self.restricted = []  # endpoints skipped because the plan lacks them
         self.errors = []      # optional endpoints that failed for other reasons
         self.unreachable = None  # message once a request got no HTTP response; later requests fail fast
+        # optional callable(date) -> "HH:MM" New York time from which that date's daily bar is complete;
+        # the session rule refetches a copy written before it (None: C.MARKET_CLOSE_BUFFER). fetch.load_all
+        # sets it from the NYSE calendar, so the cache and the partial-bar rule share one cutoff.
+        self.complete_from = None
 
         base = (os.environ.get("FMP_BASE_URL") or OFFICIAL_BASE).strip().rstrip("/")
         if "://" not in base:
@@ -349,12 +358,13 @@ class FMPClient:
         return self.cache_dir / f"{safe_ep}__{sym}__{digest}.json"
 
     def _is_fresh(self, endpoint, path, ttl):
-        """Freshness policy: an explicit ttl or the endpoint's TTL (seconds since written),
-        except daily-bar endpoints and the quote, which follow the New York session rule."""
+        """Freshness policy: an explicit ttl or the endpoint's TTL (seconds since written), except
+        SESSION_ENDPOINTS, which follow the New York session rule with today's `complete_from`."""
         now = self._now_ny()
         mtime = path.stat().st_mtime
         if ttl is None and endpoint.startswith(SESSION_ENDPOINTS):
-            return _same_session(datetime.fromtimestamp(mtime, now.tzinfo), now)
+            cutoff = self.complete_from(now.date()) if self.complete_from else C.MARKET_CLOSE_BUFFER
+            return _same_session(datetime.fromtimestamp(mtime, now.tzinfo), now, cutoff)
         ttl = TTL_BY_ENDPOINT.get(endpoint, DEFAULT_TTL) if ttl is None else ttl
         return now.timestamp() - mtime < ttl
 

@@ -292,8 +292,8 @@ context next to the scorecard and never change it; say so once.
      before the open, `intraday` during the session, `after_close` after the close and `non_session` on a
      non-trading day (both first reach prices in the next session, `session`), `date_only` no time given;
    - tier 2 inside the horizon: one line naming them with their dates;
-   - tier 3 (other events FMP rates "High"): only how many fall inside the horizon (entries of
-     `within_horizon` with `tier` 3), no names;
+   - tier 3 (other releases FMP rates "High"): only how many fall inside the horizon (entries of
+     `within_horizon` with `tier` 3, one per release), no names;
    - none inside the horizon: say so, and optionally give the next FOMC decision's date;
    - `macro_events.coverage.complete` false: add "FMP lists releases other than FOMC dates only through
      {listed_through}; later ones inside the horizon may be missing."

@@ -1,7 +1,7 @@
 """Macro events (scripts/macro.py): classification by event name, UTC -> New York times across both 2026
 DST switches, same-day releases merged into one event, timing / session on the NYSE calendar, the as_of
 filter, horizon counts, listing coverage and the empty / failed-fetch paths. Offline: the rows below are
-verbatim FMP economic-calendar rows (window 2026-11-05 .. 2027-02-01, fetched 2026-11-04)."""
+verbatim FMP economic-calendar rows (the window of as_of 2026-11-04: 2026-11-04 .. 2027-01-31, fetched 2026-11-05)."""
 import json
 import random
 from pathlib import Path
@@ -15,9 +15,10 @@ import market_calendar as MC
 
 FIXTURE = Path(__file__).resolve().parent / "data" / "nyse_holidays_fmp.json"
 SWING, POSITION = C.HORIZONS["swing"], C.HORIZONS["position"]
-WINDOW = {"from": "2026-11-05", "to": "2027-02-01"}
+WINDOW = {"from": "2026-11-04", "to": "2027-01-31"}
 
-# (date UTC, event, impact, country): newest first, as FMP sends them; a subset of the real window
+# (date UTC, event, impact, country): newest first, as FMP sends them; a subset of the real window, with every row
+# FMP lists under several names for one tier-3 release (11-12, 11-25) and rows on as_of itself, before its close
 REAL = [
     ("2027-01-27 19:30:00", "Press Conference", "High", "US"),
     ("2027-01-27 19:00:00", "Fed Interest Rate Decision", "High", "US"),
@@ -47,9 +48,13 @@ REAL = [
     ("2026-11-27 13:30:00", "Retail Inventories Ex Autos MoM (Oct)", "Medium", "US"),
     ("2026-11-26 00:00:00", "Thanksgiving Day", "None", "US"),
     ("2026-11-25 19:00:00", "Beige Book", "Medium", "US"),
+    ("2026-11-25 15:00:00", "New Home Sales (Oct)", "High", "US"),
+    ("2026-11-25 15:00:00", "New Home Sales MoM (Oct)", "High", "US"),
     ("2026-11-25 13:30:00", "Core PCE Price Index MoM (Oct)", "High", "US"),
     ("2026-11-25 13:30:00", "Personal Income MoM (Oct)", "High", "US"),
+    ("2026-11-25 13:30:00", "Durable Goods Orders Ex Defense MoM (Oct)", "High", "US"),
     ("2026-11-25 13:30:00", "Durable Goods Orders MoM (Oct)", "High", "US"),
+    ("2026-11-25 13:30:00", "Durable Goods Orders Ex Transp MoM (Oct)", "High", "US"),
     ("2026-11-25 13:30:00", "Initial Jobless Claims (Nov/21)", "Medium", "US"),
     ("2026-11-24 15:00:00", "CB Consumer Confidence (Nov)", "High", "US"),
     ("2026-11-18 19:00:00", "FOMC Minutes", "High", "US"),
@@ -58,6 +63,7 @@ REAL = [
     ("2026-11-16 13:30:00", "NY Empire State Manufacturing Index (Nov)", "High", "US"),
     ("2026-11-13 13:30:00", "Producer Price Index MoM (Oct)", "High", "US"),
     ("2026-11-13 13:30:00", "Core PPI MoM (Oct)", "Medium", "US"),
+    ("2026-11-12 15:00:00", "Existing Home Sales MoM (Oct)", "High", "US"),
     ("2026-11-12 15:00:00", "Existing Home Sales (Oct)", "High", "US"),
     ("2026-11-10 15:00:00", "Cleveland CPI MoM (Oct)", "Low", "US"),
     ("2026-11-10 13:30:00", "Inflation Rate YoY (Oct)", "High", "US"),
@@ -74,13 +80,21 @@ REAL = [
     ("2026-11-05 13:50:00", "Fed Hammack Speech", "Medium", "US"),
     ("2026-11-05 13:30:00", "Initial Jobless Claims (Oct/31)", "High", "US"),
     ("2026-11-05 13:30:00", "Continuing Jobless Claims (Oct/24)", "High", "US"),
+    # on as_of 2026-11-04 before its close: already in the last bar, so neither events nor counted
+    ("2026-11-04 19:00:00", "Total Vehicle Sales (Oct)", "Low", "US"),
+    ("2026-11-04 17:00:00", "Atlanta Fed GDPNow (Q4)", "Medium", "US"),
+    ("2026-11-04 15:30:00", "EIA Crude Oil Stocks Change (Oct/30)", "Medium", "US"),
+    ("2026-11-04 15:00:00", "ISM Services PMI (Oct)", "High", "US"),
+    ("2026-11-04 13:15:00", "ADP Employment Change (Oct)", "High", "US"),
+    ("2026-11-04 12:00:00", "MBA 30-Year Mortgage Rate (Oct/30)", "Medium", "US"),
 ]
 # what build_macro_events makes of REAL as of 2026-11-04: (id, date, trading_days_to), in output order
 REAL_EVENTS = [
     ("jobs", "2026-11-06", 2), ("consumer_sentiment", "2026-11-06", 2), ("cpi", "2026-11-10", 4),
     ("other", "2026-11-12", 6), ("ppi", "2026-11-13", 7), ("other", "2026-11-16", 8),
     ("retail_sales", "2026-11-17", 9), ("fomc_minutes", "2026-11-18", 10), ("consumer_sentiment", "2026-11-24", 14),
-    ("pce", "2026-11-25", 15), ("other", "2026-11-25", 15),           # Thanksgiving (11-26) is not counted
+    ("pce", "2026-11-25", 15), ("other", "2026-11-25", 15), ("other", "2026-11-25", 15),   # durable goods, new home
+                                                                      # sales; Thanksgiving (11-26) is not counted
     ("ism_manufacturing", "2026-12-01", 18), ("jolts", "2026-12-01", 18), ("ism_services", "2026-12-03", 20),
     ("jobs", "2026-12-04", 21), ("consumer_sentiment", "2026-12-04", 21), ("fomc", "2026-12-09", 24),
     ("cpi", "2026-12-10", 25), ("ppi", "2026-12-15", 28), ("retail_sales", "2026-12-16", 29),
@@ -184,7 +198,27 @@ LOOK_ALIKES = [
 @pytest.mark.parametrize("name", LOOK_ALIKES)
 def test_look_alikes_stay_out_of_the_groups(name):
     assert MA.classify(name, "Medium") is None and MA.classify(name, "Low") is None
-    assert MA.classify(name, "High") == ("other", MA.clean_name(name), 3)     # only FMP's "High" makes it tier 3
+    assert MA.classify(name, "High") == ("other", MA.release_name(name), 3)   # only FMP's "High" makes it tier 3
+
+
+@pytest.mark.parametrize("raw, release", [
+    ("Durable Goods Orders MoM (Oct)", "Durable Goods Orders"),
+    ("Durable Goods Orders Ex Transp MoM (Oct)", "Durable Goods Orders"),
+    ("Durable Goods Orders Ex Defense MoM (Oct)", "Durable Goods Orders"),
+    ("Existing Home Sales MoM (Oct)", "Existing Home Sales"),
+    ("Existing Home Sales (Oct)", "Existing Home Sales"),                 # "Ex" opening a word is no qualifier
+    ("New Home Sales MoM (Oct)", "New Home Sales"),
+    ("Pending Home Sales YoY (Oct)", "Pending Home Sales"),
+    ("Employment Cost Index QoQ (Q3)", "Employment Cost Index"),
+    ("Factory Orders ex Transportation (Sep)", "Factory Orders"),
+    ("Export Prices MoM (Oct)", "Export Prices"),
+    ("Michigan 5 Year Inflation Expectations (Nov)", "Michigan 5 Year Inflation Expectations"),
+    ("NY Empire State Manufacturing Index (Nov)", "NY Empire State Manufacturing Index"),
+    ("Midterm Elections", "Midterm Elections"),
+    ("MoM", "MoM"), (None, ""),
+])
+def test_release_name_drops_the_qualifiers_fmp_splits_one_release_by(raw, release):
+    assert MA.release_name(raw) == release
 
 
 @pytest.mark.parametrize("name", ["Initial Jobless Claims (Oct/31)", "Continuing Jobless Claims (Oct/24)",
@@ -196,7 +230,7 @@ def test_weekly_claims_are_excluded_even_when_high(name):
 
 def test_tier_3_needs_fmp_high_in_any_case():
     for impact in ("High", "high", " HIGH "):
-        assert MA.classify("Durable Goods Orders MoM (Oct)", impact) == ("other", "Durable Goods Orders MoM", 3)
+        assert MA.classify("Durable Goods Orders MoM (Oct)", impact) == ("other", "Durable Goods Orders", 3)
     for impact in ("Medium", "Low", "None", None, "", 3):
         assert MA.classify("Durable Goods Orders MoM (Oct)", impact) is None
     assert MA.classify("Midterm Elections", "High") == ("other", "Midterm Elections", 3)
@@ -319,22 +353,30 @@ def test_cpi_rows_form_one_event_and_look_alikes_stay_apart(cal):
         ("cpi", "2026-11-10", "08:30", "pre_open", "High")
     assert cpi["releases"] == ["CPI n.s.a MoM (Oct)", "CPI s.a (Oct)", "Core Inflation Rate MoM (Oct)",
                                "Inflation Rate YoY (Oct)"]
-    assert {other1["label"], other2["label"]} == {"Cleveland CPI MoM", "Consumer Inflation Expectation"}
+    assert {other1["label"], other2["label"]} == {"Cleveland CPI", "Consumer Inflation Expectation"}
 
 
-def test_one_group_on_two_dates_is_two_events_and_tier_3_is_per_name(cal):
+def test_one_group_on_two_dates_is_two_events_and_tier_3_is_per_release(cal):
+    # FMP lists one release under several names, each of them rated "High" (the real rows of 2026-11-25): one
+    # event per release and date, as for tiers 1-2, so the tier-3 count the report gives counts releases
     rows = [row("2026-11-06 15:00:00", "Michigan Consumer Sentiment (Nov)"),
             row("2026-11-24 15:00:00", "CB Consumer Confidence (Nov)"),
             row("2026-11-25 13:30:00", "Durable Goods Orders MoM (Oct)"),
             row("2026-11-25 13:30:00", "Durable Goods Orders Ex Transp MoM (Oct)"),
+            row("2026-11-25 13:30:00", "Durable Goods Orders Ex Defense MoM (Oct)"),
+            row("2026-11-25 15:00:00", "New Home Sales MoM (Oct)"),
             row("2026-11-25 15:00:00", "New Home Sales (Oct)"),
-            row("2026-11-25 15:00:00", "New Home Sales (Oct)")]           # a repeated row adds nothing
+            row("2026-11-25 15:00:00", "New Home Sales (Oct)"),          # a repeated row adds nothing
+            row("2026-12-23 13:30:00", "Durable Goods Orders MoM (Nov)")]
     evs = events_of(rows, cal, "2026-11-04")
-    assert [(e["id"], e["label"], e["date"]) for e in evs] == [
-        ("consumer_sentiment", "Consumer sentiment", "2026-11-06"), ("consumer_sentiment", "Consumer sentiment", "2026-11-24"),
-        ("other", "Durable Goods Orders Ex Transp MoM", "2026-11-25"), ("other", "Durable Goods Orders MoM", "2026-11-25"),
-        ("other", "New Home Sales", "2026-11-25")]
-    assert evs[-1]["releases"] == ["New Home Sales (Oct)"] and evs[-1]["tier"] == 3
+    assert [(e["id"], e["label"], e["date"], e["time_ny"]) for e in evs] == [
+        ("consumer_sentiment", "Consumer sentiment", "2026-11-06", "10:00"),
+        ("consumer_sentiment", "Consumer sentiment", "2026-11-24", "10:00"),
+        ("other", "Durable Goods Orders", "2026-11-25", "08:30"), ("other", "New Home Sales", "2026-11-25", "10:00"),
+        ("other", "Durable Goods Orders", "2026-12-23", "08:30")]
+    assert evs[2]["releases"] == ["Durable Goods Orders Ex Defense MoM (Oct)",
+                                  "Durable Goods Orders Ex Transp MoM (Oct)", "Durable Goods Orders MoM (Oct)"]
+    assert evs[3]["releases"] == ["New Home Sales (Oct)", "New Home Sales MoM (Oct)"] and evs[3]["tier"] == 3
 
 
 def test_row_order_does_not_matter(cal):
@@ -387,7 +429,9 @@ def test_real_window_swing(cal):
     m = MA.build_macro_events(ctx(real_rows(), calendar=cal, hz=SWING))
     assert m["available"] and m["source"] == MA.SOURCE and m["window"] == WINDOW and m["horizon_days"] == 10
     assert [(e["id"], e["date"], e["trading_days_to"]) for e in m["events"]] == REAL_EVENTS
-    assert m["counts"] == {"tier1": 12, "tier2": 8, "tier3": 5, "excluded": 4, "unclassified": 8}
+    # tier 3: one per release (11-12 existing home sales, 11-16 Empire State, 11-25 durable goods and new home
+    # sales, 12-17 housing starts, 12-23 durable goods); counts skip the rows on as_of before its close
+    assert m["counts"] == {"tier1": 12, "tier2": 8, "tier3": 6, "excluded": 4, "unclassified": 8}
     assert [(e["id"], e["date"], e["trading_days_to"]) for e in m["within_horizon"]] == REAL_EVENTS[:8]
     assert m["within_horizon"][3] == {"id": "other", "label": "Existing Home Sales", "tier": 3,
                                       "date": "2026-11-12", "time_ny": "10:00", "timing": "intraday",
@@ -421,7 +465,7 @@ def test_real_window_position_flags_the_unlisted_tail(cal):
 
 def test_the_window_end_can_limit_coverage(cal):
     m = MA.build_macro_events(ctx(real_rows(), calendar=cal, hz=SWING,
-                                  window={"from": "2026-11-05", "to": "2026-11-16"}))
+                                  window={"from": "2026-11-04", "to": "2026-11-16"}))
     assert m["coverage"]["complete"] is False and m["coverage"]["complete_stat_horizons"] == \
         {"5": True, "10": False, "20": False}
     assert "window ends on 2026-11-16" in m["notes"][-1] and "10 sessions (to 2026-11-18)" in m["notes"][-1]
@@ -442,19 +486,70 @@ def test_date_only_events_get_a_note(cal):
     assert any("no time in FMP" in n for n in m["notes"])
 
 
-def test_empty_window_is_available_with_a_note(cal):
+UNAVAILABLE = {"events": None, "within_horizon": None, "within_stat_horizons": None, "next": None, "counts": None,
+               "coverage": None}
+
+
+def test_an_empty_listing_is_missing_data(cal):
+    # an 89-day window always lists US releases: [] is missing data (null + reason), never "no events"
     m = MA.build_macro_events(ctx([], calendar=cal))
-    assert m["available"] is True and m["events"] == [] and m["within_horizon"] == []
-    assert m["within_stat_horizons"] == {"5": 0, "10": 0, "20": 0}
-    assert m["next"] == {g: None for g in MA.TIER1_GROUPS}
-    assert m["counts"] == {"tier1": 0, "tier2": 0, "tier3": 0, "excluded": 0, "unclassified": 0}
-    assert m["coverage"]["complete"] is None and m["coverage"]["listed_through"] is None
-    assert m["notes"] == ["FMP economic-calendar returned no events for the window (2026-11-05 to 2027-02-01)"]
+    assert m["available"] is False and {k: m[k] for k in UNAVAILABLE} == UNAVAILABLE
+    assert m["reason"] == "FMP economic-calendar returned no events for the window (2026-11-04 to 2027-01-31)"
+    assert m["window"] == WINDOW and m["horizon_days"] == 10 and m["notes"] == []
 
 
-def test_rows_without_us_events_get_their_own_note(cal):
+def test_a_listing_without_usable_us_rows_is_missing_data(cal):
     m = MA.build_macro_events(ctx([row("2026-12-17 13:15:00", "Interest Rate Decision", country="EU")], calendar=cal))
-    assert m["available"] and m["events"] == [] and "no usable US events" in m["notes"][0]
+    assert m["available"] is False and {k: m[k] for k in UNAVAILABLE} == UNAVAILABLE
+    assert m["reason"] == "FMP economic-calendar returned no usable US events for the window (2026-11-04 to 2027-01-31)"
+    m = MA.build_macro_events(ctx([row("garbage", "Retail Sales MoM (Oct)"), row(None, "CPI s.a (Oct)")], calendar=cal))
+    assert m["available"] is False and "no usable US events" in m["reason"]
+    assert m["notes"] == ["2 economic-calendar row(s) without a usable date or event name skipped"]
+
+
+def test_us_rows_without_an_event_after_as_of_leave_the_module_available(cal):
+    # the listing is there; nothing is scheduled after the as_of close inside it
+    m = MA.build_macro_events(ctx([row("2026-11-04 13:30:00", "Inflation Rate YoY (Oct)")], calendar=cal))
+    assert m["available"] is True and m["events"] == [] and m["within_horizon"] == []
+    assert m["counts"] == {"tier1": 0, "tier2": 0, "tier3": 0, "excluded": 0, "unclassified": 0}
+
+
+# ---------------------------------------------------------------------------- boundaries
+def test_counts_skip_rows_at_or_before_the_as_of_close(cal):
+    # as_of Thursday 2026-11-05: the rows of that day up to its close (and the evening before) are in its bar
+    rows = [row("2026-11-05 00:30:00", "Late Release", "Low"),                       # 19:30 on 11-04
+            row("2026-11-05 13:30:00", "Initial Jobless Claims (Oct/31)"),           # 08:30: excluded, in the bar
+            row("2026-11-05 15:30:00", "EIA Natural Gas Stocks Change (Oct/30)", "Low"),   # 10:30, in the bar
+            row("2026-11-05 21:30:00", "API Crude Oil Stock Change (Oct/30)", "Low"),      # 16:30: next session
+            row("2026-11-12 13:30:00", "Initial Jobless Claims (Nov/07)")]
+    m = MA.build_macro_events(ctx(rows, as_of="2026-11-05", calendar=cal,
+                                  window={"from": "2026-11-05", "to": "2027-02-01"}))
+    assert m["events"] == []
+    assert m["counts"] == {"tier1": 0, "tier2": 0, "tier3": 0, "excluded": 1, "unclassified": 1}
+
+
+def test_stat_horizons_count_an_event_exactly_h_sessions_out(cal):
+    # as of 2026-11-03 the first CPI is 5 sessions out and retail sales 10: both count (trading_days_to <= h)
+    m = MA.build_macro_events(ctx(real_rows(), as_of="2026-11-03", calendar=cal))
+    first = {}
+    for e in m["events"]:
+        first.setdefault(e["id"], e["trading_days_to"])
+    assert (first["cpi"], first["retail_sales"]) == (5, 10)
+    assert m["within_stat_horizons"] == {"5": 2, "10": 4, "20": 5}
+
+
+@pytest.mark.parametrize("as_of, to, complete, stat", [
+    ("2026-12-16", "2027-01-31", True, {"5": True, "10": True, "20": False}),    # horizon ends on listed_through
+    ("2026-11-04", "2026-11-18", True, {"5": True, "10": True, "20": False}),    # ... on the window's last day
+    ("2026-11-04", "2026-11-17", False, {"5": True, "10": False, "20": False}),
+])
+def test_coverage_holds_a_horizon_that_ends_on_the_last_listed_day(cal, as_of, to, complete, stat):
+    m = MA.build_macro_events(ctx(real_rows(), as_of=as_of, calendar=cal, window={"from": as_of, "to": to}))
+    cov = m["coverage"]
+    assert (cov["complete"], cov["complete_stat_horizons"]) == (complete, stat)
+    assert cov["horizon_end"] == {"2026-12-16": "2026-12-31", "2026-11-04": "2026-11-18"}[as_of]
+    (note,) = m["notes"]
+    assert "20 sessions" in note and ("10 sessions" in note) is (not complete)
 
 
 def test_unusable_rows_are_counted(cal):

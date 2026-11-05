@@ -1,8 +1,8 @@
 """
 Data layer: fetch daily bars and reference data from FMP, then validate them.
 
-load_all() makes about thirteen requests for an uncached stock (profile, quote, the NYSE holiday
-list, earnings, two chunks each of /full and /dividend-adjusted history, the symbol's dividends, SPY,
+load_all() makes about thirteen requests for an uncached stock (profile, the NYSE holiday list,
+quote, earnings, two chunks each of /full and /dividend-adjusted history, the symbol's dividends, SPY,
 the sector ETF, ^VIX and the economic calendar; eleven for an ETF, ten for SPY); a same-day re-run is
 served from the client's cache. Missing or plan-restricted data is recorded in `skipped` / `notes`
 and never filled in. A benchmark without dividend-adjusted prices falls back to split-adjusted /full
@@ -10,9 +10,10 @@ prices (price return), and says so.
 
 The NYSE calendar (market_calendar.py: FMP's holiday list united with the exchange rules, the rules
 alone when FMP's list cannot be loaded) drives validation: the partial-bar rule, the stale check and
-data-gap flags count NYSE sessions. The stock's bars carry a "dividend" column: the split-adjusted
-dividend going ex on each bar (dividends.py), 0 elsewhere and everywhere when the dividends could not
-be loaded.
+data-gap flags count NYSE sessions. It also sets the client's cache cutoff (client.complete_from), so
+a copy cached before today's bar is complete (13:15 on an early close) is not served as complete. The
+stock's bars carry a "dividend" column: the split-adjusted dividend going ex on each bar
+(dividends.py), 0 elsewhere and everywhere when the dividends could not be loaded.
 """
 from __future__ import annotations
 
@@ -471,12 +472,24 @@ def macro_window(as_of) -> dict:
     return {"from": _day(start), "to": _day(start + pd.Timedelta(days=C.MACRO_WINDOW_DAYS - 1))}
 
 
+def _has_country_rows(data, country=C.MACRO_COUNTRY) -> bool:
+    """True when `data` is a list holding at least one row of `country` (macro.py's test: any case,
+    surrounding spaces ignored)."""
+    return isinstance(data, list) and any(
+        isinstance(r, dict) and str(r.get("country") or "").strip().upper() == country for r in data)
+
+
 def fetch_macro(client, as_of) -> tuple[list | None, dict, str | None]:
     """ONE economic-calendar request over macro_window(as_of) -> (rows, window, problem): FMP's rows
     as returned (every country; macro.py keeps C.MACRO_COUNTRY), or None with the reason in
-    `problem` when the request was restricted or failed."""
+    `problem` when the request was restricted or failed, or returned no C.MACRO_COUNTRY row. An
+    89-day window always lists US releases, so an empty answer (FMP answers [] without an error for
+    a range it does not serve) is missing data, not a window without events."""
     window = macro_window(as_of)
     data, problem = fmp_client.get_with_reason(client, ECONOMIC_CALENDAR, **window)
+    if problem is None and not _has_country_rows(data):
+        problem = (f"FMP economic-calendar returned no {C.MACRO_COUNTRY} rows for {window['from']} to "
+                   f"{window['to']}")
     return (None if problem else data), window, problem
 
 
@@ -485,11 +498,13 @@ def load_all(client, ticker, now=None, start=None) -> dict:
     `start` (a date) cuts the history requested for the symbol, e.g. to drop a pre-merger SPAC shell.
     Raises ValueError when the symbol has no usable price history.
 
-    Requests, in order: profile, quote, holidays-by-exchange, earnings (stocks), /full and
+    Requests, in order: profile, holidays-by-exchange, quote, earnings (stocks), /full and
     /dividend-adjusted history, dividends, the benchmarks (SPY unless it is the symbol, the sector
-    ETF for a stock), ^VIX and the economic calendar. Besides the bars and benchmarks it returns
-    `calendar` (the NYSE MarketCalendar), `dividends` (parse_dividends entries; None when they could
-    not be loaded), `macro_rows` (the economic-calendar rows; None on failure) and `macro_window`."""
+    ETF for a stock), ^VIX and the economic calendar. The calendar comes before every request the
+    client caches by the session rule, because it sets the client's cutoff (client.complete_from).
+    Besides the bars and benchmarks it returns `calendar` (the NYSE MarketCalendar), `dividends`
+    (parse_dividends entries; None when they could not be loaded), `macro_rows` (the economic-calendar
+    rows; None on failure or without a US row) and `macro_window`."""
     now = to_ny(now)
     symbol = normalize_symbol(ticker)
     today = pd.Timestamp(now.date())
@@ -503,9 +518,6 @@ def load_all(client, ticker, now=None, start=None) -> dict:
     profile, why = _reference(client, "profile", symbol)
     if profile is None:
         unavailable("profile", why)
-    quote, why = _reference(client, "quote", symbol)
-    if quote is None:
-        unavailable("quote", why)
     is_etf = bool(profile and (profile.get("isEtf") or profile.get("isFund")))
     if profile and profile.get("isActivelyTrading") is False:
         notes.append(f"profile reports {symbol} as not actively trading")
@@ -514,6 +526,14 @@ def load_all(client, ticker, now=None, start=None) -> dict:
     if cal_problem:
         notes.append(f"exchange calendar: {cal_problem}; {C.CALENDAR_EXCHANGE} holidays and early closes come "
                      f"from the built-in exchange rules")
+    # the client's cache keeps a session endpoint's copy (bars, quote, earnings, dividends) only until the bar
+    # it holds is complete by validate()'s rule: the session's close + C.CLOSE_BUFFER_MINUTES (13:15 on an early
+    # close). With the fixed 16:15 a copy cached at noon would pass for the complete bar from 13:15 to 16:15.
+    client.complete_from = lambda day: _complete_from(calendar, day)
+
+    quote, why = _reference(client, "quote", symbol)
+    if quote is None:
+        unavailable("quote", why)
 
     earnings = None
     if is_etf:

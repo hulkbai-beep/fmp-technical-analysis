@@ -12,11 +12,14 @@ newest first, with times in UTC ("2026-11-25 13:30:00" is 08:30 New York). The m
   not by FMP's impact label, which changes between releases of one event: C.MACRO_EXCLUDE first
   (weekly jobless claims), then the anchored regexes of C.MACRO_GROUPS (tier 1: FOMC decision,
   CPI, jobs report, PCE, PPI, GDP, retail sales; tier 2: FOMC minutes, Fed policy events, ISM,
-  JOLTS, consumer sentiment), then tier 3 ("other", labelled with its own name) for any other
+  JOLTS, consumer sentiment), then tier 3 ("other", labelled with its release name) for any other
   event FMP rates "High";
 - merges the rows of one tier 1-2 group on one New York date into one event at the earliest row's
   time (the CPI MoM / YoY / core rows -> one "cpi"; the FOMC decision at 14:00 and the press
-  conference at 14:30 -> one "fomc"); tier 3 is one event per name and date;
+  conference at 14:30 -> one "fomc"), and the tier-3 rows of one release on one date the same way:
+  FMP lists one release under several names (Existing Home Sales and Existing Home Sales MoM;
+  Durable Goods Orders MoM, Ex Transp MoM and Ex Defense MoM), which differ only by a trailing
+  MoM / YoY / QoQ or "Ex ..." qualifier (release_name);
 - maps each event to the session it can first move (`timing`): pre_open (before C.SESSION_OPEN),
   intraday (before that day's close, 13:00 on an early close) and date_only (no time given) ->
   that session; after_close and non_session (weekend or exchange holiday) -> the next session;
@@ -45,6 +48,7 @@ OTHER = "other"                                      # id of tier-3 events
 TIER1_GROUPS = tuple(gid for gid, _, tier, _ in C.MACRO_GROUPS if tier == 1)
 
 _SUFFIX = re.compile(r"\s*\([^()]*\)$")
+_QUALIFIER = re.compile(r"\s+(?:MoM|YoY|QoQ)$|\s+Ex\s.*$", re.IGNORECASE)   # tier 3: one release, several rows
 _GROUPS = tuple((gid, label, tier, tuple(re.compile(p, re.IGNORECASE) for p in patterns))
                 for gid, label, tier, patterns in C.MACRO_GROUPS)
 _EXCLUDE = tuple(re.compile(p, re.IGNORECASE) for p in C.MACRO_EXCLUDE)
@@ -114,6 +118,19 @@ def clean_name(event) -> str:
     return _SUFFIX.sub("", " ".join(event.split()))
 
 
+def release_name(name) -> str:
+    """The release a tier-3 row belongs to: its clean name without trailing MoM / YoY / QoQ and "Ex ..."
+    qualifiers, which FMP uses to list one release under several names: "Durable Goods Orders Ex Transp
+    MoM (Oct)" -> "Durable Goods Orders", "Existing Home Sales MoM" -> "Existing Home Sales". A name
+    that is all qualifier keeps its clean name."""
+    name = clean_name(name)
+    while True:
+        shorter = _QUALIFIER.sub("", name, count=1)
+        if shorter == name or not shorter:
+            return name
+        name = shorter
+
+
 def is_excluded(name) -> bool:
     """True when the event name (with or without its suffix) matches C.MACRO_EXCLUDE."""
     name = clean_name(name)
@@ -124,7 +141,7 @@ def classify(name, impact=None) -> tuple[str, str, int] | None:
     """(group id, label, tier) of an event name, with or without its "(period)" suffix.
 
     None for a C.MACRO_EXCLUDE name; else the first C.MACRO_GROUPS group (tiers 1-2) with a matching
-    regex, whatever FMP's impact label; else ("other", the clean name, 3) when FMP rates the row
+    regex, whatever FMP's impact label; else ("other", its release_name, 3) when FMP rates the row
     "High"; else None."""
     name = clean_name(name)
     if not name or any(p.search(name) for p in _EXCLUDE):
@@ -133,7 +150,7 @@ def classify(name, impact=None) -> tuple[str, str, int] | None:
         if any(p.search(name) for p in patterns):
             return gid, label, tier
     if _impact(impact) == "High":
-        return OTHER, name, 3
+        return OTHER, release_name(name), 3
     return None
 
 
@@ -213,7 +230,7 @@ def _group(rows, calendar, as_of) -> tuple[list[dict], dict]:
             if session_timing(row["date"], row["time_ny"], calendar)[1] > as_of:
                 counts["excluded" if is_excluded(row["name"]) else "unclassified"] += 1
             continue
-        gid, label, tier = cls                   # tier 3: label = the clean name, so one event per name
+        gid, label, tier = cls                   # tier 3: label = the release name, so one event per release
         buckets.setdefault((gid, label, row["date"]), {"tier": tier, "rows": []})["rows"].append(row)
 
     events = []
@@ -242,8 +259,9 @@ def group_events(rows, calendar, as_of) -> list[dict]:
     calendar_days, releases, impact}.
 
     Tier 1-2 rows of one group on one New York date form one event: time_ny = the earliest row's
-    time, releases = the original names (sorted, unique), impact = the highest FMP label. Tier 3
-    is one event per clean name and date. calendar None -> market_calendar.weekday_calendar()."""
+    time, releases = the original names (sorted, unique), impact = the highest FMP label. Tier-3
+    rows form one event per release_name and date in the same way, labelled with the release name.
+    calendar None -> market_calendar.weekday_calendar()."""
     return _group(rows, calendar, as_of)[0]
 
 
@@ -294,7 +312,9 @@ def build_macro_events(ctx) -> dict:
 
     ctx keys: macro_rows (FMP economic-calendar rows; None when the fetch failed), macro_window
     ({"from", "to"}), calendar (market_calendar.MarketCalendar; None -> weekdays, with a note),
-    skipped (the fetch's reason under "macro_events"), hz (or horizon) and as_of.
+    skipped (the fetch's reason under "macro_events"), hz (or horizon) and as_of. The module is
+    unavailable (available false, the reason, every list and count null) when the rows are missing
+    or hold no usable US row: the window always lists US releases, so none means missing data.
 
     within_horizon lists every event within the primary horizon (trading_days_to <= hz["primary"])
     as {id, label, tier, date, time_ny, timing, session, trading_days_to};
@@ -305,14 +325,24 @@ def build_macro_events(ctx) -> dict:
     hz = ctx.get("hz") or C.HORIZONS[ctx.get("horizon", C.DEFAULT_HORIZON)]
     window = _window(ctx.get("macro_window"))
     out = {"available": True, "source": SOURCE, "window": window, "horizon_days": hz["primary"]}
+
+    def unavailable(reason, notes=()):
+        return {**out, "available": False, "reason": reason, "events": None, "within_horizon": None,
+                "within_stat_horizons": None, "next": None, "counts": None, "coverage": None, "notes": list(notes)}
+
     rows = ctx.get("macro_rows")
     if not isinstance(rows, (list, tuple)):
         default = ("economic calendar unavailable" if rows is None else
                    f"economic calendar returned {type(rows).__name__}, not a list of rows")
-        return {**out, "available": False,
-                "reason": R.skip_reason(ctx, ("macro_events", "economic-calendar", "macro"), default),
-                "events": None, "within_horizon": None, "within_stat_horizons": None, "next": None,
-                "counts": None, "coverage": None, "notes": []}
+        return unavailable(R.skip_reason(ctx, ("macro_events", "economic-calendar", "macro"), default))
+
+    prepared, skipped = _prepare(rows, C.MACRO_COUNTRY)
+    skipped_note = ([f"{skipped} economic-calendar row(s) without a usable date or event name skipped"]
+                    if skipped else [])
+    if not prepared:
+        # an 89-day window always lists US releases: an empty listing is missing data, not a quiet window
+        what = "no events" if not rows else f"no usable {C.MACRO_COUNTRY} events"
+        return unavailable(f"FMP economic-calendar returned {what} for the window{_span(window)}", skipped_note)
 
     notes: list[str] = []
     calendar = ctx.get("calendar")
@@ -320,14 +350,7 @@ def build_macro_events(ctx) -> dict:
         calendar = MC.weekday_calendar()
         notes.append("no exchange calendar: sessions are weekdays, exchange holidays not excluded")
     as_of = _day(R.as_of(ctx))
-    prepared, skipped = _prepare(rows, C.MACRO_COUNTRY)
-    if not rows:
-        notes.append(f"FMP economic-calendar returned no events for the window{_span(window)}")
-    elif not prepared:
-        notes.append(f"FMP economic-calendar returned no usable {C.MACRO_COUNTRY} events for the "
-                     f"window{_span(window)}")
-    if skipped:
-        notes.append(f"{skipped} economic-calendar row(s) without a usable date or event name skipped")
+    notes += skipped_note
 
     events, row_counts = _group(prepared, calendar, as_of)
     undated = sum(e["time_ny"] is None for e in events)

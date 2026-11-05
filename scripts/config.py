@@ -18,7 +18,8 @@ BENCHMARK_YEARS = 5               # history requested for SPY, the sector ETF an
 CACHE_SUBDIR = "fmp-technical"    # ~/.cache/<this> unless FMP_CACHE_DIR is set
 
 MARKET_TZ = "America/New_York"
-MARKET_CLOSE_BUFFER = "16:15"     # cache session rule; without an exchange calendar also the partial-bar cutoff
+MARKET_CLOSE_BUFFER = "16:15"     # without an exchange calendar: the partial-bar cutoff and the client cache's
+                                  # session rule (with one, both use CLOSE_BUFFER_MINUTES after the close)
 STALE_BDAYS = 2                   # warn if the last bar is more than this many sessions behind (NYSE sessions;
                                   # weekdays without an exchange calendar)
 GAP_CALENDAR_DAYS = 4             # without an exchange calendar: bars further apart than this are a data gap
@@ -170,14 +171,15 @@ SESSION_OPEN = "09:30"            # regular session, New York time
 SESSION_CLOSE = "16:00"
 EARLY_CLOSE_DEFAULT = "13:00"     # early-close time for a day only the rules know
 CLOSE_BUFFER_MINUTES = 15         # a bar counts as complete this long after its session's close (16:15; 13:15 on
-                                  # early-close days); without a calendar MARKET_CLOSE_BUFFER applies
+                                  # early-close days), for the partial-bar rule and the client cache alike;
+                                  # without a calendar MARKET_CLOSE_BUFFER applies
 GAP_MISSING_SESSIONS = 1          # with a calendar: bars with at least this many NYSE sessions between them -> data gap
 
 # ---------------------------------------------------------------------------- dividends (dividends.py)
 # FMP dividends: `date` is the ex-dividend date, `adjDividend` the split-adjusted amount (the basis of /full bars).
+# The client caches them by the session rule, like the bars, so a split between two runs cannot mix the bases.
 DIVIDEND_MATCH_DAYS = 4           # without an exchange calendar, an ex-date without a bar maps to the first bar at most
                                   # this many calendar days later (with one: the bar of its first NYSE session)
-DIVIDEND_TTL_SECONDS = 86400
 DIVIDEND_ACTIVE_DAYS = 400        # pays_dividends: an ex-date this many calendar days before as_of at most (an annual
                                   # payer plus slack), or an announced one after it; else dividends look suspended
 
@@ -188,8 +190,9 @@ MACRO_TTL_SECONDS = 12 * 3600
 MACRO_CONTRACT_MAX_TIER = 2       # the contract lists tiers 1-2; metrics.json lists every tier
 # (id, label, tier, anchored regexes matched case-insensitively against the event name with its "(period)"
 # suffix removed). Rows of one group on the same New York date form one event. Unmatched US events that FMP
-# rates "High" become tier 3 ("other"), one event per name and date. Names matching MACRO_EXCLUDE are dropped
-# first. A row at exactly 00:00:00 UTC is a date-only listing (holidays, elections, symposiums): no time.
+# rates "High" become tier 3 ("other"), one event per release and date (macro.release_name: names that differ
+# only by a trailing MoM / YoY / QoQ or "Ex ..." qualifier are one release). Names matching MACRO_EXCLUDE are
+# dropped first. A row at exactly 00:00:00 UTC is a date-only listing (holidays, elections, symposiums): no time.
 MACRO_GROUPS = (
     ("fomc", "FOMC rate decision", 1, (r"^Fed Interest Rate Decision$", r"^FOMC Statement$",
                                         r"^FOMC Economic Projections$", r"^Interest Rate Projection - .+$",

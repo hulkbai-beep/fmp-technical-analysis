@@ -96,7 +96,7 @@ def weekday_calendar() -> MarketCalendar                                # 无节
 
 - `load_calendar(client, today)`：**一次**调用 `holidays-by-exchange`，`exchange=NYSE, from=C.HISTORY_START,
   to=<明年 12-31>`。参数一年只变一次，缓存 TTL 7 天（`fmp_client.TTL_BY_ENDPOINT`）→ 实际几乎总是命中缓存。
-- 在 `load_all` 里最先取日历（profile/quote 之后），后面的 `validate()` 都用它。
+- 在 `load_all` 里最先取日历（profile/quote 之后），后面的 `validate()` 都用它。（审查后移到 quote 之前，见 10.2 R6）
 
 ### 2.3 用到日历的地方（全部保留「无日历」时的旧行为，便于单测）
 
@@ -110,7 +110,9 @@ def weekday_calendar() -> MarketCalendar                                # 无节
 | `indicators.resample_weekly(df, calendar=None)` 周线是否完整 | 最后一根不是周五就算不完整（耶稣受难日周会误报） | 最后一根 < 本周最后交易日才算不完整；`regime.build_multi_timeframe`、`chart._weekly` 传入日历 |
 
 `data_quality.calendar = {"source", "exchange": "NYSE", "closed_days": n, "early_closes": n, "problem"}`。
-`fmp_client` 的缓存「同一交易时段」规则不改（半日市最多多一次刷新，无害）。
+`fmp_client` 的缓存「同一交易时段」规则不改（半日市最多多一次刷新，无害）。——**审查后更正（见 10.2 R6）：** 这个判断只考虑了
+13:15–16:15 之间写入的副本，漏了 13:15 之前写入的：半日市中午缓存的盘中 K 线会在 13:15–16:15 被 `validate` 当成完整收盘。
+缓存现在与部分 K 线规则用同一个截止时间（当日收盘 + 15 分钟）。
 
 ---
 
@@ -120,7 +122,8 @@ def weekday_calendar() -> MarketCalendar                                # 无节
 
 - `fetch_dividends(client, symbol)` → 按除息日升序的列表：
   `{ex_date, amount(=adjDividend), dividend, frequency, declaration_date, record_date, payment_date}`；
-  `adjDividend` 缺失或 ≤ 0 的行丢弃并计数。股票、ETF、SPY 都取（ETF 也派息）。TTL 1 天。
+  `adjDividend` 缺失或 ≤ 0 的行丢弃并计数。股票、ETF、SPY 都取（ETF 也派息）。TTL 1 天（审查后改为与 K 线相同的
+  「同一交易时段」规则，见 10.2 R6）。
 - `dividend_column(index, dividends)` → 与 K 线对齐的 `float` 序列：除息日那根 K 线 = 股息金额，其余 0；
   除息日没有 K 线时落到其后 `DIVIDEND_MATCH_DAYS`(=4) 个日历日内的第一根；同一根上的多笔相加。
 - `load_all` 把它作为 **`bars["dividend"]` 列**挂上（取不到股息时全为 0 并记原因）。各模块用
@@ -187,7 +190,8 @@ def weekday_calendar() -> MarketCalendar                                # 无节
   - 排除：`MACRO_EXCLUDE`（初请/续请失业金及 4 周均值——每周都有的高频噪音）；锚定正则自然排除
     Cleveland CPI、通胀预期、Atlanta Fed GDPNow、Fed 官员讲话等
 - **同组同一美东日期的多行合并为一个事件**（CPI 的 MoM/YoY/Core 多行 → 一个 `cpi`；FOMC 14:00 决议 + 14:30
-  记者会 → 一个 `fomc`，时间取最早一行），`releases` 列出原名。tier 3 按「事件名 + 日期」各自成事件。
+  记者会 → 一个 `fomc`，时间取最早一行），`releases` 列出原名。tier 3 按「事件名 + 日期」各自成事件（审查后改为按
+  「发布 + 日期」合并，见 10.2 R6）。
 - metrics 里列出 tier 1–3 全部；合约只放 tier ≤ `MACRO_CONTRACT_MAX_TIER`(=2)；报告逐条写 tier 1、简述 tier 2、
   tier 3 只给数量。
 - **时间：** UTC → 美东。`timing`：`pre_open`（< 09:30）/ `intraday` / `after_close`（≥ 当日收盘）/
@@ -299,8 +303,10 @@ def weekday_calendar() -> MarketCalendar                                # 无节
 
 ## 10. 进度（第一阶段完成情况）
 
-更新：2026-11-05。第一阶段（A 日历、B 除息、C 宏观、合约 ta-2.1、调用预算、文档）已全部实现，**尚未提交**
-（schema 改名已用 `git mv` 暂存，其余改动未暂存）。离线测试 **774 个全部通过**（基线 465）。
+更新：2026-11-05。第一阶段（A 日历、B 除息、C 宏观、合约 ta-2.1、调用预算、文档）已全部实现，并已提交、推送到
+分支 `claude/fmp-endpoints-upgrade`。之后经过一轮多代理审查：6 个独立审查者提出 8 个问题，每个问题由 3 个独立验证者
+（反驳 / 复现 / 设计意图）判定，7 个确认并已修复（见 10.2 R6），1 个被否决。离线测试 **819 个全部通过**（基线 465；
+审查修复前 774）。
 
 ### 10.1 已实现
 
@@ -308,11 +314,11 @@ def weekday_calendar() -> MarketCalendar                                # 无节
 |---|---|---|
 | A. NYSE 交易日历 | `scripts/market_calendar.py`；`fetch.py`、`modules.py`、`indicators.py`、`regime.py`、`chart.py` | `MarketCalendar`（2.1 节全部方法，另有向量化的 `missing_sessions_between` 和 `summary()`）；`fetch.load_calendar` 一次请求；`validate` 的部分 K 线（半日市为 13:15）、过期判断（`stale.basis`）、数据缺口（条目加 `missing_sessions`，加 `gaps.basis`），基准也用同一日历校验；到财报的交易日、周线 `partial`；`data_quality.calendar` |
 | B. 除息日 | `scripts/dividends.py`；`fetch.py`、`levels.py`、`signal_stats.py`、`modules.py`、`scorecard.py` | `fetch.fetch_dividends` 与 `bars["dividend"]` 列；三处跳空（未回补缺口、`gap_down_atr`、`largest_gap_6m` 锚点）的向下一侧按 `prev - D` 计算（向上跳空不变，见 10.2 R1）；`levels.gap_adjustment`；`dividends` 模块；除息日落在持有期内时 `risk.notes` 加一句提示；`data_quality.dividends` |
-| C. 宏观事件 | `scripts/macro.py`；`fetch.py`、`config.py` | `fetch.macro_window` / `fetch_macro`（从 as_of 当天起 89 天，见 10.2 R2）；按事件名分 3 级、同组同一美东日期合并、UTC→美东、`timing` / `session`、`trading_days_to`；`macro_events` 模块 |
+| C. 宏观事件 | `scripts/macro.py`；`fetch.py`、`config.py` | `fetch.macro_window` / `fetch_macro`（从 as_of 当天起 89 天，见 10.2 R2）；按事件名分 3 级、同组同一美东日期合并（tier 3 同一发布合并，见 10.2 R6）、UTC→美东、`timing` / `session`、`trading_days_to`；`macro_events` 模块（没有美国行的经济日历视为缺数据） |
 | 合约 ta-2.1 | `contract.py`、`contracts/ta-2.1.schema.json` | 第 5 节全部字段（补充见 10.2） |
-| 调用预算与缓存 | `fmp_client.py`、`analyze.py` | TTL：日历 7 天、股息 1 天、宏观 12 小时；`check` 增加三个接口的探测；未缓存 13 / 11 / 10 次（e2e 测试与实盘一致）；`config_snapshot` 加 `calendar` / `dividends` / `macro`；终端摘要加两行（持有期内的除息日、tier 1 宏观事件） |
+| 调用预算与缓存 | `fmp_client.py`、`fetch.py`、`analyze.py` | TTL：日历 7 天、宏观 12 小时；股息与 K 线一样走「同一交易时段」规则，其截止时间来自 NYSE 日历（半日市 13:15，见 10.2 R6）；`check` 增加三个接口的探测；未缓存 13 / 11 / 10 次（e2e 测试与实盘一致）；`config_snapshot` 加 `calendar` / `dividends` / `macro`；终端摘要加两行（持有期内的除息日、tier 1 宏观事件） |
 | 文档 | `SKILL.md`、`README.md`、`references/methodology.md`、`report_template.md`、`signals.md` | 按第 7 节：调用次数、回复摘要、解读规则、边缘情况、合约 2.1、`check`；methodology 新增 1.7 日历、1.8 除息、模块 K（除息）与 L（宏观），原 K（价格行为）改为 M；report_template 第 9 节改为财报 + 除息 + 宏观（ETF 只跳过财报部分）；signals.md 的跳空规则扣股息 |
-| 测试 | `tests/` | 新增 `test_market_calendar.py`（64 个）、`test_dividends.py`（22 个）、`test_macro.py`（150 个）；扩充 fetch、levels、signals、modules、indicators、regime、chart、scorecard、contract、lookahead、e2e；`fakes.py` 默认提供三个接口的数据 |
+| 测试 | `tests/` | 新增 `test_market_calendar.py`（64 个）、`test_dividends.py`（25 个）、`test_macro.py`（171 个）；扩充 fetch、levels、signals、modules、indicators、regime、chart、scorecard、contract、lookahead、e2e；`fakes.py` 默认提供三个接口的数据 |
 
 ### 10.2 与计划的差异
 
@@ -363,10 +369,33 @@ def weekday_calendar() -> MarketCalendar                                # 无节
   - R5 按现设计保留：上面列出的合约补充字段与 null / false 约定、`DIVIDEND_ACTIVE_DAYS`、`timing` 的 `date_only`、
     `coverage`、`data_quality.dividends`、`GAP_MISSING_SESSIONS` = 1（是否太吵由实盘验证判断）、T 的 2026-10-09
     缺口保留为价位（扣除股息后仍是真跳空）、SKILL.md 的 description 修改（866 字符，低于 1024）。
+  - R6 第二轮审查确认的问题与修正（2026-11-05）：
+    - **半日市的缓存截止时间**（改 2.3 节最后一句、2.2 节的请求顺序）：`fmp_client` 的「同一交易时段」规则原来固定
+      16:15，而 `validate` 在半日市 13:15 起就把当天 K 线当成完整的，所以 13:15 之前缓存的盘中 K 线（股票、SPY、
+      板块 ETF、^VIX、quote、earnings）会在 13:15–16:15 被当成收盘价分析，且没有任何警告。现在客户端有可选的
+      `complete_from(date)`（标准库实现，不引入 pandas），`fetch.load_all` 用日历设置它（与 `_complete_from` /
+      `validate` 同一截止时间：收盘 + `CLOSE_BUFFER_MINUTES`）；没有日历时仍是 `MARKET_CLOSE_BUFFER`。日历请求
+      因此移到 quote 之前：请求顺序为 profile、holidays-by-exchange、quote、earnings…（次数不变）。
+    - **股息按交易时段缓存**（改 3.1 节「TTL 1 天」）：FMP 每次拆股都会重算 `adjDividend`，和 `/full` 价格一样；
+      24 小时 TTL 会让拆股前缓存的股息配上拆股后的 K 线（金额差拆股倍数）。`dividends` 加入 `SESSION_ENDPOINTS`，
+      删除 `DIVIDEND_TTL_SECONDS`。代价：隔日重跑多 1 次请求；未缓存 13 / 11 / 10 次、同日重跑 0 次不变。
+    - **空的经济日历是缺数据**（改 4.1 节、methodology L）：FMP 对不提供的区间静默返回 `[]`，而从 as_of 起的
+      89 天窗口总有美国发布，所以没有美国行的回答不再是「可用、0 个事件」：`fetch_macro` 把它记为问题
+      （`meta.skipped["macro_events"]`），`macro.build_macro_events` 对没有可用美国行的输入也返回不可用；合约里
+      `macro.events`、`macro_within_horizon`、`macro_complete` 为 `null`。
+    - **tier 3 按发布合并**（改 4.2 节）：FMP 把一次发布列成多行（Existing Home Sales 与其 MoM；耐用品的 MoM、
+      Ex Transp、Ex Defense），各自标 High，原来每个名字算一个事件，报告里 tier 3 的数量被放大（KO position
+      12 个条目约 7–8 次发布）。`macro.release_name` 去掉末尾的 MoM / YoY / QoQ 和 "Ex …" 限定词，同一发布同一天
+      合并为一个事件，标签是发布名。
+    - **测试补强**：look-ahead 的除息测试增加落在 `gap_down_atr` 上的切点（其中两个的下一根 K 线有股息），并加两组
+      只改后续股息的确定性变体；`largest_gap_6m` 增加被股息完全解释、否则就是最大缺口的下跌，以及下一根 K 线的
+      股息不影响本根的用例；宏观测试的 fixture 改为 R2 窗口（含 as_of 当天收盘前的真实行、一次发布多行的真实行），
+      并补上统计期边界（恰好 h 个交易日）、覆盖边界（持有期恰好止于 `listed_through` / 窗口末日）和 counts 的
+      as_of 过滤。每一项都用重新引入缺陷的变体验证过：修正前这些测试会失败。
 
 ### 10.3 验收进度（第 7 节）
 
-1. 离线测试：**774 passed**（基线 465）。
+1. 离线测试：**819 passed**（基线 465；第二轮审查前 774）。
 2. 真实 API（2026-11-04 收盘后运行，as_of 2026-11-04）：已跑 AAPL、T、HYG、SPY 的 swing + `--contract`。
    - 全部退出码 0、无错误，合约通过 ta-2.1 schema；空缓存调用次数 AAPL 13、HYG 11、SPY 10。
    - 日历 `fmp+rules`：355 个休市日、88 个半日市；四个标的均无数据缺口。
@@ -387,3 +416,7 @@ def weekday_calendar() -> MarketCalendar                                # 无节
 - e2e 的合成股息很小（$0.50 对约 $4,475 的价格），e2e 里没有被消除的跳空；消除逻辑由 `test_levels.py` 单测和
   HYG 实盘覆盖。
 - `fmp_client.py check` 的假日探测用 `from=<去年>-01-01`，因 `from` 不含当天会漏掉那年的 1 月 1 日（只影响显示）。
+- 经济日历返回空列表（或没有美国行）时 `macro_events` 不可用并写明原因，但这个回答仍按 12 小时 TTL 缓存：期间重跑
+  得到同样结果，`--refresh` 可重试。
+- 半日市的缓存修正依赖「FMP 在盘中提供当天未完成的 K 线」这一假设（部分 K 线规则本身也依赖它）；本会话在收盘后
+  运行，未能实测。

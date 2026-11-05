@@ -244,6 +244,17 @@ def test_contract_without_calendar_dividends_and_macro():
     assert {"dividends", "macro_events"} <= set(c["modules_unavailable"])
 
 
+def test_an_empty_economic_calendar_is_missing_not_a_quiet_horizon():
+    # FMP answering [] for the window: the contract must not read as "no FOMC or CPI inside the horizon"
+    c = contract.build(*both(market(earnings=earnings_history("ACME"), macro=[])))
+    assert validate(c, SCHEMA) == []
+    why = "FMP economic-calendar returned no US rows for 2026-10-16 to 2027-01-12"
+    assert c["macro"]["available"] is False and c["macro"]["reason"] == why and c["macro"]["events"] is None
+    for h in c["horizons"].values():
+        assert h["macro_within_horizon"] is None and h["macro_complete"] is None
+    assert c["skipped"]["macro_events"] == why and c["modules_unavailable"]["macro_events"] == why
+
+
 def test_a_symbol_without_dividends_has_none_inside_any_horizon():
     c = contract.build(*both(market(earnings=earnings_history("ACME"), dividends={})))
     assert validate(c, SCHEMA) == []
