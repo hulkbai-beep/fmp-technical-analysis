@@ -12,8 +12,8 @@ import analyze
 import config as C
 import fetch
 import fmp_client
-from fakes import (ADJ, DIVIDENDS, ECON, FULL, HOLIDAYS, NEXT_EX_DATE, NOW, SPY_NEXT_EX_DATE, FakeClient,
-                   earnings_history, market, profile_row, series)
+from fakes import (ADJ, DIVIDENDS, ECON, FULL, HOLIDAYS, MACRO_EVENTS, NEXT_EX_DATE, NOW, SPY_NEXT_EX_DATE,
+                   FakeClient, earnings_history, macro_rows, market, profile_row, series)
 
 TOP_KEYS = ["ticker", "as_of", "data_source", "horizon", "snapshot", "data_quality", "market_context",
             "regime", "trend_momentum", "relative_strength", "mean_reversion", "volume_flow", "volatility",
@@ -126,11 +126,13 @@ def test_stock_swing_run():
     assert dv["ex_dates_in_history"] == dv["matched_to_bars"] > 60
     assert m["levels"]["gap_adjustment"]["ex_dividend_bars"] >= 1
     me = m["macro_events"]
-    assert me["window"] == {"from": "2026-10-17", "to": "2027-01-13"} and me["horizon_days"] == 10
+    assert me["window"] == {"from": "2026-10-16", "to": "2027-01-12"} and me["horizon_days"] == 10
     assert [(e["id"], e["date"], e["time_ny"], e["timing"], e["trading_days_to"]) for e in me["events"]] == [
         ("cpi", "2026-10-20", "08:30", "pre_open", 2), ("fomc", "2026-10-28", "14:00", "intraday", 8),
         ("jobs", "2026-11-06", "08:30", "pre_open", 15)]
     assert [e["id"] for e in me["within_horizon"]] == ["cpi", "fomc"]
+    assert me["within_horizon"][0] == {"id": "cpi", "label": "CPI", "tier": 1, "date": "2026-10-20", "time_ny": "08:30",
+                                       "timing": "pre_open", "session": "2026-10-20", "trading_days_to": 2}
     assert me["counts"] == {"tier1": 3, "tier2": 0, "tier3": 0, "excluded": 1, "unclassified": 2}
     assert any(n.startswith(f"Ex-dividend date {NEXT_EX_DATE} falls inside the horizon") for n in m["risk"]["notes"])
     assert not any("dividend" in c["type"] or "macro" in c["type"] for c in sc["conflicts"])
@@ -294,11 +296,32 @@ def test_macro_events_never_change_the_scorecard():
         assert with_macro[k] == without[k], k
 
 
+def test_a_release_after_the_as_of_close_is_listed():
+    # 16:30 New York on as_of 2026-10-16 is still 2026-10-16 in UTC: inside the window, which starts on as_of;
+    # a release before that day's open is already in the as_of bar and is dropped
+    extra = (("2026-10-16 20:30:00", "US", "Fed Chair Powell Speech", "High"),
+             ("2026-10-16 12:30:00", "US", "Retail Sales MoM (Sep)", "High"))
+    m, _ = run(stock_market(macro=macro_rows(MACRO_EVENTS + extra)))
+    me = m["macro_events"]
+    assert me["window"]["from"] == m["as_of"] == "2026-10-16"
+    first = me["events"][0]
+    assert {k: first[k] for k in ("id", "label", "tier", "date", "time_ny", "timing", "session", "trading_days_to",
+                                  "calendar_days")} == \
+        {"id": "other", "label": "Fed Chair Powell Speech", "tier": 3, "date": "2026-10-16", "time_ny": "16:30",
+         "timing": "after_close", "session": "2026-10-19", "trading_days_to": 1, "calendar_days": 0}
+    assert me["within_horizon"][0]["label"] == "Fed Chair Powell Speech"
+    assert "retail_sales" not in [e["id"] for e in me["events"]]
+    assert me["counts"] == {"tier1": 3, "tier2": 0, "tier3": 1, "excluded": 1, "unclassified": 2}
+
+
 def test_partial_bar_is_dropped_during_the_session():
     m, _ = analyze.run_analysis("ACME", client=stock_market(), now=pd.Timestamp("2026-10-16 11:00", tz=NOW.tz))
     assert m["as_of"] == "2026-10-15"
     assert m["data_quality"]["partial_bar_excluded"]["date"] == "2026-10-16"
     assert m["levels"]["as_of"] == "2026-10-15" and m["signals"]["history"]["last_date"] == "2026-10-15"
+    # the window starts on that as_of, whose 08:30 CPI is in the 2026-10-15 bar: not an upcoming event
+    assert m["macro_events"]["window"]["from"] == "2026-10-15"
+    assert [(e["id"], e["date"]) for e in m["macro_events"]["events"]][0] == ("cpi", "2026-10-20")
 
 
 def test_a_failing_module_is_reported_and_the_rest_still_run(monkeypatch):

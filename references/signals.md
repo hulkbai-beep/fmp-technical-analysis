@@ -16,7 +16,7 @@ report.
   `tests/test_lookahead.py` checks this: indicators and signals at dates <= t are identical when the
   data after t is removed or replaced with random values.
 - Rules run on **split-adjusted** OHLCV (FMP `/full`), the indicators computed from it
-  (`indicators.compute_all`) and, in the two gap rules, the bars' `dividend` column. Forward returns are
+  (`indicators.compute_all`) and, in the gap-down rule, the bars' `dividend` column. Forward returns are
   measured on **dividend-adjusted** prices (see below).
 - A missing input (NaN, for example the SMA200 during its first 199 bars) makes the rule False.
 - Today's partial bar, if the run happens during market hours, has already been dropped by the data
@@ -36,7 +36,7 @@ report.
 | 6 | `death_cross` | Death cross (50/200 SMA) | `sma50[t-1] >= sma200[t-1] and sma50[t] < sma200[t]` | current_side | -1 | trend |
 | 7 | `pullback_rising_50` | Pullback to a rising 50 SMA | `sma50 > sma200 and sma50 > sma50[t-20] and abs(close - sma50) <= 1 x atr14` | current_side | +1 | trend |
 | 8 | `extension_2sigma` | Extension > 2 sigma above the 20-day mean | `z20 > 2` | current_side | -1 | mean_reversion |
-| 9 | `gap_up_atr` | Gap up > 1 ATR on volume | `open - (close[t-1] - dividend[t]) > 1 x atr14[t-1] and rvol50 >= 2` | current_side | +1 | volume_flow |
+| 9 | `gap_up_atr` | Gap up > 1 ATR on volume | `open - close[t-1] > 1 x atr14[t-1] and rvol50 >= 2` | current_side | +1 | volume_flow |
 | 9 | `gap_down_atr` | Gap down > 1 ATR on volume | `(close[t-1] - dividend[t]) - open > 1 x atr14[t-1] and rvol50 >= 2` | current_side | -1 | volume_flow |
 | 10 | `macd_bull_cross_below_zero` | MACD bullish cross below zero | `macd[t-1] <= macd_signal[t-1] and macd[t] > macd_signal[t] and macd[t] < 0 (bar index >= 35)` | current_side | +1 | momentum |
 | 10 | `macd_bear_cross_above_zero` | MACD bearish cross above zero | `macd[t-1] >= macd_signal[t-1] and macd[t] < macd_signal[t] and macd[t] > 0 (bar index >= 35)` | current_side | -1 | momentum |
@@ -80,12 +80,14 @@ the dividend data could not be loaded.
   The rule stays true for several consecutive bars during a pullback; de-clustering keeps one event.
 - **gaps**: the gap is measured against the prior bar's ATR, so the gap bar's own range does not widen
   the threshold. RVOL uses the gap bar's full-day volume, which is known at the close of t.
-  - The prior close is taken net of the dividend going ex on t: `close[t-1] - dividend[t]`. The
-    split-adjusted bars are not dividend-adjusted, so on an ex-dividend date the price opens lower by about
-    the dividend for mechanical reasons. A drop the dividend explains is no gap down, a gap down counts only
-    the part beyond the dividend, and a gap up is measured from the lower, ex-dividend footing.
+  - In the gap-down rule the prior close is taken net of the dividend going ex on t:
+    `close[t-1] - dividend[t]`. The split-adjusted bars are not dividend-adjusted, so on an ex-dividend
+    date the price opens lower by about the dividend for mechanical reasons. A drop the dividend explains
+    is no gap down, and a gap down counts only the part beyond the dividend.
+  - The gap-up rule measures from `close[t-1]` itself, on ex-dividend dates too: a dividend can only
+    explain a drop, so an ex-dividend bar that opens flat or a little higher is no gap up.
   - The dividend is declared before t, so the rule stays causal. On every other bar, and without dividend
-    data, `dividend[t]` is 0 and the gap is measured from `close[t-1]` itself, as before.
+    data, `dividend[t]` is 0 and the gap down is measured from `close[t-1]` itself, as before.
 - **MACD crosses**: the EMAs are seeded at the first bar, so crosses before bar index 35
   (`MACD_SLOW + MACD_SIGNAL`) are ignored as warm-up noise. The zero condition is on the MACD line at t.
 
@@ -160,7 +162,7 @@ its total number of (raw, not de-clustered) fire days, for transparency.
   `unconditional`, `same_regime` and `edge`.
 - `inactive_ids`, `library` (`{id, name, last_fired, fires_total}`), `primary_horizon`,
   `stat_horizons`, `history {first_date, last_date, bars, adj_coverage}`, `definitions` (including
-  `dividend`, the gap rules' input), `caveats`, `notes`.
+  `dividend`, the gap-down rule's input), `caveats`, `notes`.
 
 ## Caveats (always stated in the report)
 

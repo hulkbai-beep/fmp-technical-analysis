@@ -1,6 +1,7 @@
 """Tests for scripts/dividends.py: FMP row parsing, matching ex-dates to bars, the bars["dividend"]
 column helpers and the `dividends` module. Synthetic data only (no network)."""
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -11,6 +12,15 @@ import dividends as D
 import indicators as I
 import market_calendar as MC
 from conftest import synthetic_bars
+
+NYSE_FIXTURE = Path(__file__).resolve().parent / "data" / "nyse_holidays_fmp.json"
+
+
+@pytest.fixture(scope="module")
+def nyse():
+    """The NYSE calendar as load_all builds it: FMP's recorded holiday list (1990-2028) and the exchange rules."""
+    with open(NYSE_FIXTURE, encoding="utf-8") as f:
+        return MC.build_calendar(json.load(f)["rows"], end_year=2028)
 
 
 def day(ts):
@@ -101,7 +111,7 @@ def test_parse_dividends_same_ex_date_repeat_counts_once_distinct_amounts_sum():
 
 
 # ---------------------------------------------------------------------------- bars
-def test_dividend_column_matches_ex_dates_to_bars():
+def test_dividend_column_matches_ex_dates_to_bars(nyse):
     idx = pd.DatetimeIndex(["2024-11-25", "2024-11-26", "2024-11-27", "2024-11-29", "2024-12-02",
                             "2024-12-16", "2024-12-17"], name="date")   # no bar on Thanksgiving or Dec 3-13
     divs = [entry("2024-11-20", 9.0),             # before the first bar: ignored
@@ -109,7 +119,7 @@ def test_dividend_column_matches_ex_dates_to_bars():
             entry("2024-11-28", 0.25),            # Thanksgiving: the next bar (1 day later)
             entry("2024-11-29", 0.1),             # the same bar as the one above: summed
             entry("2024-12-05", 0.7),             # data gap: next bar 11 days later -> unmatched
-            entry("2024-12-12", 0.3),             # 4 days before the next bar: matched
+            entry("2024-12-12", 0.3),             # 4 days before the next bar: matched without a calendar
             entry("2024-12-18", 0.9)]             # after the last bar: ignored (an announced one)
     col = D.dividend_column(idx, divs)
     assert col.name == "dividend" and col.dtype == float and col.index.equals(idx)
@@ -118,6 +128,39 @@ def test_dividend_column_matches_ex_dates_to_bars():
     assert [(p, e["ex_date"]) for p, e in m["matched"]] == [(1, "2024-11-26"), (3, "2024-11-28"),
                                                             (3, "2024-11-29"), (5, "2024-12-12")]
     assert [e["ex_date"] for e in m["unmatched"]] == ["2024-12-05"]
+    # with the NYSE calendar an ex-date goes to its first session's bar: Thanksgiving to 11-29 as before, but
+    # 2024-12-12 is a session without a bar (the data gap), so it stays unmatched
+    m = D.match_to_bars(idx, divs, nyse)
+    assert [(p, e["ex_date"]) for p, e in m["matched"]] == [(1, "2024-11-26"), (3, "2024-11-28"), (3, "2024-11-29")]
+    assert [e["ex_date"] for e in m["unmatched"]] == ["2024-12-05", "2024-12-12"]
+    assert D.dividend_column(idx, divs, nyse).tolist() == pytest.approx([0.0, 0.5, 0.0, 0.35, 0.0, 0.0, 0.0])
+
+
+def test_an_ex_date_inside_a_multi_day_closure_maps_to_the_first_session(nyse):
+    # KO-like: the NYSE was closed 2001-09-11..14, so ex-dates 09-11 and 09-12 show on 09-17, 6 and 5 days later
+    idx = pd.DatetimeIndex(["2001-09-07", "2001-09-10", "2001-09-17", "2001-09-18"], name="date")
+    divs = [entry("2001-09-11", 0.1), entry("2001-09-12", 0.18)]
+    m = D.match_to_bars(idx, divs, nyse)
+    assert [(p, e["ex_date"]) for p, e in m["matched"]] == [(2, "2001-09-11"), (2, "2001-09-12")]
+    assert m["unmatched"] == []
+    assert D.dividend_column(idx, divs, nyse).tolist() == pytest.approx([0.0, 0.0, 0.28, 0.0])
+    # the calendar-day rule alone (no calendar, or weekday_calendar() without holidays) leaves both unmatched
+    for cal in (None, MC.weekday_calendar()):
+        plain = D.match_to_bars(idx, divs, cal)
+        assert plain["matched"] == [] and [e["ex_date"] for e in plain["unmatched"]] == ["2001-09-11", "2001-09-12"]
+    # the symbol has no bar on that first session (a data gap right after the closure): unmatched
+    gap = D.match_to_bars(idx.drop(pd.Timestamp("2001-09-17")), divs, nyse)
+    assert gap["matched"] == [] and len(gap["unmatched"]) == 2
+
+
+def test_an_ex_date_on_a_session_without_a_bar_stays_unmatched(nyse):
+    idx = pd.DatetimeIndex(["2024-12-02", "2024-12-03", "2024-12-05", "2024-12-06"], name="date")   # no 12-04 bar
+    divs = [entry("2024-12-04", 0.5), entry("2024-12-07", 0.2)]       # a Wednesday session; a Saturday
+    m = D.match_to_bars(idx, divs, nyse)
+    assert m["matched"] == [] and [e["ex_date"] for e in m["unmatched"]] == ["2024-12-04"]   # 12-07: after the last bar
+    assert [(p, e["ex_date"]) for p, e in D.match_to_bars(idx, divs)["matched"]] == [(2, "2024-12-04")]
+    weekend = D.match_to_bars(idx.append(pd.DatetimeIndex(["2024-12-09"])), divs, nyse)      # Saturday -> Monday
+    assert [(p, e["ex_date"]) for p, e in weekend["matched"]] == [(4, "2024-12-07")]
 
 
 def test_match_to_bars_edges_and_bad_input():
@@ -298,7 +341,7 @@ def test_bars_after_as_of_are_ignored(payer):
     assert out["last_ex_dividend"]["amount_pct"] == pytest.approx(0.5 / bars["close"].loc[cut])
 
 
-def test_unmatched_ex_dates_and_missing_atr_are_noted(payer):
+def test_unmatched_ex_dates_and_missing_atr_are_noted(payer, nyse):
     bars, past = payer
     holes = bars.drop(bars.index[-80:-60])                          # a 20-bar data gap around idx[-74]
     ctx = make_ctx(holes, past + [entry(bars.index[-1] + pd.offsets.BDay(2), 0.6)])
@@ -309,6 +352,22 @@ def test_unmatched_ex_dates_and_missing_atr_are_noted(payer):
     assert any("no bar within 4 calendar days" in n and day(bars.index[-74]) in n for n in out["notes"])
     assert out["next_ex_dividend"]["amount_atr"] is None
     assert any("amount_atr is null" in n for n in out["notes"])
+    cal = D.build_dividends({**ctx, "ind": ind, "calendar": nyse})
+    assert (cal["ex_dates_in_history"], cal["matched_to_bars"]) == (4, 3)
+    assert any("no bar on the first NYSE session on or after the ex-date" in n and day(bars.index[-74]) in n
+               for n in cal["notes"])
+
+
+def test_the_module_matches_ex_dates_as_the_bar_column_does(nyse):
+    bars = synthetic_bars(120, start="2001-06-01").drop(pd.bdate_range("2001-09-11", "2001-09-14"))
+    divs = [entry("2001-09-12", 0.18)]                               # inside the September 2001 closure
+    out = D.build_dividends(make_ctx(bars, divs, calendar=nyse))
+    assert (out["ex_dates_in_history"], out["matched_to_bars"]) == (1, 1)
+    assert not any("no bar" in n for n in out["notes"])
+    assert D.dividend_column(bars.index, divs, nyse).loc["2001-09-17"] == pytest.approx(0.18)
+    plain = D.build_dividends(make_ctx(bars, divs))
+    assert (plain["ex_dates_in_history"], plain["matched_to_bars"]) == (1, 0)
+    assert any("no bar within 4 calendar days" in n and "2001-09-12" in n for n in plain["notes"])
 
 
 def test_entries_with_timestamps_strings_or_junk_are_read_or_skipped(payer):

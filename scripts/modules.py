@@ -290,16 +290,22 @@ def _vwap_anchors(ctx) -> tuple[list[dict], list[str]]:
     anchors.append({"anchor": "low_52w", "date": win["low"].idxmin()})
     anchors.append({"anchor": "ytd_start", "date": dates[dates.year == dates[-1].year][0]})
 
-    # the gap from the prior close net of the dividend going ex on the bar: an ex-dividend drop is no gap
-    prev_close, prev_atr = prev_close_net(bars), ind["atr14"].shift(1)
-    gap = (bars["open"] - prev_close) / prev_atr.where(prev_atr > 0)
+    # a dividend can only explain a drop: an opening rise is measured from the prior close, an opening drop
+    # from the prior close net of the dividend going ex on the bar, and a drop the dividend explains is no
+    # gap (never a gap up)
+    open_, prev_close, prev_atr = bars["open"], bars["close"].shift(1), ind["atr14"].shift(1)
+    rise = open_ >= prev_close
+    base = prev_close.where(rise, prev_close_net(bars))
+    move = (open_ - base).where(rise, (open_ - base).clip(upper=0.0))
+    gap = move / prev_atr.where(prev_atr > 0)
     recent = gap.iloc[-C.LARGEST_GAP_LOOKBACK:].dropna()
     if recent.empty:
         notes.append("largest_gap_6m anchor unavailable: no bar with a prior-day ATR in the lookback")
     else:
         d = recent.abs().idxmax()
+        b, m = num(base.loc[d]), num(move.loc[d])
         anchors.append({"anchor": "largest_gap_6m", "date": d, "gap_atr": num(recent.loc[d]),
-                        "gap_pct": pct(num(bars["open"].loc[d]), num(prev_close.loc[d]))})
+                        "gap_pct": None if b is None or m is None or b == 0 else m / b})
     return anchors, notes
 
 

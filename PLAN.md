@@ -290,6 +290,7 @@ def weekday_calendar() -> MarketCalendar                                # 无节
 | 3 | 流通股换手率 | `shares-float` | 成交量 / 流通股，比 RVOL 更适合小盘股 |
 | 4 | 日内数据替代近似 | `historical-chart/1hour`、`/5min` | 真实锚定 VWAP、日内成交量分布、缺口回补；只在 swing 下启用 |
 | — | 宏观事件历史反应统计 | `economic-calendar`（历史，每 90 天一次调用） | 该股在过去 FOMC/CPI 日的平均绝对波动 vs 平日；**当前套餐不允许较早的 `from`**，需升级套餐或自建事件日期表，单独评估 |
+| — | SPAC 空壳启发式的误报 | `profile`（`ipoDate`） | 原有的 `spac_like_start` 只看最早 126 根收盘价是否集中在 $10 附近，会误报拆股调整后早期收盘价恰好在 $10 附近的老股票（T 自 1990 年起，中位数 10.52）。例如：只有历史起点接近上市日（`ipoDate`）时才判定 |
 
 **不做：** 分析中使用 FMP 自带技术指标（继续只做交叉校验）；分析师目标价、内部人交易、13F、新闻（不是技术面）；
 当前套餐受限的接口（`sp500-constituent`、`batch-quote`、COT）。
@@ -299,15 +300,15 @@ def weekday_calendar() -> MarketCalendar                                # 无节
 ## 10. 进度（第一阶段完成情况）
 
 更新：2026-11-05。第一阶段（A 日历、B 除息、C 宏观、合约 ta-2.1、调用预算、文档）已全部实现，**尚未提交**
-（schema 改名已用 `git mv` 暂存，其余改动未暂存）。离线测试 **759 个全部通过**（基线 465）。
+（schema 改名已用 `git mv` 暂存，其余改动未暂存）。离线测试 **774 个全部通过**（基线 465）。
 
 ### 10.1 已实现
 
 | 项目 | 文件 | 内容 |
 |---|---|---|
 | A. NYSE 交易日历 | `scripts/market_calendar.py`；`fetch.py`、`modules.py`、`indicators.py`、`regime.py`、`chart.py` | `MarketCalendar`（2.1 节全部方法，另有向量化的 `missing_sessions_between` 和 `summary()`）；`fetch.load_calendar` 一次请求；`validate` 的部分 K 线（半日市为 13:15）、过期判断（`stale.basis`）、数据缺口（条目加 `missing_sessions`，加 `gaps.basis`），基准也用同一日历校验；到财报的交易日、周线 `partial`；`data_quality.calendar` |
-| B. 除息日 | `scripts/dividends.py`；`fetch.py`、`levels.py`、`signal_stats.py`、`modules.py`、`scorecard.py` | `fetch.fetch_dividends` 与 `bars["dividend"]` 列；三处跳空（未回补缺口、`gap_up_atr` / `gap_down_atr`、`largest_gap_6m` 锚点）按 `prev - D` 计算；`levels.gap_adjustment`；`dividends` 模块；除息日落在持有期内时 `risk.notes` 加一句提示；`data_quality.dividends` |
-| C. 宏观事件 | `scripts/macro.py`；`fetch.py`、`config.py` | `fetch.macro_window` / `fetch_macro`（89 天窗口）；按事件名分 3 级、同组同一美东日期合并、UTC→美东、`timing` / `session`、`trading_days_to`；`macro_events` 模块 |
+| B. 除息日 | `scripts/dividends.py`；`fetch.py`、`levels.py`、`signal_stats.py`、`modules.py`、`scorecard.py` | `fetch.fetch_dividends` 与 `bars["dividend"]` 列；三处跳空（未回补缺口、`gap_down_atr`、`largest_gap_6m` 锚点）的向下一侧按 `prev - D` 计算（向上跳空不变，见 10.2 R1）；`levels.gap_adjustment`；`dividends` 模块；除息日落在持有期内时 `risk.notes` 加一句提示；`data_quality.dividends` |
+| C. 宏观事件 | `scripts/macro.py`；`fetch.py`、`config.py` | `fetch.macro_window` / `fetch_macro`（从 as_of 当天起 89 天，见 10.2 R2）；按事件名分 3 级、同组同一美东日期合并、UTC→美东、`timing` / `session`、`trading_days_to`；`macro_events` 模块 |
 | 合约 ta-2.1 | `contract.py`、`contracts/ta-2.1.schema.json` | 第 5 节全部字段（补充见 10.2） |
 | 调用预算与缓存 | `fmp_client.py`、`analyze.py` | TTL：日历 7 天、股息 1 天、宏观 12 小时；`check` 增加三个接口的探测；未缓存 13 / 11 / 10 次（e2e 测试与实盘一致）；`config_snapshot` 加 `calendar` / `dividends` / `macro`；终端摘要加两行（持有期内的除息日、tier 1 宏观事件） |
 | 文档 | `SKILL.md`、`README.md`、`references/methodology.md`、`report_template.md`、`signals.md` | 按第 7 节：调用次数、回复摘要、解读规则、边缘情况、合约 2.1、`check`；methodology 新增 1.7 日历、1.8 除息、模块 K（除息）与 L（宏观），原 K（价格行为）改为 M；report_template 第 9 节改为财报 + 除息 + 宏观（ETF 只跳过财报部分）；signals.md 的跳空规则扣股息 |
@@ -343,16 +344,35 @@ def weekday_calendar() -> MarketCalendar                                # 无节
   `macro.events` 和 `macro_within_horizon` 为 `null`（不是 `[]`）。
 - **文档**：顺带修正 methodology 原有的两处不准确：`earnings` 的缓存走「同一交易时段」规则（原文写的是 12 小时
   TTL）；`metrics.json` 顶层键列表补上原先漏掉的 `price_action`、`candlesticks`。
+- **审查后的决定（2026-11-05）**
+  - R1「只消除向下」（改 3.2 节的对称写法）：股息只能解释下跌。除息日 t（股息 D）上，向下跳空须超过股息才算
+    （`high[t] < low[t-1] - D`，区间上沿 `low[t-1] - D`）；向上跳空按原始价格算，与以前完全相同（`low[t] > high[t-1]`，
+    区间下沿 `high[t-1]`）。`gap_down_atr` 用 `close[t-1] - dividend[t]`，`gap_up_atr` 恢复原规则 `open - close[t-1]`；
+    `largest_gap_6m` 锚点：低开扣股息、被股息完全解释时记 0（不会变成向上跳空），高开按原始前收盘。
+    `ex_dividend_gaps` 只列向下的原始跳空（`raw_direction` 为兼容保留，恒为 "down"）。ATR、K 线形态、价格行为、
+    RSI、均线仍不调整（写在 methodology 第 7 节）。
+  - R2 宏观窗口从 as_of 当天开始（改 4.1 节）：`from = as_of`，`to = as_of + MACRO_WINDOW_DAYS - 1`。as_of 收盘后、
+    UTC 日期仍是 as_of 的发布（美东夏令时 16:00–19:59，冬令时 16:00–18:59）因此能取到；as_of 收盘及之前的发布
+    由 `macro.py` 丢弃。
+  - R3 `macro_events.within_horizon` 的条目另含 `time_ny`、`timing`、`session`；合约 `horizons.*.macro_within_horizon`
+    另含 `time_ny`、`timing`（schema `macro_brief` 同步）。报告模板第 9 节不再回查 `events`。
+  - R4 除息日对齐（改 3.1 节）：`dividend_column(index, dividends, calendar=None)` / `match_to_bars` 有交易所日历时，
+    没有 K 线的除息日落到其后（含当天）第一个 NYSE 交易日的 K 线（该股当天须有 K 线），多日休市里的除息日也能
+    对上（KO 2001-09-12 → 2001-09-17）；落在交易日、但该股缺 K 线的除息日不匹配。无日历（或 `weekday_calendar()`）
+    时仍用 `DIVIDEND_MATCH_DAYS`。`fetch.load_all` 和 `dividends` 模块都传入日历。
+  - R5 按现设计保留：上面列出的合约补充字段与 null / false 约定、`DIVIDEND_ACTIVE_DAYS`、`timing` 的 `date_only`、
+    `coverage`、`data_quality.dividends`、`GAP_MISSING_SESSIONS` = 1（是否太吵由实盘验证判断）、T 的 2026-10-09
+    缺口保留为价位（扣除股息后仍是真跳空）、SKILL.md 的 description 修改（866 字符，低于 1024）。
 
 ### 10.3 验收进度（第 7 节）
 
-1. 离线测试：**759 passed**（基线 465）。
+1. 离线测试：**774 passed**（基线 465）。
 2. 真实 API（2026-11-04 收盘后运行，as_of 2026-11-04）：已跑 AAPL、T、HYG、SPY 的 swing + `--contract`。
    - 全部退出码 0、无错误，合约通过 ta-2.1 schema；空缓存调用次数 AAPL 13、HYG 11、SPY 10。
    - 日历 `fmp+rules`：355 个休市日、88 个半日市；四个标的均无数据缺口。
    - HYG：窗口内 5 个除息「假跳空」被消除（2026-06-01、07-01、09-01、10-01、11-02），其中 06-01、09-01
      原本会是未回补缺口价位 ✅。
-   - T：2026-10-09 扣除 0.2775 的股息后**仍是真跳空**，所以保留为缺口（带 `ex_dividend` 标注，仍在 R3 的来源里）。
+   - T：2026-10-09 扣除 0.2775 的股息后**仍是真跳空**，所以保留为缺口（带 `ex_dividend` 标注，仍是阻力位 R3 的来源之一）。
      验收标准「T 的 2026-10-09 不再是价位」的前提不成立，不是实现问题。
    - 感恩节前后的交易日数：AAPL 下次财报 2027-02-04 为 62 个交易日（按工作日算是 66）✅。
    - 宏观列表包含下一次非农（11-06 08:30）、CPI（11-10 08:30）和 FOMC（12-09 14:00）✅。
@@ -360,13 +380,10 @@ def weekday_calendar() -> MarketCalendar                                # 无节
 
 ### 10.4 未决事项
 
-- 宏观窗口按计划从 as_of 次日开始：as_of 当天收盘后、但 UTC 日期仍是 as_of 的发布（美东夏令时 16:00–19:59，
-  冬令时 16:00–18:59）取不到；FMP 里这类多是 Low / Medium 的美国条目。可改为从 as_of 当天开始（模块本来就会
-  丢掉 as_of 收盘前的事件），需同步改测试和文档（methodology 1.1、1.4、模块 L、第 7 节，SKILL.md 边缘情况）。
 - 经济日历 TTL 12 小时：同一天相隔 12 小时以上、as_of 相同的重跑会再请求一次经济日历（「同日重跑 0 次」的例外）。
 - `GAP_MISSING_SESSIONS` = 1：任何一个缺失的交易日都会告警。实盘四个标的（及 SPY / XLK / ^VIX 基准）均为 0，
   其他标的需在实盘验证中观察。`validate` 不标记落在非交易日的 K 线，可作为以后的数据质量检查。
-- T 的 1990 年拆股调整后收盘价（中位数 10.52）触发 SPAC 空壳启发式，是原有的误报，与本次改动无关。
+- T 的 1990 年拆股调整后收盘价（中位数 10.52）触发 SPAC 空壳启发式，是原有的误报，与本次改动无关（已列入第 9 节）。
 - e2e 的合成股息很小（$0.50 对约 $4,475 的价格），e2e 里没有被消除的跳空；消除逻辑由 `test_levels.py` 单测和
   HYG 实盘覆盖。
 - `fmp_client.py check` 的假日探测用 `from=<去年>-01-01`，因 `from` 不含当天会漏掉那年的 1 月 1 日（只影响显示）。

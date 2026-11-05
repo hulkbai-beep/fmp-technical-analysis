@@ -85,7 +85,7 @@ def dividend_rows(symbol, upcoming=NEXT_EX_DATE, first="2011-02-07", amount=0.5,
     return rows[::-1]
 
 
-# Economic calendar around NOW (FMP shape, times in UTC). as_of 2026-10-16 -> window 2026-10-17 .. 2027-01-13.
+# Economic calendar around NOW (FMP shape, times in UTC). as_of 2026-10-16 -> window 2026-10-16 .. 2027-01-12.
 MACRO_EVENTS = (
     ("2026-10-15 12:30:00", "US", "Inflation Rate YoY (Sep)", "High"),            # before the window
     ("2026-10-20 12:30:00", "US", "Inflation Rate YoY (Sep)", "High"),            # CPI, 08:30 EDT pre-open

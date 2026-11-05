@@ -175,7 +175,8 @@ GAP_MISSING_SESSIONS = 1          # with a calendar: bars with at least this man
 
 # ---------------------------------------------------------------------------- dividends (dividends.py)
 # FMP dividends: `date` is the ex-dividend date, `adjDividend` the split-adjusted amount (the basis of /full bars).
-DIVIDEND_MATCH_DAYS = 4           # an ex-date without a bar maps to the first bar at most this many calendar days later
+DIVIDEND_MATCH_DAYS = 4           # without an exchange calendar, an ex-date without a bar maps to the first bar at most
+                                  # this many calendar days later (with one: the bar of its first NYSE session)
 DIVIDEND_TTL_SECONDS = 86400
 DIVIDEND_ACTIVE_DAYS = 400        # pays_dividends: an ex-date this many calendar days before as_of at most (an annual
                                   # payer plus slack), or an announced one after it; else dividends look suspended

@@ -319,11 +319,15 @@
     },
     "macro_brief": {
       "type": "object", "additionalProperties": false,
-      "required": ["id", "label", "tier", "date", "trading_days_to"],
+      "required": ["id", "label", "tier", "date", "time_ny", "timing", "trading_days_to"],
       "properties": {
         "id": {"type": "string"}, "label": {"type": "string"},
         "tier": {"enum": [1, 2]},
-        "date": {"type": "string"}, "trading_days_to": {"type": "integer"}
+        "date": {"type": "string", "description": "release date in New York (YYYY-MM-DD)"},
+        "time_ny": {"$ref": "#/$defs/str", "description": "HH:MM New York time; null when FMP gives a date only"},
+        "timing": {"enum": ["pre_open", "intraday", "after_close", "non_session", "date_only"],
+                   "description": "after_close and non_session first reach prices in the next NYSE session"},
+        "trading_days_to": {"type": "integer", "description": "NYSE sessions in (as_of, the session the release can first move]"}
       }
     },
     "evidence": {
@@ -400,7 +404,7 @@
         "earnings_within_horizon": {"type": ["boolean", "null"]},
         "ex_dividend_within_horizon": {"type": ["boolean", "null"], "description": "the next ex-dividend date is at most horizon_days NYSE sessions away; null when unknown (none announced, or no dividend data); false for a symbol that pays none"},
         "macro_within_horizon": {"type": ["array", "null"], "items": {"$ref": "#/$defs/macro_brief"},
-                                 "description": "tier 1-2 macro events at most horizon_days NYSE sessions away; null when the economic calendar is unavailable"},
+                                 "description": "tier 1-2 macro events at most horizon_days NYSE sessions away, each with its date, New York time and timing; null when the economic calendar is unavailable"},
         "macro_complete": {"type": ["boolean", "null"], "description": "whether FMP's listing reaches the horizon's end (macro.listed_through and the request window); false: events late in the horizon may be missing"},
         "signals": {"type": "array", "items": {"$ref": "#/$defs/evidence"}},
         "patterns": {"type": "array", "items": {"$ref": "#/$defs/evidence"}, "description": "context only, not scored"}

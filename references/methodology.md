@@ -33,7 +33,7 @@ How every number in `metrics.json` is produced. Parameter names in `CODE` refer 
 | Profile, quote, earnings | `profile`, `quote`, `earnings` | as returned; earnings: report dates only (`date`, `reported`) | name, sector, ETF flag, IPO date; snapshot quote; earnings calendar |
 | NYSE holidays | `holidays-by-exchange`, `exchange=NYSE`, `HISTORY_START` through Dec 31 of next year, one request | `date, name, isClosed, adjCloseTime` (full closures and early closes) | the exchange calendar (section 1.7) |
 | Ex-dividend dates | `dividends`, one request | `date` (the ex-dividend date), `adjDividend` (split-adjusted amount), `dividend`, `frequency`, `declarationDate`, `recordDate`, `paymentDate`; includes ex-dates already announced | the `dividend` bar column (section 1.8), the `dividends` module |
-| US macro calendar | `economic-calendar`, `MACRO_WINDOW_DAYS` = 89 days from the day after `as_of`, one request | `date` (UTC), `country`, `event`, `impact` | the `macro_events` module |
+| US macro calendar | `economic-calendar`, `MACRO_WINDOW_DAYS` = 89 days starting on `as_of`, one request | `date` (UTC), `country`, `event`, `impact` | the `macro_events` module |
 
 - `^VIX` (with the caret) is the VIX index on FMP; `VIX` is a different instrument.
 - FMP's daily `vwap` field is (O+H+L+C)/4. It is ignored.
@@ -54,7 +54,7 @@ How every number in `metrics.json` is produced. Parameter names in `CODE` refer 
 | Candles, SMAs, EMAs, MACD, RSI, ATR, ADX, Bollinger, Keltner, z-score, OBV, A/D, RVOL | split-adjusted `/full` |
 | Key levels, pivots, volume profile, gaps, anchored VWAPs, 52-week high/low, scenarios, risk | split-adjusted `/full` |
 | Signal rules (evaluated on day t) | split-adjusted `/full` and the indicators above |
-| Gaps on an ex-dividend bar (unfilled-gap levels, the two gap signals, the `largest_gap_6m` VWAP anchor) | split-adjusted `/full`, with the prior bar's prices minus the dividend going ex on the bar (section 1.8) |
+| Gaps down on an ex-dividend bar (unfilled-gap levels, the `gap_down_atr` signal, the `largest_gap_6m` VWAP anchor) | split-adjusted `/full`, with the prior bar's prices minus the dividend going ex on the bar (section 1.8); gaps up use the prior bar as it traded |
 | Period returns, 12-1 momentum, RS lines, beta/correlation, `rv20`, earnings reactions | dividend-adjusted closes (total return) |
 | Signal forward returns and MAE | dividend-adjusted closes and lows |
 
@@ -160,8 +160,8 @@ keeps the weekday rules: 16:15 (`MARKET_CLOSE_BUFFER`), weekdays for the stale c
   `meta.modules_unavailable`.
 - **The NYSE holiday list** has no skip key: without it the built-in exchange rules stand in (section
   1.7), `data_quality.calendar.problem` and a note say why, and nothing else changes.
-- **Without dividends** the `dividend` column is 0 on every bar, so gaps on ex-dividend bars are not
-  adjusted; `levels.notes` says so.
+- **Without dividends** the `dividend` column is 0 on every bar, so gaps down on ex-dividend bars are
+  not adjusted; `levels.notes` says so.
 - **No usable /full history** stops the run with "no price data for X".
 
 ### 1.7 Exchange calendar (`market_calendar.py`)
@@ -203,17 +203,30 @@ keeps the weekday rules: 16:15 (`MARKET_CLOSE_BUFFER`), weekdays for the stale c
   sometimes lists one distribution twice). Different amounts on one ex-date (a regular and a special
   dividend) become one entry with the amounts summed. `data_quality.dividends` = {`ex_dates`,
   `rows_dropped`, `problem`}.
-- **Bar column:** `bars["dividend"]` holds the amount going ex on each bar and 0 elsewhere. An ex-date
-  without a bar (a holiday, a data gap) maps to the first bar at most `DIVIDEND_MATCH_DAYS` = 4 calendar
-  days later; several on one bar are summed. Without dividend data the column is 0 throughout.
-- **Where it applies:** only the three gap measures, on bar t with dividend D:
-  - unfilled-gap levels (section 3 H): the prior bar's high and low minus D;
-  - the `gap_up_atr` / `gap_down_atr` signals ([signals.md](signals.md)): the prior close minus D;
-  - the `largest_gap_6m` anchored-VWAP anchor (section 3 F): the prior close minus D.
+- **Bar column:** `bars["dividend"]` holds the amount going ex on each bar and 0 elsewhere; several on
+  one bar are summed. Without dividend data the column is 0 throughout. An ex-date without a bar maps to
+  the bar of the first NYSE session on or after it, where its drop shows, if the symbol has a bar that
+  session:
+  - an ex-date on a weekend or holiday, or inside a multi-day closure, finds its bar however long the
+    closure (KO's 2001-09-12, during the September 2001 closure, maps to 2001-09-17);
+  - an ex-date on a session without a bar (a data gap) stays unmatched, and the `dividends` module
+    names it;
+  - without an exchange calendar (as in some unit tests), the first bar at most `DIVIDEND_MATCH_DAYS` = 4
+    calendar days later.
+- **Where it applies:** only gaps down, in the three gap measures, on bar t with dividend D. A dividend
+  can only explain a drop, so gaps up are measured from the prior bar as it traded, exactly as without
+  dividends:
+  - unfilled-gap levels (section 3 H): a gap down needs high[t] < low[t-1] - D, and its zone's top is
+    low[t-1] - D; a gap up stays low[t] > high[t-1], with its zone's bottom at high[t-1];
+  - the `gap_down_atr` signal ([signals.md](signals.md)): the prior close minus D; `gap_up_atr` keeps the
+    prior close;
+  - the `largest_gap_6m` anchored-VWAP anchor (section 3 F): an opening drop is measured from the prior
+    close minus D and counts as no gap when the dividend explains all of it (never as a gap up); an
+    opening rise is measured from the prior close.
 
-  A drop the dividend explains is no gap, and a larger gap counts only the part beyond the dividend.
-  The dividend is declared before t, so this is causal. Without a dividend column, or with zeros in it,
-  every result is the same as before.
+  A drop the dividend explains is no gap, and a larger drop counts only the part beyond the dividend.
+  An ex-dividend bar that opens flat or a little higher is no gap up. The dividend is declared before t,
+  so this is causal. Without a dividend column, or with zeros in it, every result is the same as before.
 - **Deliberately unchanged:** ATR and the true range, candles, price action, SMAs, RSI, MACD and the
   Bollinger and Keltner bands use the bars as they traded, as charting platforms do (section 7).
 
@@ -363,8 +376,9 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
     - `high_52w` / `low_52w`: the bar with the highest high / lowest low of the last 252 bars;
     - `ytd_start`: the first bar of the year;
     - `largest_gap_6m`: the bar with the largest |open - prior close| / prior-day ATR in the last
-      `LARGEST_GAP_LOOKBACK` = 126 bars; on an ex-dividend bar the prior close is net of the dividend
-      (section 1.8).
+      `LARGEST_GAP_LOOKBACK` = 126 bars; on an ex-dividend bar an opening drop is measured from the
+      prior close net of the dividend, never turning into a gap up, and an opening rise from the prior
+      close itself (section 1.8).
   - **Each anchor reports** price vs VWAP in % and in ATRs.
 
 ### G. Volatility structure (`volatility`)
@@ -403,13 +417,14 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   - gap up: low[t] > high[t-1]; filled once a later low reaches high[t-1], otherwise the zone shrinks
     to what is left;
   - gap down: the mirror case;
-  - on an ex-dividend bar t paying D, high[t-1] - D and low[t-1] - D replace high[t-1] and low[t-1], in
-    the test and as the zone's edge (section 1.8). Each gap carries `ex_dividend` (D, or null);
+  - on an ex-dividend bar t paying D, a gap down needs high[t] < low[t-1] - D, and low[t-1] - D is its
+    zone's top (section 1.8); a gap up keeps high[t-1] as it traded, in the test, the fill and the zone.
+    Each gap carries `ex_dividend` (D when its bar is an ex-dividend bar, or null);
   - `gap_adjustment` gives the `method`, the number of ex-dividend bars in the window
-    (`ex_dividend_bars`) and the raw gaps the dividend explains (`neutralized`: `date`, `amount`,
-    `raw_direction`, and `raw_unfilled`, whether it would otherwise be an unfilled-gap level). A note
-    names those that would have been levels, and another says so when dividend data is missing and gaps
-    are not adjusted.
+    (`ex_dividend_bars`) and the raw gaps down the dividend explains (`neutralized`: `date`, `amount`,
+    `raw_direction`, always "down", and `raw_unfilled`, whether it would otherwise be an unfilled-gap
+    level). A note names those that would have been levels, and another says so when dividend data is
+    missing and gaps are not adjusted.
 - **Candidates, source types and weights** (`LEVEL_SOURCE_WEIGHTS`):
   - swing pivot highs and lows (pivot, 1.0 x `swing_atr` / 1.5, between 1 and `SWING_WEIGHT_CAP` = 3);
   - supply/demand zones (supply_demand, 1.0; x `LEVEL_FRESH_FACTOR` = 1.5 when fresh);
@@ -506,9 +521,12 @@ Stocks, ETFs and SPY alike, from the parsed dividends (section 1.8) and the bars
 - **Unavailable** (`available: false` with the reason) when the dividends request is restricted or fails.
 
 ### L. Macro events (`macro_events`)
-- **Input:** the one `economic-calendar` request: `MACRO_WINDOW_DAYS` = 89 days from the day after
-  `as_of` (`window`). FMP returns at most about 90 days per request and silently drops the rest, and the
-  window does not depend on the horizon. Only `MACRO_COUNTRY` = US rows are used.
+- **Input:** the one `economic-calendar` request: `MACRO_WINDOW_DAYS` = 89 days starting on `as_of`
+  itself (`window`). FMP filters by UTC date, and a release after the `as_of` close is still dated `as_of`
+  in UTC (until 20:00 New York in summer, 19:00 in winter), so the window includes that date; releases
+  at or before the `as_of` close are dropped below. FMP returns at most about 90 days per request and
+  silently drops the rest, and the window does not depend on the horizon. Only `MACRO_COUNTRY` = US rows
+  are used.
 - **Times:** FMP gives UTC; `time_ny` is New York time, daylight saving included. A row at exactly 00:00
   UTC is a date-only listing (holidays, elections, the Jackson Hole symposium): it keeps its date and
   has no time.
@@ -541,7 +559,8 @@ Stocks, ETFs and SPY alike, from the parsed dividends (section 1.8) and the bars
   `trading_days_to` = NYSE sessions in (`as_of`, `session`]; `calendar_days` = days from `as_of` to the
   date.
 - **Output:** `events` (tiers 1-3, in session order); `within_horizon` (`id`, `label`, `tier`, `date`,
-  `trading_days_to` of every event with `trading_days_to` ≤ the primary horizon); `within_stat_horizons`
+  `time_ny`, `timing`, `session`, `trading_days_to` of every event with `trading_days_to` ≤ the primary
+  horizon); `within_stat_horizons`
   (the number of tier-1 events within each stat horizon); `next` (the first event of each tier-1 group,
   null when the window has none); `counts` (`tier1`, `tier2`, `tier3`, and the US rows after `as_of` that
   were `excluded` or `unclassified`).
@@ -798,11 +817,11 @@ not change.
 | Volume profile | each bar's volume spread evenly across its high-low range | no intraday volume-at-price |
 | Earnings reaction | two-day close-to-close move across the report date | FMP `earnings` has no before-open / after-close flag; the window contains the reaction either way, plus one extra day of noise |
 | Trading days to earnings | NYSE sessions from `as_of` to the report date | FMP gives no time of day: after an after-close report the price reacts one session later than counted |
-| Dividends in the bars | only the three gap measures are taken net of the dividend (section 1.8); ATR and the true range, candles, price action, SMAs, RSI, MACD and the bands use the bars as they traded, so an ex-dividend bar can still read as a down bar or widen the true range | split-adjusted prices, as on charting platforms |
+| Dividends in the bars | only gaps down, in the three gap measures, are taken net of the dividend (section 1.8); ATR and the true range, candles, price action, SMAs, RSI, MACD and the bands use the bars as they traded, so an ex-dividend bar can still read as a down bar or widen the true range | split-adjusted prices, as on charting platforms |
 | Size of the ex-dividend drop | the full split-adjusted dividend (`adjDividend`) | the actual open also reflects news and order flow |
 | Early closes | an early close only the rules know (FMP's list is incomplete before about 2013) closes at `EARLY_CLOSE_DEFAULT` = 13:00 | early closes only decide whether today's bar is complete |
 | Macro event times | FMP's published times, converted from UTC to New York; a date-only row (00:00 UTC) has no time and maps to that day's session | FMP may revise a time; the 12-hour cache picks it up |
-| Macro event list | tiers by event name (`MACRO_GROUPS`); releases other than FOMC dates are listed only about 6-8 weeks ahead (`coverage`); a release after the close on the `as_of` date that FMP still dates on that UTC day (before 19:00 New York in winter, 20:00 in summer) falls before the window | FMP's impact label changes between releases of one event; the window starts the day after `as_of` |
+| Macro event list | tiers by event name (`MACRO_GROUPS`); releases other than FOMC dates are listed only about 6-8 weeks ahead (`coverage`) | FMP's impact label changes between releases of one event |
 
 ---
 

@@ -35,7 +35,7 @@ CONTRACT = "ta-2.1"   # 1.1 adds event.last_earnings*, targets' kind; 1.2 levels
 #                       macro_within_horizon / macro_complete (session counts exclude NYSE holidays)
 HORIZONS = ("swing", "position")
 MACRO_EVENT_KEYS = ("id", "label", "tier", "date", "time_ny", "timing", "session", "trading_days_to")
-MACRO_BRIEF_KEYS = ("id", "label", "tier", "date", "trading_days_to")
+MACRO_BRIEF_KEYS = ("id", "label", "tier", "date", "time_ny", "timing", "trading_days_to")
 # Modules computed the same way for both horizons; the contract takes them from the swing run.
 SHARED = ("snapshot", "data_quality", "market_context", "regime", "trend_momentum", "relative_strength",
           "mean_reversion", "volume_flow", "volatility", "multi_timeframe")

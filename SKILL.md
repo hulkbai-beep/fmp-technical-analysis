@@ -75,7 +75,7 @@ describes conditions and historical base rates. It is not advice.
    - the next ex-dividend date if it falls inside the horizon (`dividends.within_horizon`), with its
      amount: the price opens lower by about that much for mechanical reasons;
    - the tier-1 macro events inside the horizon (`macro_events.within_horizon`, `tier` 1), each with its
-     date and New York time (`macro_events.events[*].time_ny`), as scheduled context;
+     date and New York time (`time_ny`), as scheduled context;
    - any data warning;
    - the paths to `report.md` and `chart.html`;
    - the disclaimer, last.
@@ -118,7 +118,7 @@ describes conditions and historical base rates. It is not advice.
     reaction, and never call one bullish or bearish ("CPI on 2026-11-10 at 08:30 falls inside the
     horizon", not "CPI could lift the stock");
   - the ex-dividend drop is mechanical: the price opens lower by about the dividend. It is not a bearish
-    move, and gaps on ex-dividend bars are already measured net of it;
+    move, and gaps down on ex-dividend bars are already measured net of it;
   - when `macro_events.coverage.complete` is false, say that FMP lists releases other than FOMC dates
     only through `coverage.listed_through`, so later ones inside the horizon may be missing.
 - **Report every conflict** in `scorecard.conflicts`, with its typical meaning. Do not add your own.
@@ -179,8 +179,8 @@ Tools that build on this skill (a decision engine, a screener) read the **ta-2.1
   - `macro`: the tier 1-2 macro events after `as_of` (date, New York time, timing, session, trading days),
     the requested window and `listed_through`, the last date FMP lists releases other than FOMC dates;
   - per horizon: `ex_dividend_within_horizon` (false for a symbol that pays none, null when unknown),
-    `macro_within_horizon` (null when the economic calendar is unavailable) and `macro_complete` (false:
-    events late in the horizon may be missing).
+    `macro_within_horizon` (each with its date, New York time and timing; null when the economic
+    calendar is unavailable) and `macro_complete` (false: events late in the horizon may be missing).
 
   `event.trading_days_to` and `data_quality.business_days_behind` keep their names but now count NYSE
   sessions.
@@ -201,14 +201,14 @@ Tools that build on this skill (a decision engine, a screener) read the **ta-2.1
 - **Plan restrictions:** without the dividend-adjusted endpoint, returns are price-only
   (`data_quality.adj_coverage` is below 1). Without earnings, event risk is skipped. Without dividends or
   the economic calendar, `dividends` or `macro_events` is unavailable with its `reason` (without
-  dividends, gaps on ex-dividend bars are not adjusted; `levels.notes` says so). All are listed in
+  dividends, gaps down on ex-dividend bars are not adjusted; `levels.notes` says so). All are listed in
   `meta.restricted`.
 - **Calendar fallback:** if FMP's holiday list cannot be loaded, the built-in NYSE rules give the trading
   days (`data_quality.calendar.source` is "rules", `.problem` says why). They match FMP's closed days for
   1991-2028; only a closure announced at short notice (a national day of mourning) can be missing.
   Mention it once.
-- **Macro window:** one request covers about 89 days from the day after `as_of` (FMP silently truncates
-  longer windows). Past releases are not used: plans can refuse an early start date. FMP lists most
+- **Macro window:** one request covers about 89 days starting on `as_of` (FMP silently truncates
+  longer windows), so a release after the `as_of` close is included. Past releases are not used: plans can refuse an early start date. FMP lists most
   releases only 6-8 weeks ahead, so for the position horizon `macro_events.coverage.complete` is often
   false and the list is a lower bound.
 - **SPAC history:** FMP dates a de-SPAC listing from the shell's first trading day (IONQ starts

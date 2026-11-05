@@ -267,9 +267,8 @@ context next to the scorecard and never change it; say so once.
   - `dividends.last_ex_dividend.date`, `.amount`;
   - `dividends.notes`.
 - Macro events:
-  - `macro_events.within_horizon[*]`: `id`, `label`, `tier`, `date`, `trading_days_to`;
-  - the time of day from the matching entry of `macro_events.events[*]` (same `id`, `label` and `date`):
-    `time_ny` (New York time, null when FMP gives a date only), `timing`, `session`;
+  - `macro_events.within_horizon[*]`: `id`, `label`, `tier`, `date`, `time_ny` (New York time, null when
+    FMP gives a date only), `timing`, `session`, `trading_days_to`;
   - `macro_events.horizon_days`, `macro_events.window.from` and `.to`;
   - `macro_events.coverage.complete`, `.listed_through`;
   - `macro_events.next.fomc` (the next FOMC decision, even beyond the horizon);
@@ -303,8 +302,8 @@ context next to the scorecard and never change it; say so once.
 - Never predict a release's outcome, its direction or the market's reaction ("CPI could push the stock
   lower", "a cut is expected"), never call an event bullish or bearish, and never suggest acting before or
   after it.
-- The ex-dividend drop is mechanical, not a bearish signal. Gaps on ex-dividend bars are already measured
-  net of the dividend (`levels.gap_adjustment`).
+- The ex-dividend drop is mechanical, not a bearish signal. Gaps down on ex-dividend bars are already
+  measured net of the dividend (`levels.gap_adjustment`).
 
 **Skipped:** ETFs skip only the earnings part ("No earnings: ETF."); the ex-dividend and macro parts still
 apply. A restricted or missing endpoint: give that part's reason (`event_risk.reason`,
@@ -372,7 +371,7 @@ about a third of the time, the 95% band stop about 4%).
   `data_quality.adj_coverage`.
 - **Calendar:** trading days count NYSE sessions, exchange holidays excluded
   (`data_quality.calendar.source`: FMP's holiday list with the exchange rules, or the rules alone).
-- **Approximations:** daily-bar VWAP, the volume profile and the two-day earnings move. Gaps on
+- **Approximations:** daily-bar VWAP, the volume profile and the two-day earnings move. Gaps down on
   ex-dividend bars are measured net of the dividend, but ATR, candles and price action use prices that are
   not dividend-adjusted. Macro event times are FMP's, converted to New York time.
 - **Signal caveats:** one line, pointing to section 7.
@@ -507,9 +506,9 @@ Illustrative arithmetic, not a recommendation.
 - Prices: split-adjusted FMP /full for levels, indicators and signals; dividend-adjusted closes for
   returns, volatility and forward-return statistics.
 - Calendar: trading days count NYSE sessions (FMP's holiday list with the exchange rules).
-- Approximations: daily-bar anchored VWAP and volume profile; two-day earnings move; gaps on ex-dividend
-  bars net of the dividend, while ATR, candles and price action are not dividend-adjusted; macro event
-  times as FMP publishes them, in New York time.
+- Approximations: daily-bar anchored VWAP and volume profile; two-day earnings move; gaps down on
+  ex-dividend bars net of the dividend, while ATR, candles and price action are not dividend-adjusted;
+  macro event times as FMP publishes them, in New York time.
 - Definitions: references/methodology.md, references/signals.md and references/patterns.md. Interactive
   charts: chart.html (indicators, price action, candlestick patterns).
 

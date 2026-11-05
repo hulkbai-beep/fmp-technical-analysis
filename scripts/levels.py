@@ -12,9 +12,10 @@ it will turn next. The stops and targets in scorecard.py come from volatility ba
 
 Everything uses split-adjusted OHLC (the prices that actually traded, continuous across splits)
 over the last ctx["hz"]["levels_lookback"] bars, as of the last complete bar. Those prices are not
-dividend-adjusted, so on an ex-dividend bar (bars["dividend"] > 0) gaps compare with the prior bar
-net of the dividend: the mechanical ex-dividend drop is no gap. Definitions are documented in
-references/methodology.md.
+dividend-adjusted, so on an ex-dividend bar (bars["dividend"] > 0) a gap down is measured from the
+prior bar's low net of the dividend: the mechanical ex-dividend drop is no gap. A dividend can only
+explain a drop, so gaps up are measured from the prior bar as it traded. Definitions are documented
+in references/methodology.md.
 """
 from __future__ import annotations
 
@@ -29,9 +30,10 @@ from dividends import NOTE_DATES_MAX, bar_dividends
 PROFILE_NOTE = "approximation: each bar's volume spread evenly across its high-low range"
 PIVOT_NOTE = ("a swing pivot is confirmed once price reverses {m:g} ATR from it, so the latest swing "
               "is not a pivot yet (the only right-side dependence; levels are measured as of the last bar)")
-GAP_DIVIDEND_METHOD = ("on an ex-dividend bar t paying D, a gap compares bar t with the prior bar's high and "
-                       "low minus D, and the gap zone's edge on the prior bar's side is that price minus D: a "
-                       "drop the dividend explains is not a gap (split-adjusted bars are not dividend-adjusted)")
+GAP_DIVIDEND_METHOD = ("on an ex-dividend bar t paying D, a gap down needs high[t] < low[t-1] - D and its zone's "
+                       "top is low[t-1] - D: a drop the dividend explains is not a gap (split-adjusted bars are "
+                       "not dividend-adjusted); a dividend cannot explain a rise, so a gap up is measured from "
+                       "high[t-1] as it traded, as on any other bar")
 
 _SOURCE_TYPES = {
     "pivot_high": "pivot", "pivot_low": "pivot",
@@ -294,11 +296,12 @@ def unfilled_gaps(df: pd.DataFrame) -> list[dict]:
     Gap up at t: low[t] > high[t-1], zone high[t-1]..low[t]; filled once a later bar's low is
     <= high[t-1], otherwise its top shrinks to the lowest later low (partially filled). Gap down
     mirrors it: high[t] < low[t-1], zone high[t]..low[t-1], bottom rises to the highest later high.
-    On an ex-dividend bar t (df["dividend"] = D > 0) the prior bar's high and low are taken net of
-    the dividend, high[t-1] - D and low[t-1] - D, in the test and as the zone edge: a drop the
-    dividend explains is no gap. Returns unfilled gaps chronologically with the remaining zone
-    (top/bottom), the original one and ex_dividend (D on an ex-dividend bar, else None). Without a
-    "dividend" column, or with zeros in it, nothing changes.
+    On an ex-dividend bar t (df["dividend"] = D > 0) the prior bar's low is taken net of the
+    dividend for a gap down, low[t-1] - D, in the test and as the zone's top: a drop the dividend
+    explains is no gap. A dividend can only explain a drop, so a gap up keeps high[t-1] as it traded,
+    in the test, the fill and the zone. Returns unfilled gaps chronologically with the remaining zone
+    (top/bottom), the original one and ex_dividend (D when bar t is an ex-dividend bar, up or down,
+    else None). Without a "dividend" column, or with zeros in it, nothing changes.
     """
     if len(df) < 2:
         return []
@@ -307,7 +310,7 @@ def unfilled_gaps(df: pd.DataFrame) -> list[dict]:
 
     out = []
     for t in range(1, len(df)):
-        ph, pl = prev_high[t] - div[t], prev_low[t] - div[t]       # x - 0.0 == x: no dividend, no change
+        ph, pl = prev_high[t], prev_low[t] - div[t]       # only a drop is net of the dividend (x - 0.0 == x)
         ex_div = float(div[t]) if div[t] > 0 else None
         if low[t] > ph and later_low[t] > ph:
             top = min(low[t], later_low[t])
@@ -325,12 +328,12 @@ def unfilled_gaps(df: pd.DataFrame) -> list[dict]:
 
 
 def ex_dividend_gaps(df: pd.DataFrame) -> list[dict]:
-    """Ex-dividend bars whose raw prices gap from the prior bar (low[t] > high[t-1] or high[t] <
-    low[t-1]) but that are no gap in that direction net of the dividend (unfilled_gaps): the drop
-    is the dividend. Filled or not: raw_unfilled says whether later bars of df left the raw gap
-    open, i.e. whether it would be an unfilled-gap level without the dividend adjustment.
-    Chronological [{date, amount, raw_direction, raw_unfilled}]. A dividend only lowers the prior
-    bar, so in practice these are raw gaps down."""
+    """Ex-dividend bars whose raw prices gap down from the prior bar (high[t] < low[t-1]) but that
+    are no gap down net of the dividend (high[t] >= low[t-1] - D, see unfilled_gaps): the drop is the
+    dividend. Filled or not: raw_unfilled says whether later bars of df left the raw gap open, i.e.
+    whether it would be an unfilled-gap level without the dividend adjustment. Chronological
+    [{date, amount, raw_direction, raw_unfilled}]. A dividend can only explain a drop and gaps up are
+    measured raw, so raw_direction is always "down" (kept for compatibility)."""
     if len(df) < 2:
         return []
     high, low, prev_high, prev_low, div = _gap_inputs(df)
@@ -340,14 +343,9 @@ def ex_dividend_gaps(df: pd.DataFrame) -> list[dict]:
         if t == 0:
             continue
         d = div[t]
-        if low[t] > prev_high[t] and not low[t] > prev_high[t] - d:
-            direction, unfilled = "up", later_low[t] > prev_high[t]
-        elif high[t] < prev_low[t] and not high[t] < prev_low[t] - d:
-            direction, unfilled = "down", later_high[t] < prev_low[t]
-        else:
-            continue
-        out.append({"date": _iso(df.index[t]), "amount": float(d), "raw_direction": direction,
-                    "raw_unfilled": bool(unfilled)})
+        if high[t] < prev_low[t] and not high[t] < prev_low[t] - d:
+            out.append({"date": _iso(df.index[t]), "amount": float(d), "raw_direction": "down",
+                        "raw_unfilled": bool(later_high[t] < prev_low[t])})
     return out
 
 

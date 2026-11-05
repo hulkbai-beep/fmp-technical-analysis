@@ -114,10 +114,14 @@ def test_patterns_have_no_lookahead(full, full_patterns, t):
 
 @pytest.fixture(scope="module")
 def full_dividends(full):
-    """The fixture bars with a quarterly dividend column (as fetch attaches it): gap rules use close[t-1] - D[t]."""
-    bars, ind, _ = full
+    """The fixture bars with a dividend column (as fetch attaches it): 2% of the close every 63 bars, and on
+    every other gap_down_atr fire the whole opening drop, which the gap-down rule (close[t-1] - D[t]) then
+    no longer counts."""
+    bars, ind, ev = full
     div = np.zeros(len(bars))
     div[5::63] = bars["close"].to_numpy()[5::63] * 0.02
+    downs = np.flatnonzero(ev["gap_down_atr"].to_numpy())[::2]
+    div[downs] = (bars["close"].shift(1) - bars["open"]).to_numpy()[downs]
     with_div = bars.assign(dividend=div)
     return with_div, S.events(with_div, ind)
 
@@ -134,4 +138,4 @@ def test_the_dividend_fixture_changes_a_gap_event(full, full_dividends):
     _, _, ev_plain = full
     _, ev_div = full_dividends
     changed = (ev_plain != ev_div).sum()
-    assert changed[changed > 0].index.isin(["gap_up_atr", "gap_down_atr"]).all() and changed.sum() >= 1
+    assert changed[changed > 0].index.tolist() == ["gap_down_atr"]    # a dividend never changes gap_up_atr

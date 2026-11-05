@@ -8,10 +8,12 @@ split of 2024). The /full bars are not dividend-adjusted, so on an ex-dividend d
 lower by about the dividend for mechanical reasons. That drop is not a gap.
 
 - parse_dividends(rows): FMP rows -> one entry per ex-date, ascending.
-- match_to_bars(index, dividends) / dividend_column(index, dividends): the amount on the bar each
-  ex-date lands on. dividend_column is the bars["dividend"] column. levels.unfilled_gaps,
-  signal_stats.events and modules._vwap_anchors read it through bar_dividends / prev_close_net:
-  on an ex-dividend bar, gaps compare with the prior bar minus the dividend. Without the column,
+- match_to_bars(index, dividends, calendar) / dividend_column(index, dividends, calendar): the
+  amount on the bar each ex-date lands on (with an exchange calendar, the bar of the first session
+  on or after the ex-date). dividend_column is the bars["dividend"] column. levels.unfilled_gaps,
+  signal_stats.events and modules._vwap_anchors read it through bar_dividends / prev_close_net: on
+  an ex-dividend bar, a gap down is measured from the prior bar minus the dividend. A dividend can
+  only explain a drop, so gaps up are measured from the prior bar as it traded. Without the column,
   every result is the same as before.
 - build_dividends(ctx): the `dividends` metrics block. It gives the last and the next ex-dividend
   date, the next one's size against the close and the ATR, and whether it falls inside the
@@ -30,8 +32,10 @@ import config as C
 import regime as R
 
 SOURCE = "FMP dividends: ex-dividend dates; adjDividend is split-adjusted, the same basis as the /full bars"
-GAP_BASIS = ("on an ex-dividend bar, gaps compare with the prior bar minus the dividend (unfilled-gap levels, "
-             "the gap_up_atr / gap_down_atr signals and the largest_gap_6m VWAP anchor)")
+GAP_BASIS = ("on an ex-dividend bar, a gap down is measured from the prior bar minus the dividend, so a drop the "
+             "dividend explains is no gap (unfilled-gap levels, the gap_down_atr signal and the largest_gap_6m "
+             "VWAP anchor); a dividend cannot explain a rise, so gaps up are measured from the prior bar as it "
+             "traded")
 
 _DATE_FIELDS = {"declarationDate": "declaration_date", "recordDate": "record_date", "paymentDate": "payment_date"}
 NOTE_DATES_MAX = 5   # dates named in a note (the most recent)
@@ -149,32 +153,51 @@ def _dated(dividends) -> list[tuple[pd.Timestamp, dict]]:
     return sorted(out, key=lambda x: x[0])
 
 
-def match_to_bars(index, dividends) -> dict:
+def _exchange_calendar(calendar):
+    """`calendar` when it knows exchange closures (a market_calendar.MarketCalendar other than
+    weekday_calendar()), else None."""
+    return None if calendar is None or getattr(calendar, "source", None) == "weekdays" else calendar
+
+
+def match_to_bars(index, dividends, calendar=None) -> dict:
     """Which bar of `index` (ascending dates) each ex-date of `dividends` lands on.
 
-    An ex-date with a bar maps to that bar. One without a bar (a holiday, a data gap) maps to the
-    first bar at most C.DIVIDEND_MATCH_DAYS calendar days later, else it is unmatched. Ex-dates
-    before the first bar or after the last one, and entries without a usable ex_date and positive
-    amount, are left out. Returns {"matched": [(bar position, entry)], "unmatched": [entry]}, both
-    in ex-date order."""
+    An ex-date with a bar maps to that bar. One without a bar maps, with an exchange calendar
+    (`calendar`, a market_calendar.MarketCalendar), to the bar of the first session on or after the
+    ex-date, where its drop shows, if the symbol has a bar that session, else it is unmatched: an
+    ex-date on a weekend or holiday, or inside a multi-day closure (2001-09-12 -> 2001-09-17), finds
+    its bar however long the closure, and one on a session without a bar (a data gap) stays
+    unmatched. Without a calendar (or with weekday_calendar()), it maps to the first bar at most
+    C.DIVIDEND_MATCH_DAYS calendar days later, else it is unmatched. Ex-dates before the first bar or
+    after the last one, and entries without a usable ex_date and positive amount, are left out.
+    Returns {"matched": [(bar position, entry)], "unmatched": [entry]}, both in ex-date order."""
     days = _bar_days(index)
+    calendar = _exchange_calendar(calendar)
     matched, unmatched = [], []
     for ex, entry in _dated(dividends) if len(days) else ():
         if not days[0] <= ex <= days[-1]:
             continue
         pos = int(days.searchsorted(ex, side="left"))         # first bar on or after the ex-date
-        if (days[pos] - ex).days <= C.DIVIDEND_MATCH_DAYS:
-            matched.append((pos, entry))
-        else:
+        if days[pos] != ex:
+            if calendar is None:
+                pos = pos if (days[pos] - ex).days <= C.DIVIDEND_MATCH_DAYS else None
+            else:
+                session = calendar.next_session(ex, inclusive=True)
+                pos = int(days.searchsorted(session, side="left"))
+                pos = pos if pos < len(days) and days[pos] == session else None
+        if pos is None:
             unmatched.append(entry)
+        else:
+            matched.append((pos, entry))
     return {"matched": matched, "unmatched": unmatched}
 
 
-def dividend_column(index, dividends) -> pd.Series:
+def dividend_column(index, dividends, calendar=None) -> pd.Series:
     """The bars["dividend"] column: on each bar, the amount going ex on it (summed when several
-    ex-dates land on one bar; see match_to_bars), 0.0 on every other bar. Float, on `index`."""
+    ex-dates land on one bar; see match_to_bars, which `calendar` is passed to), 0.0 on every other
+    bar. Float, on `index`."""
     values = np.zeros(len(index), dtype=float)
-    for pos, entry in match_to_bars(index, dividends)["matched"]:
+    for pos, entry in match_to_bars(index, dividends, calendar)["matched"]:
         values[pos] += _amount(entry["amount"])
     return pd.Series(values, index=index, name="dividend")
 
@@ -190,7 +213,9 @@ def bar_dividends(df: pd.DataFrame) -> pd.Series:
 
 def prev_close_net(df: pd.DataFrame) -> pd.Series:
     """close[t-1] - dividend[t]: the prior close on the footing of bar t's prices (on an ex-dividend
-    bar the price opens lower by about the dividend). Equal to close.shift(1) without dividends."""
+    bar the price opens lower by about the dividend). It is the base a drop is measured from, so a
+    drop the dividend explains is no gap down; a rise is measured from close[t-1] itself, since a
+    dividend cannot explain one. Equal to close.shift(1) without dividends."""
     return df["close"].shift(1) - bar_dividends(df)
 
 
@@ -219,9 +244,10 @@ def build_dividends(ctx) -> dict:
 
     ctx["dividends"] is the parse_dividends list ([] for a symbol that pays none, None when the fetch
     failed, the reason in ctx["skipped"]["dividends"]). ctx["calendar"] (a MarketCalendar, optional)
-    supplies the exchange holidays for the trading-day count. A symbol counts as paying dividends
-    with an ex-dividend date in the C.DIVIDEND_ACTIVE_DAYS calendar days up to as_of or one
-    announced after it. Every key is always present; unknown values are null."""
+    supplies the exchange holidays for the trading-day count and matches ex-dates to bars as the
+    bars["dividend"] column does (match_to_bars). A symbol counts as paying dividends with an
+    ex-dividend date in the C.DIVIDEND_ACTIVE_DAYS calendar days up to as_of or one announced after
+    it. Every key is always present; unknown values are null."""
     hz = ctx.get("hz") or C.HORIZONS[ctx.get("horizon", C.DEFAULT_HORIZON)]
     out = _empty(hz)
     divs = ctx.get("dividends")
@@ -237,17 +263,19 @@ def build_dividends(ctx) -> dict:
 
     notes: list[str] = []
     ticker = ctx.get("ticker") or "this symbol"
+    calendar = ctx.get("calendar")
     dated = _dated(divs)
     past = [(d, e) for d, e in dated if d <= as_of]
     upcoming = [(d, e) for d, e in dated if d > as_of]
-    m = match_to_bars(bars.index, [e for _, e in dated])
+    m = match_to_bars(bars.index, [e for _, e in dated], calendar)
     out.update(available=True, ex_dates_in_history=len(m["matched"]) + len(m["unmatched"]),
                matched_to_bars=len(m["matched"]), notes=notes)
     if m["unmatched"]:
         late = [_iso_or_none(e["ex_date"]) for e in m["unmatched"][-NOTE_DATES_MAX:]]
-        notes.append(f"{len(m['unmatched'])} ex-dividend date(s) in the price history have no bar within "
-                     f"{C.DIVIDEND_MATCH_DAYS} calendar days (data gaps), so their drops are not taken out of "
-                     f"the gaps (latest: {', '.join(late)})")
+        where = (f"within {C.DIVIDEND_MATCH_DAYS} calendar days" if _exchange_calendar(calendar) is None
+                 else f"on the first {C.CALENDAR_EXCHANGE} session on or after the ex-date")
+        notes.append(f"{len(m['unmatched'])} ex-dividend date(s) in the price history have no bar {where} "
+                     f"(data gaps), so their drops are not taken out of the gaps (latest: {', '.join(late)})")
     if not dated:
         notes.append(f"FMP lists no dividends for {ticker}: no ex-dividend dates to report or to take out of gaps")
         return {**out, "pays_dividends": False}
@@ -277,7 +305,6 @@ def build_dividends(ctx) -> dict:
 
     ex, e = upcoming[0]
     amount = _amount(e["amount"])
-    calendar = ctx.get("calendar")
     td = _trading_days(as_of, ex, calendar)
     if calendar is None or getattr(calendar, "source", None) == "weekdays":
         notes.append("trading days to the ex-dividend date counted as weekdays: no exchange calendar, so US "

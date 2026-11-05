@@ -9,12 +9,13 @@ import pandas as pd
 import pytest
 
 import config as C
+import dividends as D
 import fetch
 import fmp_client
 import market_calendar as MC
 from conftest import synthetic_bars
-from fakes import (ADJ, DIVIDENDS, ECON, FMP_ROW_CAP, FULL, HOLIDAYS, NEXT_EX_DATE, NOW, NY, FakeClient, day,
-                   dividend_rows, market, nyse_holiday_rows, profile_row, series)
+from fakes import (ADJ, DIVIDENDS, ECON, FMP_ROW_CAP, FULL, HOLIDAYS, MACRO_EVENTS, NEXT_EX_DATE, NOW, NY,
+                   FakeClient, day, dividend_rows, macro_rows, market, nyse_holiday_rows, profile_row, series)
 
 
 # ---------------------------------------------------------------------------- chunked history
@@ -415,8 +416,23 @@ def test_dividends_become_the_bars_dividend_column():
                {"date": "2026-08-03", "adjDividend": 0.0, "dividend": 0.0, "frequency": "Quarterly"}]   # unusable
     out = fetch.load_all(market(dividends={"ACME": weekend}), "ACME", now=NOW)
     div = out["bars"]["dividend"]
-    assert [day(d) for d in div.index[div > 0]] == ["2026-09-07"] and div.sum() == pytest.approx(0.3)
+    # the Saturday before Labor Day (09-07): the drop shows on Tuesday 09-08, the first NYSE session (the
+    # fake history, on every weekday, even has a bar on the holiday)
+    assert [day(d) for d in div.index[div > 0]] == ["2026-09-08"] and div.sum() == pytest.approx(0.3)
     assert out["data_quality"]["dividends"] == {"ex_dates": 1, "rows_dropped": 1, "problem": None}
+
+
+def test_an_ex_date_inside_a_multi_day_closure_finds_its_bar():
+    # KO-like: ex-date 2001-09-12, while the NYSE was closed 09-11..09-14; the next bar is 09-17, 5 days later
+    closure = pd.bdate_range("2001-09-11", "2001-09-14")
+    rows = [{"date": "2001-09-12", "adjDividend": 0.18, "dividend": 0.18, "frequency": "Quarterly"}]
+    fake = market(prices={"ACME": series("1996-10-01", seed=3).drop(closure)}, dividends={"ACME": rows})
+    out = fetch.load_all(fake, "ACME", now=NOW)
+    div = out["bars"]["dividend"]
+    assert [day(d) for d in div.index[div > 0]] == ["2001-09-17"] and div.sum() == pytest.approx(0.18)
+    assert out["data_quality"]["gaps"]["count"] == 0                   # the closure is no data gap either
+    # the weekday rule alone (no exchange calendar) would leave it unmatched: 5 > DIVIDEND_MATCH_DAYS days
+    assert not D.dividend_column(out["bars"].index, out["dividends"]).any()
 
 
 def test_restricted_dividends_leave_zeros_and_a_reason():
@@ -433,16 +449,19 @@ def test_restricted_dividends_leave_zeros_and_a_reason():
 
 
 def test_economic_calendar_window_follows_the_last_bar():
-    fake = market()
+    # the window starts on as_of itself: FMP filters by UTC date, and 16:30 New York on as_of is still as_of
+    late = ("2026-10-16 20:30:00", "US", "Fed Chair Powell Speech", "High")
+    fake = market(macro=macro_rows(MACRO_EVENTS + (late,)))
     out = fetch.load_all(fake, "ACME", now=NOW)
     (params,) = [p for e, p in fake.requests if e == ECON]
-    assert params == {"from": "2026-10-17", "to": "2027-01-13"} == out["macro_window"]
+    assert params == {"from": "2026-10-16", "to": "2027-01-12"} == out["macro_window"] == fetch.macro_window(NOW.date())
     assert (pd.Timestamp(params["to"]) - pd.Timestamp(params["from"])).days == C.MACRO_WINDOW_DAYS - 1
-    assert len(out["macro_rows"]) == 11 and min(r["date"] for r in out["macro_rows"]) >= "2026-10-17"
+    assert len(out["macro_rows"]) == 12 and min(r["date"] for r in out["macro_rows"]) == "2026-10-16 20:30:00"
     assert {r["country"] for r in out["macro_rows"]} == {"US", "EU"}   # raw rows: macro.py keeps the US ones
 
     out = fetch.load_all(market(), "ACME", now=pd.Timestamp("2026-10-16 11:00", tz=NY))   # partial bar dropped
-    assert out["macro_window"] == {"from": "2026-10-16", "to": "2027-01-12"}
+    assert out["macro_window"] == {"from": "2026-10-15", "to": "2027-01-11"}
+    assert "2026-10-15 12:30:00" in [r["date"] for r in out["macro_rows"]]   # CPI before that as_of's open
 
 
 def test_restricted_economic_calendar_is_recorded():
@@ -450,7 +469,7 @@ def test_restricted_economic_calendar_is_recorded():
     out = fetch.load_all(fake, "ACME", now=NOW)
     assert out["macro_rows"] is None and out["skipped"]["macro_events"].startswith("restricted:")
     assert any(n.startswith("macro_events: restricted:") for n in out["notes"]) and ECON in fake.restricted
-    assert out["macro_window"] == {"from": "2026-10-17", "to": "2027-01-13"}
+    assert out["macro_window"] == {"from": "2026-10-16", "to": "2027-01-12"}
 
 
 # ---------------------------------------------------------------------------- validate()
@@ -584,8 +603,8 @@ def test_quote_follows_the_session_rule(client):
      "2026-10-08T10:00", "2026-10-16T11:00", 2),                  # 8 days
     (DIVIDENDS, {"symbol": "ACME"}, "2026-10-15T20:00", "2026-10-16T19:00", 1),   # 23 hours
     (DIVIDENDS, {"symbol": "ACME"}, "2026-10-15T10:00", "2026-10-16T11:00", 2),   # 25 hours
-    (ECON, {"from": "2026-10-17", "to": "2027-01-13"}, "2026-10-16T06:00", "2026-10-16T17:00", 1),   # 11 hours
-    (ECON, {"from": "2026-10-17", "to": "2027-01-13"}, "2026-10-16T06:00", "2026-10-16T19:00", 2),   # 13 hours
+    (ECON, {"from": "2026-10-16", "to": "2027-01-12"}, "2026-10-16T06:00", "2026-10-16T17:00", 1),   # 11 hours
+    (ECON, {"from": "2026-10-16", "to": "2027-01-12"}, "2026-10-16T06:00", "2026-10-16T19:00", 2),   # 13 hours
 ])
 def test_calendar_dividends_and_macro_use_fixed_ttls(client, endpoint, params, written, now, calls):
     assert fmp_client.TTL_BY_ENDPOINT[HOLIDAYS] == C.CALENDAR_TTL_SECONDS == 7 * 86400

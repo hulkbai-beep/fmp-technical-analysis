@@ -461,10 +461,13 @@ def fetch_dividends(client, symbol) -> tuple[list[dict] | None, int, str | None]
 
 
 def macro_window(as_of) -> dict:
-    """The economic-calendar window for a run whose last bar is `as_of`: from the day after it,
-    C.MACRO_WINDOW_DAYS days (FMP silently keeps only ~90 days per request). It does not depend on
-    the horizon, so the other horizon's run is served from the cache."""
-    start = pd.Timestamp(as_of).normalize() + pd.Timedelta(days=1)
+    """The economic-calendar window for a run whose last bar is `as_of`: C.MACRO_WINDOW_DAYS days
+    starting on as_of itself (FMP silently keeps only ~90 days per request, counted back from `to`).
+    FMP filters by UTC date, and a release after the as_of close is still dated as_of in UTC (until
+    20:00 New York in summer, 19:00 in winter), so the window starts on as_of; macro.py drops every
+    release at or before the as_of close. It does not depend on the horizon, so the other horizon's
+    run is served from the cache."""
+    start = pd.Timestamp(as_of).normalize()
     return {"from": _day(start), "to": _day(start + pd.Timedelta(days=C.MACRO_WINDOW_DAYS - 1))}
 
 
@@ -548,11 +551,12 @@ def load_all(client, ticker, now=None, start=None) -> dict:
                      f"--history-start set to the merger date to exclude it")
         dq["warnings"].append(notes[-1])
 
-    # ex-dividend dates as a bar column (0 on other bars, and on every bar when they could not be loaded)
+    # ex-dividend dates as a bar column (0 on other bars, and on every bar when they could not be loaded);
+    # an ex-date without a bar goes to the bar of its first NYSE session (a multi-day closure included)
     divs, dropped, why = fetch_dividends(client, symbol)
     if divs is None:
         unavailable("dividends", why)
-    bars = bars.assign(dividend=D.dividend_column(bars.index, divs or []))
+    bars = bars.assign(dividend=D.dividend_column(bars.index, divs or [], calendar))
     dq["dividends"] = {"ex_dates": None if divs is None else len(divs),
                        "rows_dropped": None if divs is None else dropped, "problem": why}
 
@@ -608,7 +612,8 @@ def load_all(client, ticker, now=None, start=None) -> dict:
     dq["benchmarks"] = benchmarks
     dq["benchmark_basis"] = basis
 
-    # scheduled US macro events after the last bar (the window does not depend on the horizon)
+    # scheduled US macro events after the last bar's close (the window starts on its date and does not
+    # depend on the horizon)
     macro_rows, window, why = fetch_macro(client, bars.index[-1])
     if macro_rows is None:
         unavailable("macro_events", why)

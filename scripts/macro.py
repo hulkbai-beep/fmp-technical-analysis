@@ -48,7 +48,7 @@ _SUFFIX = re.compile(r"\s*\([^()]*\)$")
 _GROUPS = tuple((gid, label, tier, tuple(re.compile(p, re.IGNORECASE) for p in patterns))
                 for gid, label, tier, patterns in C.MACRO_GROUPS)
 _EXCLUDE = tuple(re.compile(p, re.IGNORECASE) for p in C.MACRO_EXCLUDE)
-_HORIZON_KEYS = ("id", "label", "tier", "date", "trading_days_to")
+_HORIZON_KEYS = ("id", "label", "tier", "date", "time_ny", "timing", "session", "trading_days_to")
 
 
 # ---------------------------------------------------------------------------- small helpers
@@ -296,7 +296,8 @@ def build_macro_events(ctx) -> dict:
     ({"from", "to"}), calendar (market_calendar.MarketCalendar; None -> weekdays, with a note),
     skipped (the fetch's reason under "macro_events"), hz (or horizon) and as_of.
 
-    within_horizon lists every event within the primary horizon (trading_days_to <= hz["primary"]);
+    within_horizon lists every event within the primary horizon (trading_days_to <= hz["primary"])
+    as {id, label, tier, date, time_ny, timing, session, trading_days_to};
     within_stat_horizons counts the tier-1 events within each stat horizon; next holds the first
     event of each tier-1 group (null when the window has none); counts = events per tier plus the
     US rows after as_of that were excluded (C.MACRO_EXCLUDE) or unclassified; coverage says whether

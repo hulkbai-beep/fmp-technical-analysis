@@ -84,6 +84,10 @@ def test_the_checker_catches_drift():
     assert validate(True, SCHEMA["$defs"]["num"])
     assert validate(2, SCHEMA["$defs"]["sign"])
     assert not validate(None, SCHEMA["$defs"]["scenario"])
+    brief = {"id": "cpi", "label": "CPI", "tier": 1, "date": "2026-10-20", "trading_days_to": 2}
+    assert validate(brief, SCHEMA["$defs"]["macro_brief"]) == ["$: missing time_ny", "$: missing timing"]
+    assert not validate({**brief, "time_ny": None, "timing": "date_only"}, SCHEMA["$defs"]["macro_brief"])
+    assert validate({**brief, "time_ny": "08:30", "timing": "soon"}, SCHEMA["$defs"]["macro_brief"])
 
 
 # ---------------------------------------------------------------------------- stock
@@ -197,6 +201,15 @@ def test_dividend_macro_and_calendar_fields_are_the_metrics(stock):
         assert h["macro_complete"] is m["macro_events"]["coverage"]["complete"]
     assert [e["id"] for e in c["horizons"]["swing"]["macro_within_horizon"]] == ["cpi", "fomc"]
     assert [e["id"] for e in c["horizons"]["position"]["macro_within_horizon"]] == ["cpi", "fomc", "jobs"]
+    # each brief entry carries its New York time and timing, so a caller needs no lookup in macro.events
+    assert c["horizons"]["swing"]["macro_within_horizon"][1] == {
+        "id": "fomc", "label": "FOMC rate decision", "tier": 1, "date": "2026-10-28", "time_ny": "14:00",
+        "timing": "intraday", "trading_days_to": 8}
+    assert set(contract.MACRO_BRIEF_KEYS) <= set(contract.MACRO_EVENT_KEYS)
+    briefs = {(e["id"], e["date"]): e for e in c["horizons"]["position"]["macro_within_horizon"]}
+    for e in c["macro"]["events"]:
+        if (e["id"], e["date"]) in briefs:
+            assert briefs[(e["id"], e["date"])] == {k: e[k] for k in contract.MACRO_BRIEF_KEYS}
     assert (c["horizons"]["swing"]["macro_complete"], c["horizons"]["position"]["macro_complete"]) == (True, False)
 
 
@@ -223,7 +236,7 @@ def test_contract_without_calendar_dividends_and_macro():
     assert d["available"] is False and d["reason"].startswith("restricted:") and d["pays_dividends"] is None
     assert d["next_ex_date"] is None and d["last_ex_date"] is None
     assert mc["available"] is False and mc["reason"].startswith("restricted:") and mc["events"] is None
-    assert (mc["window_from"], mc["window_to"]) == ("2026-10-17", "2027-01-13")
+    assert (mc["window_from"], mc["window_to"]) == ("2026-10-16", "2027-01-12")
     for h in c["horizons"].values():
         assert h["ex_dividend_within_horizon"] is None and h["macro_within_horizon"] is None
         assert h["macro_complete"] is None

@@ -390,7 +390,10 @@ def test_real_window_swing(cal):
     assert m["counts"] == {"tier1": 12, "tier2": 8, "tier3": 5, "excluded": 4, "unclassified": 8}
     assert [(e["id"], e["date"], e["trading_days_to"]) for e in m["within_horizon"]] == REAL_EVENTS[:8]
     assert m["within_horizon"][3] == {"id": "other", "label": "Existing Home Sales", "tier": 3,
-                                      "date": "2026-11-12", "trading_days_to": 6}
+                                      "date": "2026-11-12", "time_ny": "10:00", "timing": "intraday",
+                                      "session": "2026-11-12", "trading_days_to": 6}
+    keys = ("id", "label", "tier", "date", "time_ny", "timing", "session", "trading_days_to")
+    assert m["within_horizon"] == [{k: e[k] for k in keys} for e in m["events"][:8]]
     assert m["within_stat_horizons"] == {"5": 2, "10": 4, "20": 5}          # tier 1 only
     assert {g: e and e["date"] for g, e in m["next"].items()} == {
         "fomc": "2026-12-09", "cpi": "2026-11-10", "jobs": "2026-11-06", "pce": "2026-11-25", "ppi": "2026-11-13",

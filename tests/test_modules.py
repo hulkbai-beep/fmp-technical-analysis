@@ -403,11 +403,13 @@ def test_all_builders_return_json_safe_dicts(name, ctx):
 
 
 # ---------------------------------------------------------------------------- ex-dividend gaps (anchors)
-def _gap_bars():
-    """400 bars with a 15% opening drop at n-30 (to go ex-dividend below) and a 10% gap up at n-60."""
+def _gap_bars(moves=((30, 0.85), (60, 1.10))):
+    """400 bars opening at prior close x move, `moves` bars before the end: by default a 15% drop at n-30
+    (to go ex-dividend below) and a 10% gap up at n-60."""
     bars = synthetic_bars(400, start="2024-01-02")
     n, idx = len(bars), bars.index
-    for i, move in ((n - 30, 0.85), (n - 60, 1.10)):
+    for back, move in moves:
+        i = n - back
         o = bars["close"].iloc[i - 1] * move
         bars.loc[idx[i], "open"] = o
         bars.loc[idx[i], "high"] = max(bars["high"].iloc[i], o)
@@ -443,6 +445,32 @@ def test_largest_gap_anchor_takes_the_dividend_out_of_the_prior_close():
     assert part["date"] == idx[n - 30]
     assert part["gap_pct"] == pytest.approx(0.85 / 0.98 - 1)
     assert part["gap_atr"] == pytest.approx((0.85 - 0.98) * prev / atr_prev)
+
+
+@pytest.mark.parametrize("move", [1.0, 1.01, 0.99])
+def test_largest_gap_anchor_never_turns_an_ex_dividend_open_into_a_gap_up(move):
+    # an ex-dividend bar at n-20 opening flat, 1% up or 1% down, paying 20% of the prior close: no gap up
+    # (a dividend can only explain a drop), so the 10% gap up at n-60 stays the largest gap
+    bars = _gap_bars(((60, 1.10), (20, move)))
+    n, idx = len(bars), bars.index
+    div = pd.Series(0.0, index=idx)
+    div[idx[n - 20]] = 0.20 * bars["close"].iloc[n - 21]
+    plain, _ = _largest_gap(bars)
+    ex, ctx = _largest_gap(bars.assign(dividend=div))
+    assert ex == plain
+    assert ex["date"] == idx[n - 60] and ex["gap_pct"] == pytest.approx(0.10)
+    atr_prev = ctx["ind"]["atr14"].iloc[n - 61]
+    assert ex["gap_atr"] == pytest.approx(0.10 * bars["close"].iloc[n - 61] / atr_prev)
+
+
+def test_largest_gap_anchor_measures_a_gap_up_on_an_ex_dividend_bar_raw():
+    bars = _gap_bars(((60, 1.10), (20, 1.20)))
+    n, idx = len(bars), bars.index
+    div = pd.Series(0.0, index=idx)
+    div[idx[n - 20]] = 0.20 * bars["close"].iloc[n - 21]
+    ex, _ = _largest_gap(bars.assign(dividend=div))
+    assert ex["date"] == idx[n - 20] and ex["gap_pct"] == pytest.approx(0.20)     # not 1.20 / 0.80 - 1
+    assert ex == _largest_gap(bars)[0]
 
 
 def test_volume_flow_unchanged_without_dividends():

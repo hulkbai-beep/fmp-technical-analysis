@@ -519,18 +519,40 @@ def test_ex_dividend_gap_beyond_the_dividend_stays_with_its_zone_net_of_it():
     assert L.unfilled_gaps(filled) == []
 
 
-def test_ex_dividend_up_gap_compares_with_the_prior_high_net_of_the_dividend():
-    # PLAN 3.2: low[t] > high[t-1] - D, zone high[t-1] - D .. low[t]
-    up = with_dividend(frame([11.0, 12.0, 12.2], [10.0, 11.2, 11.5]), 1, 0.3)
+def test_ex_dividend_up_gap_keeps_its_raw_zone():
+    # a dividend can only explain a drop: a gap up on an ex-dividend bar is tested and bounded with high[t-1]
+    df = frame([11.0, 12.0, 12.2], [10.0, 11.2, 11.5])
+    up = with_dividend(df, 1, 0.3)
     (g,) = L.unfilled_gaps(up)
-    assert (g["direction"], g["ex_dividend"]) == ("up", 0.3)
-    assert (g["bottom"], g["top"], g["gap_top"]) == pytest.approx((10.7, 11.2, 11.2))
+    assert g == {**legacy_unfilled_gaps(df)[0], "ex_dividend": 0.3}
+    assert (g["direction"], g["bottom"], g["top"], g["gap_bottom"], g["gap_top"]) == ("up", 11.0, 11.2, 11.0, 11.2)
     assert L.ex_dividend_gaps(up) == []
-    # no raw gap, but the ex-dividend bar holds above the prior high net of the dividend: a gap up
-    held = with_dividend(frame([11.0, 10.9, 11.0], [10.0, 10.6, 10.65]), 1, 0.5)
-    assert L.unfilled_gaps(frame([11.0, 10.9, 11.0], [10.0, 10.6, 10.65])) == []
-    (g,) = L.unfilled_gaps(held)
-    assert (g["direction"], g["bottom"], g["top"]) == pytest.approx(("up", 10.5, 10.6))
+    # filled at the raw edge: a later low of 10.9 closes it, although it stays above high[t-1] - D = 10.7
+    assert L.unfilled_gaps(with_dividend(frame([11.0, 12.0, 12.2], [10.0, 11.2, 10.9]), 1, 0.3)) == []
+
+
+@pytest.mark.parametrize("highs, lows, amount", [
+    ([11.0, 11.0, 11.0], [10.0, 10.0, 10.0], 1.5),     # trades flat on its ex-date
+    ([11.0, 10.9, 11.0], [10.0, 10.6, 10.65], 0.5),    # a little lower, above the prior high net of D
+    ([11.0, 11.4, 11.5], [10.0, 10.8, 10.9], 0.5),     # a little higher, overlapping the prior bar
+])
+def test_an_ex_dividend_bar_that_holds_up_is_no_gap_up(highs, lows, amount):
+    df = frame(highs, lows)
+    assert L.unfilled_gaps(df) == []
+    ex = with_dividend(df, 1, amount)
+    assert L.unfilled_gaps(ex) == [] and L.ex_dividend_gaps(ex) == []
+
+
+@pytest.mark.parametrize("seed", [3, 11])
+def test_dividends_never_change_gaps_up(seed):
+    bars = synthetic_bars(n=600, seed=seed, vol=0.03)
+    div = (0.02 * bars["close"].shift(1)).fillna(0.0)                 # a 2% dividend on every bar but the first
+    ex = bars.assign(dividend=div)
+    legacy_up = [g for g in legacy_unfilled_gaps(bars) if g["direction"] == "up"]
+    got_up = [g for g in L.unfilled_gaps(ex) if g["direction"] == "up"]
+    assert legacy_up and [{k: v for k, v in g.items() if k != "ex_dividend"} for g in got_up] == legacy_up
+    assert all(g["ex_dividend"] == pytest.approx(div.loc[pd.Timestamp(g["date"])]) for g in got_up)
+    assert {g["raw_direction"] for g in L.ex_dividend_gaps(ex)} <= {"down"}
 
 
 def test_a_dividend_on_a_bar_after_the_gap_changes_nothing():
