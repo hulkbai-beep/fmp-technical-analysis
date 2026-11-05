@@ -88,6 +88,38 @@ def test_trend_momentum_short_history():
     assert exactly["mom_12_1"] is not None
 
 
+def test_sma100_is_reported_but_not_part_of_the_stack():
+    bars = bars_from_close(100 * 1.001 ** np.arange(400))
+    ctx = make_ctx(bars)
+    out = M.build_trend_momentum(ctx)["sma"]
+    row, close = ctx["ind"].iloc[-1], bars["close"].iloc[-1]
+    assert list(out)[:4] == ["sma20", "sma50", "sma100", "sma200"]
+    assert out["sma100"] == pytest.approx(bars["close"].iloc[-100:].mean())
+    assert out["slopes"]["sma100"] == pytest.approx(row["sma100_slope"])
+    assert out["close_vs"]["sma100"] == pytest.approx(close / out["sma100"] - 1)
+    assert set(out["slopes"]) == set(out["close_vs"]) == {"sma20", "sma50", "sma100", "sma200"}
+    assert out["stack"] == "20>50>200" and out["stack_state"] == "bullish" and out["stack_periods"] == [20, 50, 200]
+    # an SMA100 above the SMA20 or below the SMA200 would break a 20>50>100>200 stack: this one ignores it
+    for extreme in (close * 2, close / 2):
+        moved = M.build_trend_momentum(with_last(ctx, sma100=extreme))["sma"]
+        assert moved["sma100"] == pytest.approx(extreme)
+        assert (moved["stack"], moved["stack_state"]) == ("20>50>200", "bullish")
+        assert {k: moved[k] for k in ("sma20", "sma50", "sma200")} == {k: out[k] for k in ("sma20", "sma50", "sma200")}
+
+
+def test_sma100_short_history_is_null_with_a_note():
+    out = M.build_trend_momentum(make_ctx(synthetic_bars(80)))
+    sma = out["sma"]
+    assert sma["sma100"] is None and sma["slopes"]["sma100"] is None and sma["close_vs"]["sma100"] is None
+    assert sma["sma200"] is None and sma["stack"] in ("20>50", "50>20")
+    assert "SMA100 unavailable with 80 bars (context only, not part of the stack)" in out["notes"]
+    assert "SMA200 unavailable with 80 bars; stack uses the remaining SMAs" in out["notes"]
+    # 150 bars: SMA100 is there, SMA200 is not, and the stack still uses only SMA20 / SMA50
+    mid = M.build_trend_momentum(make_ctx(synthetic_bars(150)))
+    assert mid["sma"]["sma100"] is not None and mid["sma"]["sma200"] is None
+    assert mid["sma"]["stack"] in ("20>50", "50>20") and not any("SMA100" in n for n in mid["notes"])
+
+
 def test_macd_last_cross_matches_manual():
     # arithmetic decline: MACD falls toward a constant and stays below its signal; the rally crosses it
     path = np.r_[200 - 0.5 * np.arange(120), 200 - 0.5 * 119 + np.arange(1, 16)]
@@ -364,6 +396,19 @@ def test_event_risk_skips():
     assert any("no upcoming earnings" in n for n in past_only["notes"])
 
 
+def test_event_risk_trading_days_skip_exchange_holidays():
+    import market_calendar as MC
+    bars = synthetic_bars(300, start="2025-10-01").loc[:"2026-11-20"]       # as_of: Friday before Thanksgiving week
+    earnings = [{"date": "2026-08-03", "reported": True}, {"date": "2026-12-01", "reported": False}]
+    plain = M.build_event_risk(make_ctx(bars, earnings=earnings))
+    assert plain["next_earnings"]["trading_days_est"] == 7 and "not excluded" in plain["trading_days_note"]
+    out = M.build_event_risk(make_ctx(bars, earnings=earnings, calendar=MC.build_calendar(None, end_year=2027)))
+    assert out["next_earnings"] == {"date": "2026-12-01", "calendar_days": 11, "trading_days_est": 6}   # no Thanksgiving
+    assert "excluding NYSE holidays" in out["trading_days_note"] and "rules" in out["trading_days_note"]
+    weekdays = M.build_event_risk(make_ctx(bars, earnings=earnings, calendar=MC.weekday_calendar()))
+    assert weekdays["next_earnings"]["trading_days_est"] == 7 and "not excluded" in weekdays["trading_days_note"]
+
+
 # ---------------------------------------------------------------------------- edge-case sweep
 def _contexts():
     spy = synthetic_bars(900, seed=3, start="2019-10-01")
@@ -387,3 +432,107 @@ def test_all_builders_return_json_safe_dicts(name, ctx):
         if not out["available"]:
             assert isinstance(out["reason"], str) and out["reason"]
         json.dumps(out, allow_nan=False)
+
+
+# ---------------------------------------------------------------------------- ex-dividend gaps (anchors)
+def _gap_bars(moves=((30, 0.85), (60, 1.10))):
+    """400 bars opening at prior close x move, `moves` bars before the end: by default a 15% drop at n-30
+    (to go ex-dividend below) and a 10% gap up at n-60."""
+    bars = synthetic_bars(400, start="2024-01-02")
+    n, idx = len(bars), bars.index
+    for back, move in moves:
+        i = n - back
+        o = bars["close"].iloc[i - 1] * move
+        bars.loc[idx[i], "open"] = o
+        bars.loc[idx[i], "high"] = max(bars["high"].iloc[i], o)
+        bars.loc[idx[i], "low"] = min(bars["low"].iloc[i], o)
+    return bars
+
+
+def _largest_gap(bars):
+    ctx = make_ctx(bars)
+    return next(a for a in M._vwap_anchors(ctx)[0] if a["anchor"] == "largest_gap_6m"), ctx
+
+
+def test_largest_gap_anchor_takes_the_dividend_out_of_the_prior_close():
+    bars = _gap_bars()
+    n, idx = len(bars), bars.index
+    prev = bars["close"].iloc[n - 31]
+    raw, ctx = _largest_gap(bars)
+    assert raw["date"] == idx[n - 30] and raw["gap_pct"] == pytest.approx(-0.15)
+
+    zero, _ = _largest_gap(bars.assign(dividend=0.0))
+    assert zero == raw
+
+    # the drop is almost all dividend: the 10% gap up becomes the largest gap
+    div = pd.Series(0.0, index=idx)
+    div[idx[n - 30]] = 0.149 * prev
+    ex, _ = _largest_gap(bars.assign(dividend=div))
+    assert ex["date"] == idx[n - 60] and ex["gap_pct"] == pytest.approx(0.10)
+
+    # a small dividend: still the largest gap, measured from the prior close net of the dividend
+    div[idx[n - 30]] = 0.02 * prev
+    part, ctx = _largest_gap(bars.assign(dividend=div))
+    atr_prev = ctx["ind"]["atr14"].iloc[n - 31]
+    assert part["date"] == idx[n - 30]
+    assert part["gap_pct"] == pytest.approx(0.85 / 0.98 - 1)
+    assert part["gap_atr"] == pytest.approx((0.85 - 0.98) * prev / atr_prev)
+
+
+@pytest.mark.parametrize("move", [1.0, 1.01, 0.99])
+def test_largest_gap_anchor_never_turns_an_ex_dividend_open_into_a_gap_up(move):
+    # an ex-dividend bar at n-20 opening flat, 1% up or 1% down, paying 20% of the prior close: no gap up
+    # (a dividend can only explain a drop), so the 10% gap up at n-60 stays the largest gap
+    bars = _gap_bars(((60, 1.10), (20, move)))
+    n, idx = len(bars), bars.index
+    div = pd.Series(0.0, index=idx)
+    div[idx[n - 20]] = 0.20 * bars["close"].iloc[n - 21]
+    plain, _ = _largest_gap(bars)
+    ex, ctx = _largest_gap(bars.assign(dividend=div))
+    assert ex == plain
+    assert ex["date"] == idx[n - 60] and ex["gap_pct"] == pytest.approx(0.10)
+    atr_prev = ctx["ind"]["atr14"].iloc[n - 61]
+    assert ex["gap_atr"] == pytest.approx(0.10 * bars["close"].iloc[n - 61] / atr_prev)
+
+
+@pytest.mark.parametrize("move, share", [(0.85, 0.20), (0.88, 0.15)])
+def test_largest_gap_anchor_ignores_a_drop_the_dividend_explains(move, share):
+    # n-20 opens 15% (12%) down on an ex-date paying 20% (15%) of the prior close: without the dividend that drop is
+    # the largest gap; the dividend explains all of it, so it is no gap (0: neither the raw drop nor a gap up) and
+    # the 10% gap up at n-60 is the anchor. A dividend strictly above the drop keeps float rounding out of the case.
+    bars = _gap_bars(((60, 1.10), (20, move)))
+    n, idx = len(bars), bars.index
+    plain, _ = _largest_gap(bars)
+    assert plain["date"] == idx[n - 20] and plain["gap_pct"] == pytest.approx(move - 1)   # the case discriminates
+    div = pd.Series(0.0, index=idx)
+    div[idx[n - 20]] = share * bars["close"].iloc[n - 21]
+    ex, ctx = _largest_gap(bars.assign(dividend=div))
+    atr_prev = ctx["ind"]["atr14"].iloc[n - 61]
+    assert ex["date"] == idx[n - 60] and ex["gap_pct"] == pytest.approx(0.10)
+    assert ex["gap_atr"] == pytest.approx(0.10 * bars["close"].iloc[n - 61] / atr_prev)
+
+
+def test_largest_gap_anchor_takes_only_the_bars_own_dividend():
+    # a dividend going ex on the NEXT bar does not explain this bar's drop
+    bars = _gap_bars()
+    n, idx = len(bars), bars.index
+    div = pd.Series(0.0, index=idx)
+    div[idx[n - 29]] = 0.20 * bars["close"].iloc[n - 30]
+    assert _largest_gap(bars.assign(dividend=div))[0] == _largest_gap(bars)[0]
+
+
+def test_largest_gap_anchor_measures_a_gap_up_on_an_ex_dividend_bar_raw():
+    bars = _gap_bars(((60, 1.10), (20, 1.20)))
+    n, idx = len(bars), bars.index
+    div = pd.Series(0.0, index=idx)
+    div[idx[n - 20]] = 0.20 * bars["close"].iloc[n - 21]
+    ex, _ = _largest_gap(bars.assign(dividend=div))
+    assert ex["date"] == idx[n - 20] and ex["gap_pct"] == pytest.approx(0.20)     # not 1.20 / 0.80 - 1
+    assert ex == _largest_gap(bars)[0]
+
+
+def test_volume_flow_unchanged_without_dividends():
+    bars = _gap_bars()
+    out = M.build_volume_flow(make_ctx(bars))
+    assert M.build_volume_flow(make_ctx(bars.assign(dividend=0.0))) == out
+    assert {v["anchor"] for v in out["anchored_vwaps"]} >= {"high_52w", "low_52w", "ytd_start", "largest_gap_6m"}

@@ -15,6 +15,7 @@ import pandas as pd
 import config as C
 import indicators as I
 import regime as R
+from dividends import prev_close_net
 from regime import iso, last, num, pct
 
 VWAP_METHOD = "daily-bar approximation: typical price x volume"
@@ -67,7 +68,8 @@ def _last_macd_cross(ind: pd.DataFrame) -> dict | None:
 
 
 def build_trend_momentum(ctx) -> dict:
-    """C: 12-1 momentum, period returns, SMA stack and slopes, MACD, distance from the 52-week high."""
+    """C: 12-1 momentum, period returns, SMA stack (SMA20/50/200) and slopes, the context SMA100, MACD,
+    distance from the 52-week high."""
     bars, ind = ctx["bars"], ctx["ind"]
     n = len(bars)
     notes: list[str] = []
@@ -87,17 +89,23 @@ def build_trend_momentum(ctx) -> dict:
         if returns[name] is None:
             notes.append(f"{name} return needs {k + 1} bars (have {n})")
 
-    smas = {p: num(row[f"sma{p}"]) for p in C.SMA_PERIODS}
-    stack, stack_state = _sma_stack(smas)
-    missing = [f"SMA{p}" for p, v in smas.items() if v is None]
+    # the stack uses the trend SMAs only; the context SMAs (SMA100) are reported next to them
+    periods = sorted({*C.SMA_PERIODS, *C.SMA_CONTEXT_PERIODS})
+    smas = {p: num(row[f"sma{p}"]) for p in periods}
+    stack, stack_state = _sma_stack({p: smas[p] for p in C.SMA_PERIODS})
+    missing = [f"SMA{p}" for p in C.SMA_PERIODS if smas[p] is None]
     if missing:
         notes.append(f"{', '.join(missing)} unavailable with {n} bars; stack uses the remaining SMAs")
+    missing = [f"SMA{p}" for p in C.SMA_CONTEXT_PERIODS if smas[p] is None]
+    if missing:
+        notes.append(f"{', '.join(missing)} unavailable with {n} bars (context only, not part of the stack)")
     sma = {
-        **{f"sma{p}": v for p, v in smas.items()},
-        "slopes": {f"sma{p}": num(row[f"sma{p}_slope"]) for p in C.SMA_PERIODS},
-        "close_vs": {f"sma{p}": pct(close, v) for p, v in smas.items()},
+        **{f"sma{p}": smas[p] for p in periods},
+        "slopes": {f"sma{p}": num(row[f"sma{p}_slope"]) for p in periods},
+        "close_vs": {f"sma{p}": pct(close, smas[p]) for p in periods},
         "stack": stack,
         "stack_state": stack_state,
+        "stack_periods": list(C.SMA_PERIODS),
         "slope_bars": C.SLOPE_BARS,
     }
 
@@ -289,15 +297,22 @@ def _vwap_anchors(ctx) -> tuple[list[dict], list[str]]:
     anchors.append({"anchor": "low_52w", "date": win["low"].idxmin()})
     anchors.append({"anchor": "ytd_start", "date": dates[dates.year == dates[-1].year][0]})
 
-    prev_close, prev_atr = bars["close"].shift(1), ind["atr14"].shift(1)
-    gap = (bars["open"] - prev_close) / prev_atr.where(prev_atr > 0)
+    # a dividend can only explain a drop: an opening rise is measured from the prior close, an opening drop
+    # from the prior close net of the dividend going ex on the bar, and a drop the dividend explains is no
+    # gap (never a gap up)
+    open_, prev_close, prev_atr = bars["open"], bars["close"].shift(1), ind["atr14"].shift(1)
+    rise = open_ >= prev_close
+    base = prev_close.where(rise, prev_close_net(bars))
+    move = (open_ - base).where(rise, (open_ - base).clip(upper=0.0))
+    gap = move / prev_atr.where(prev_atr > 0)
     recent = gap.iloc[-C.LARGEST_GAP_LOOKBACK:].dropna()
     if recent.empty:
         notes.append("largest_gap_6m anchor unavailable: no bar with a prior-day ATR in the lookback")
     else:
         d = recent.abs().idxmax()
+        b, m = num(base.loc[d]), num(move.loc[d])
         anchors.append({"anchor": "largest_gap_6m", "date": d, "gap_atr": num(recent.loc[d]),
-                        "gap_pct": pct(num(bars["open"].loc[d]), num(prev_close.loc[d]))})
+                        "gap_pct": None if b is None or m is None or b == 0 else m / b})
     return anchors, notes
 
 
@@ -390,8 +405,16 @@ def _reactions(bars: pd.DataFrame, past: list[pd.Timestamp]) -> list[dict]:
     return items[::-1]
 
 
+def _trading_days_note(calendar) -> str:
+    if calendar is None or getattr(calendar, "source", None) == "weekdays":
+        return "trading days estimated with numpy business days (US exchange holidays not excluded)"
+    return (f"trading days counted with numpy business days excluding {C.CALENDAR_EXCHANGE} holidays "
+            f"(exchange calendar: {calendar.source})")
+
+
 def build_event_risk(ctx) -> dict:
-    """J: next earnings date (calendar / estimated trading days), past earnings reactions, horizon flag."""
+    """J: next earnings date (calendar days, and trading days excluding the exchange holidays of
+    ctx["calendar"] when there is one), past earnings reactions, horizon flag."""
     if ctx.get("is_etf"):
         return {"available": False, "reason": "ETF: earnings module skipped", "notes": []}
     if not ctx.get("earnings"):
@@ -401,11 +424,13 @@ def build_event_risk(ctx) -> dict:
     hz = ctx.get("hz") or C.HORIZONS[ctx.get("horizon", C.DEFAULT_HORIZON)]
     as_of = R.as_of(ctx)
     past, upcoming = _split_earnings(ctx)
+    calendar = ctx.get("calendar")
+    holidays = getattr(calendar, "holidays_array", None)
 
     next_e = within = per_h = None
     if upcoming:
         d = upcoming[0][0]
-        td = int(np.busday_count(as_of.date(), d.date()))
+        td = int(np.busday_count(as_of.date(), d.date(), holidays=[] if holidays is None else holidays))
         next_e = {"date": iso(d), "calendar_days": (d - as_of).days, "trading_days_est": td}
         within = td <= hz["primary"]
         per_h = {str(h): td <= h for h in hz["stat_horizons"]}
@@ -434,6 +459,6 @@ def build_event_risk(ctx) -> dict:
                       "mean_abs_move": num(moves.mean()) if len(moves) else None,
                       "items": items},
         "method": EARNINGS_METHOD,
-        "trading_days_note": "trading days estimated with numpy business days (US exchange holidays not excluded)",
+        "trading_days_note": _trading_days_note(calendar),
         "notes": notes,
     }

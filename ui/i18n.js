@@ -28,7 +28,8 @@
       week_of: (a, b) => `${a} ~ ${b} 当周`,
       partial_week: "（本周未结束）",
       o: "开", h: "高", l: "低", c: "收", v: "量",
-      lg_sma20: "SMA20", lg_sma50: "SMA50", lg_sma200: "SMA200", lg_supports: "支撑区间", lg_resistances: "压力区间",
+      lg_sma20: "SMA20", lg_sma50: "SMA50", lg_sma100: "SMA100", lg_sma200: "SMA200", lg_supports: "支撑区间", lg_resistances: "压力区间",
+      sma100_title: "SMA100（100 日均线）：仅作参考线，不参与均线排列、趋势投票、评分卡和信号",
       lg_vp: "成交量分布", lg_earnings: "财报",
       anchor_last_earnings: "财报", anchor_high_52w: "52周高点", anchor_low_52w: "52周低点",
       anchor_ytd_start: "年初", anchor_largest_gap_6m: "6个月最大缺口",
@@ -51,7 +52,7 @@
       dir_1: "上升", "dir_-1": "下降", dir_0: "不明",
       bias: "整体倾向", wscore: "加权分", confidence: "置信度", weight: "权重",
       conf_high: "高", conf_medium: "中", conf_low: "低",
-      conflicts: "相互矛盾的信号",
+      conflicts: "冲突项",
       pl_trend: "趋势", pl_momentum: "动量", pl_relative_strength: "相对强度", pl_volume_flow: "量能/资金流",
       pl_volatility_setup: "波动结构", pl_mean_reversion: "均值回归",
       sig_h: h => `历史前瞻 ${h} 日收益（本股自身历史）`,
@@ -122,7 +123,8 @@
       week_of: (a, b) => `week ${a} – ${b}`,
       partial_week: " (week in progress)",
       o: "O", h: "H", l: "L", c: "C", v: "Vol",
-      lg_sma20: "SMA20", lg_sma50: "SMA50", lg_sma200: "SMA200", lg_supports: "Support zones", lg_resistances: "Resistance zones",
+      lg_sma20: "SMA20", lg_sma50: "SMA50", lg_sma100: "SMA100", lg_sma200: "SMA200", lg_supports: "Support zones", lg_resistances: "Resistance zones",
+      sma100_title: "SMA100 (100-day average): a reference line only, not part of the SMA stack, the trend votes, the scorecard or the signals",
       lg_vp: "Volume profile", lg_earnings: "Earnings",
       anchor_last_earnings: "earnings", anchor_high_52w: "52w high", anchor_low_52w: "52w low",
       anchor_ytd_start: "YTD", anchor_largest_gap_6m: "6m largest gap",
@@ -144,7 +146,7 @@
       dir_1: "up", "dir_-1": "down", dir_0: "mixed",
       bias: "Bias", wscore: "Weighted score", confidence: "Confidence", weight: "Weight",
       conf_high: "high", conf_medium: "medium", conf_low: "low",
-      conflicts: "Conflicting signals",
+      conflicts: "Conflicts",
       pl_trend: "Trend", pl_momentum: "Momentum", pl_relative_strength: "Relative strength", pl_volume_flow: "Volume / flow",
       pl_volatility_setup: "Volatility setup", pl_mean_reversion: "Mean reversion",
       sig_h: h => `Forward ${h}-day returns (this stock's own history)`,
@@ -255,13 +257,13 @@
 
   const SOURCE_ZH = {
     pivot_high: "摆动高点", pivot_low: "摆动低点", poc: "POC", value_area_low: "VAL", value_area_high: "VAH",
-    hvn: "HVN", high_52w: "52周高", low_52w: "52周低", sma50: "SMA50", sma200: "SMA200",
+    hvn: "HVN", high_52w: "52周高", low_52w: "52周低", sma50: "SMA50", sma100: "SMA100", sma200: "SMA200",
     demand: "需求区", supply: "供给区", gap_up: "向上缺口", gap_down: "向下缺口",
     gap_up_top: "向上缺口上沿", gap_up_bottom: "向上缺口下沿", gap_down_top: "向下缺口上沿", gap_down_bottom: "向下缺口下沿",
   };
   const SOURCE_EN = {
     pivot_high: "pivot high", pivot_low: "pivot low", poc: "POC", value_area_low: "VAL", value_area_high: "VAH",
-    hvn: "HVN", high_52w: "52w high", low_52w: "52w low", sma50: "SMA50", sma200: "SMA200",
+    hvn: "HVN", high_52w: "52w high", low_52w: "52w low", sma50: "SMA50", sma100: "SMA100", sma200: "SMA200",
     demand: "demand zone", supply: "supply zone", gap_up: "gap up", gap_down: "gap down",
     gap_up_top: "gap-up top", gap_up_bottom: "gap-up bottom", gap_down_top: "gap-down top", gap_down_bottom: "gap-down bottom",
   };

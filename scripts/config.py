@@ -18,9 +18,11 @@ BENCHMARK_YEARS = 5               # history requested for SPY, the sector ETF an
 CACHE_SUBDIR = "fmp-technical"    # ~/.cache/<this> unless FMP_CACHE_DIR is set
 
 MARKET_TZ = "America/New_York"
-MARKET_CLOSE_BUFFER = "16:15"     # before this NY time, a bar dated today is treated as partial
-STALE_BDAYS = 2                   # warn if the last bar is more than this many business days behind
-GAP_CALENDAR_DAYS = 4             # consecutive bars further apart than this are flagged as a data gap
+MARKET_CLOSE_BUFFER = "16:15"     # without an exchange calendar: the partial-bar cutoff and the client cache's
+                                  # session rule (with one, both use CLOSE_BUFFER_MINUTES after the close)
+STALE_BDAYS = 2                   # warn if the last bar is more than this many sessions behind (NYSE sessions;
+                                  # weekdays without an exchange calendar)
+GAP_CALENDAR_DAYS = 4             # without an exchange calendar: bars further apart than this are a data gap
 
 SPAC_CHECK_BARS = 126               # first bars checked for a pre-merger SPAC shell (~6 months)
 SPAC_MIN_BARS = 63                  # fewer bars than this: no check
@@ -73,7 +75,15 @@ DEFAULT_HORIZON = "swing"
 TRADING_DAYS_PER_YEAR = 252
 
 # ---------------------------------------------------------------------------- indicators
+# Trend SMAs (SMA_PERIODS: fast, mid, long, in this order) drive the SMA stack, the regime direction votes, the
+# scorecard and the signals. Context SMAs (SMA_CONTEXT_PERIODS) are reported, drawn and used as low-weight level
+# candidates only: they never vote, never enter the stack, the scorecard or the signals.
+# Both are fixed, not tuning knobs, and indicators.compute_all refuses any other value: indicators.py names the
+# columns sma20 / sma50 / sma200 (in this order) and sma100, regime.py and signal_stats.py take SMA_PERIODS[1] /
+# [2] as the 50- and 200-day lines, and the chart, levels, crosscheck, the contract (trend.sma100) and the UI name
+# the 100-day line, so a period inserted or replaced here would silently put another line under one of these names.
 SMA_PERIODS = (20, 50, 200)
+SMA_CONTEXT_PERIODS = (100,)
 SLOPE_BARS = 20                   # slope = SMA today / SMA SLOPE_BARS bars ago - 1
 RSI_PERIOD = 14
 RSI_SHORT_PERIOD = 2
@@ -158,6 +168,67 @@ WEEKLY_RSI_PERIOD = 14
 # ---------------------------------------------------------------------------- event risk
 EARNINGS_REACTIONS_MAX = 12
 EARNINGS_REACTIONS_MIN = 8
+
+# ---------------------------------------------------------------------------- exchange calendar (market_calendar.py)
+# One FMP request (holidays-by-exchange) merged with NYSE rules; with a calendar, the partial-bar rule, the stale
+# check, data-gap flags, trading-day counts and the weekly "partial" flag skip exchange holidays.
+CALENDAR_EXCHANGE = "NYSE"
+CALENDAR_FUTURE_YEARS = 1         # holidays are requested through Dec 31 of next year (one request per year)
+CALENDAR_TTL_SECONDS = 7 * 86400  # the holiday list changes rarely: cache it for a week
+SESSION_OPEN = "09:30"            # regular session, New York time
+SESSION_CLOSE = "16:00"
+EARLY_CLOSE_DEFAULT = "13:00"     # early-close time for a day only the rules know
+CLOSE_BUFFER_MINUTES = 15         # a bar counts as complete this long after its session's close (16:15; 13:15 on
+                                  # early-close days), for the partial-bar rule and the client cache alike;
+                                  # without a calendar MARKET_CLOSE_BUFFER applies
+GAP_MISSING_SESSIONS = 1          # with a calendar: bars with at least this many NYSE sessions between them -> data gap
+
+# ---------------------------------------------------------------------------- dividends (dividends.py)
+# FMP dividends: `date` is the ex-dividend date, `adjDividend` the split-adjusted amount (the basis of /full bars).
+# The client caches them by the session rule, like the bars, so a split between two runs cannot mix the bases.
+DIVIDEND_MATCH_DAYS = 4           # without an exchange calendar, an ex-date without a bar maps to the first bar at most
+                                  # this many calendar days later (with one: the bar of its first NYSE session)
+DIVIDEND_ACTIVE_DAYS = 400        # pays_dividends: an ex-date this many calendar days before as_of at most (an annual
+                                  # payer plus slack), or an announced one after it; else dividends look suspended
+DIVIDEND_DRIFT_NOTE = 0.03        # regime note when the 252-bar total return beats the price as traded by this much:
+                                  # the SMAs, MACD, trend votes and 52-week high use prices that drop by each dividend
+
+# ---------------------------------------------------------------------------- macro events (macro.py)
+MACRO_COUNTRY = "US"
+MACRO_WINDOW_DAYS = 89            # FMP economic-calendar silently keeps only ~90 days counted back from `to`
+MACRO_TTL_SECONDS = 12 * 3600
+MACRO_CONTRACT_MAX_TIER = 2       # the contract lists tiers 1-2; metrics.json lists every tier
+# (id, label, tier, anchored regexes matched case-insensitively against the event name with its "(period)"
+# suffix removed). Rows of one group on the same New York date form one event. Unmatched US events that FMP
+# rates "High" become tier 3 ("other"), one event per release and date (macro.release_name: names that differ
+# only by a trailing MoM / YoY / QoQ or "Ex ..." qualifier are one release). Names matching MACRO_EXCLUDE are
+# dropped first. A row at exactly 00:00:00 UTC is a date-only listing (holidays, elections, symposiums): no time.
+MACRO_GROUPS = (
+    ("fomc", "FOMC rate decision", 1, (r"^Fed Interest Rate Decision$", r"^FOMC Statement$",
+                                        r"^FOMC Economic Projections$", r"^Interest Rate Projection - .+$",
+                                        r"^Press Conference$")),
+    ("cpi", "CPI", 1, (r"^(Core )?Inflation Rate( MoM| YoY)?$", r"^(Core )?CPI( s\.a| n\.s\.a)?( MoM| YoY)?$")),
+    ("jobs", "Jobs report", 1, (r"^Non ?Farm Payrolls( Private)?$",
+                                r"^(U-6 )?Unemployment Rate$", r"^Average Hourly Earnings( MoM| YoY)?$",
+                                r"^Average Weekly Hours$", r"^(Government|Manufacturing) Payrolls$",
+                                r"^Participation Rate$")),
+    ("pce", "PCE inflation", 1, (r"^(Core )?PCE Price Index( MoM| YoY)?$", r"^Personal (Income|Spending)( MoM)?$")),
+    ("ppi", "PPI", 1, (r"^(Core )?PPI( MoM| YoY)?$", r"^Producer Price Index( MoM| YoY)?$",
+                       r"^PPI Ex Food, Energy and Trade( MoM| YoY)?$")),
+    ("gdp", "GDP", 1, (r"^GDP Growth Rate( QoQ| YoY)?( Adv| 2nd Est| 3rd Est| Final)?$", r"^GDP Price Index( QoQ)?$",
+                       r"^GDP Sales( QoQ)?$", r"^(Core )?PCE Prices QoQ$", r"^Real Consumer Spending( QoQ)?$")),
+    ("retail_sales", "Retail sales", 1, (r"^Retail Sales( MoM| YoY| Ex Autos MoM| Ex Gas/Autos MoM| Control Group MoM)?$",)),
+    ("fomc_minutes", "FOMC minutes", 2, (r"^FOMC Minutes$",)),
+    ("fed_policy", "Fed policy event", 2, (r"^Jackson Hole Symposium$", r"^Monetary Policy Report$")),
+    ("ism_manufacturing", "ISM manufacturing", 2, (r"^ISM Manufacturing PMI$",)),
+    ("ism_services", "ISM services", 2, (r"^ISM (Services|Non-Manufacturing) PMI$",)),
+    ("jolts", "JOLTS job openings", 2, (r"^JOLTs Job Openings$",)),
+    ("consumer_sentiment", "Consumer sentiment", 2, (r"^Michigan Consumer Sentiment( Prel| Final)?$",
+                                                     r"^CB Consumer Confidence$")),
+)
+MACRO_EXCLUDE = (r"Jobless Claims",)   # weekly claims: high-frequency noise in every window
+MACRO_FAR_AHEAD_GROUPS = ("fomc", "fomc_minutes")   # FMP lists these months ahead and every other release only
+                                  # ~6-8 weeks ahead: the last other US row dates how far the listing is complete
 
 # ---------------------------------------------------------------------------- signal statistics
 SIGNAL_ACTIVE_BARS = 3            # "active" = fired on the last bar or within the 2 bars before it
@@ -293,7 +364,7 @@ METRICS_SIG_DIGITS = 6            # metrics.json floats are rounded to this many
 # ---------------------------------------------------------------------------- cross-check (crosscheck.py, optional)
 CROSSCHECK_WINDOW = 250           # compare the last N dates both series have
 CROSSCHECK_RSI_WARMUP = 250       # bars skipped at the start of each RSI series before comparing
-CROSSCHECK_SMA_TOL = 0.0001       # SMA(50) tolerance as a share of the close (0.01%)
+CROSSCHECK_SMA_TOL = 0.0001       # SMA(50) / SMA(100) tolerance as a share of the close (0.01%)
 CROSSCHECK_RSI_TOL = 0.5          # RSI(14) tolerance in points
 
 DISCLAIMER = "This is technical analysis for information only, not investment advice."

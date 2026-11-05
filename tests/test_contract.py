@@ -1,4 +1,4 @@
-"""The ta-2.0 contract (scripts/contract.py, contracts/ta-2.0.schema.json) on a fake FMP (no network).
+"""The ta-2.1 contract (scripts/contract.py, contracts/ta-2.1.schema.json) on a fake FMP (no network).
 
 Every contract must match the schema, and its numbers must be the metrics' numbers. A small JSON Schema checker
 lives here so the tests need nothing beyond pandas, numpy and pytest.
@@ -11,10 +11,12 @@ import pandas as pd
 import pytest
 
 import analyze
+import config as C
 import contract
 import fetch
 import scorecard as SC
-from fakes import NOW, earnings_history, market, profile_row
+from fakes import (DIVIDENDS, ECON, HOLIDAYS, MACRO_EVENTS, NEXT_EX_DATE, NOW, SPY_NEXT_EX_DATE, earnings_history,
+                   macro_rows, market, profile_row)
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = json.loads((ROOT / "contracts" / f"{contract.CONTRACT}.schema.json").read_text(encoding="utf-8"))
@@ -82,6 +84,10 @@ def test_the_checker_catches_drift():
     assert validate(True, SCHEMA["$defs"]["num"])
     assert validate(2, SCHEMA["$defs"]["sign"])
     assert not validate(None, SCHEMA["$defs"]["scenario"])
+    brief = {"id": "cpi", "label": "CPI", "tier": 1, "date": "2026-10-20", "trading_days_to": 2}
+    assert validate(brief, SCHEMA["$defs"]["macro_brief"]) == ["$: missing time_ny", "$: missing timing"]
+    assert not validate({**brief, "time_ny": None, "timing": "date_only"}, SCHEMA["$defs"]["macro_brief"])
+    assert validate({**brief, "time_ny": "08:30", "timing": "soon"}, SCHEMA["$defs"]["macro_brief"])
 
 
 # ---------------------------------------------------------------------------- stock
@@ -119,6 +125,24 @@ def test_numbers_are_the_metrics(stock):
         assert [(s["id"], s["confirmed"]) for s in h["signals"]] == \
             [(s["id"], SC._signal_view(s, primary)["confirmed"]) for s in m["signals"]["active"]]
     assert (c["horizons"]["swing"]["horizon_days"], c["horizons"]["position"]["horizon_days"]) == (10, 60)
+
+
+def test_trend_sma100_is_the_metrics_context_sma(stock):
+    swing, position, c = stock
+    sma, t = swing["trend_momentum"]["sma"], c["trend"]
+    assert isinstance(t["sma100"], float) and t["sma100"] == sma["sma100"]
+    assert t["slopes"]["sma100"] == sma["slopes"]["sma100"] and t["close_vs"]["sma100"] == sma["close_vs"]["sma100"]
+    assert (t["sma20"], t["sma50"], t["sma200"]) == (sma["sma20"], sma["sma50"], sma["sma200"])
+    assert t["stack"] == sma["stack"] and "100" not in t["stack"] and sma["stack_periods"] == [20, 50, 200]
+    spec = SCHEMA["properties"]["trend"]
+    assert "sma100" in spec["required"] and "context only" in spec["properties"]["sma100"]["description"]
+    assert "trend.sma100" in SCHEMA["description"]
+    # a run without the 100-day mean (short history, or an older metrics file) gives null, still valid
+    old = [copy.deepcopy(m) for m in (swing, position)]
+    for m in old:
+        del m["trend_momentum"]["sma"]["sma100"]
+    c_old = contract.build(*old)
+    assert c_old["trend"]["sma100"] is None and validate(c_old, SCHEMA) == []
 
 
 def test_shared_blocks_are_the_same_in_both_runs(stock):
@@ -170,6 +194,102 @@ def test_position_sizing_stays_out(stock):
     assert "position_size" not in text and "shares" not in text
 
 
+def test_dividend_macro_and_calendar_fields_are_the_metrics(stock):
+    swing, position, c = stock
+    dv, me = swing["dividends"], swing["macro_events"]
+    nx, la = dv["next_ex_dividend"], dv["last_ex_dividend"]
+    assert c["dividend"] == {"available": True, "reason": None, "pays_dividends": True, "next_ex_date": nx["date"],
+                             "next_amount": nx["amount"], "next_amount_pct": nx["amount_pct"],
+                             "next_trading_days_to": nx["trading_days_to"], "last_ex_date": la["date"],
+                             "last_amount": la["amount"]}
+    assert (c["dividend"]["next_ex_date"], c["dividend"]["next_trading_days_to"]) == (NEXT_EX_DATE, 6)
+    assert c["macro"]["available"] is True and c["macro"]["reason"] is None
+    assert (c["macro"]["window_from"], c["macro"]["window_to"]) == (me["window"]["from"], me["window"]["to"])
+    assert c["macro"]["listed_through"] == me["coverage"]["listed_through"] == "2026-11-06"
+    assert c["macro"]["events"] == [{k: e[k] for k in contract.MACRO_EVENT_KEYS} for e in me["events"]]
+    assert [(e["id"], e["session"], e["trading_days_to"]) for e in c["macro"]["events"]] == \
+        [("cpi", "2026-10-20", 2), ("fomc", "2026-10-28", 8), ("jobs", "2026-11-06", 15)]
+    assert c["data_quality"]["calendar_source"] == swing["data_quality"]["calendar"]["source"] == "fmp+rules"
+    assert c["event"]["trading_days_to"] == swing["event_risk"]["next_earnings"]["trading_days_est"]
+    for name, m in (("swing", swing), ("position", position)):
+        h = c["horizons"][name]
+        assert h["ex_dividend_within_horizon"] is m["dividends"]["within_horizon"] is True
+        assert h["macro_within_horizon"] == [{k: e[k] for k in contract.MACRO_BRIEF_KEYS}
+                                             for e in m["macro_events"]["within_horizon"]]
+        assert h["macro_complete"] is m["macro_events"]["coverage"]["complete"]
+    assert [e["id"] for e in c["horizons"]["swing"]["macro_within_horizon"]] == ["cpi", "fomc"]
+    assert [e["id"] for e in c["horizons"]["position"]["macro_within_horizon"]] == ["cpi", "fomc", "jobs"]
+    # each brief entry carries its New York time and timing, so a caller needs no lookup in macro.events
+    assert c["horizons"]["swing"]["macro_within_horizon"][1] == {
+        "id": "fomc", "label": "FOMC rate decision", "tier": 1, "date": "2026-10-28", "time_ny": "14:00",
+        "timing": "intraday", "trading_days_to": 8}
+    assert set(contract.MACRO_BRIEF_KEYS) <= set(contract.MACRO_EVENT_KEYS)
+    briefs = {(e["id"], e["date"]): e for e in c["horizons"]["position"]["macro_within_horizon"]}
+    for e in c["macro"]["events"]:
+        if (e["id"], e["date"]) in briefs:
+            assert briefs[(e["id"], e["date"])] == {k: e[k] for k in contract.MACRO_BRIEF_KEYS}
+    assert (c["horizons"]["swing"]["macro_complete"], c["horizons"]["position"]["macro_complete"]) == (True, False)
+
+
+def test_the_contract_lists_macro_tiers_one_and_two_only():
+    extra = (("2026-10-27 12:30:00", "US", "Durable Goods Orders MoM (Sep)", "High"),    # tier 3: FMP rates it High
+             ("2026-11-02 15:00:00", "US", "ISM Manufacturing PMI (Oct)", "Medium"))     # tier 2 whatever the label
+    swing, position = both(market(earnings=earnings_history("ACME"), macro=macro_rows(MACRO_EVENTS + extra)))
+    c = contract.build(swing, position)
+    assert validate(c, SCHEMA) == []
+    assert [(e["id"], e["tier"]) for e in swing["macro_events"]["events"]] == \
+        [("cpi", 1), ("other", 3), ("fomc", 1), ("ism_manufacturing", 2), ("jobs", 1)]
+    assert [e["id"] for e in c["macro"]["events"]] == ["cpi", "fomc", "ism_manufacturing", "jobs"]
+    assert [e["id"] for e in swing["macro_events"]["within_horizon"]] == ["cpi", "other", "fomc"]
+    assert [e["id"] for e in c["horizons"]["swing"]["macro_within_horizon"]] == ["cpi", "fomc"]
+    assert all(e["tier"] <= C.MACRO_CONTRACT_MAX_TIER for e in c["macro"]["events"])
+
+
+def test_contract_without_calendar_dividends_and_macro():
+    fake = market(earnings=earnings_history("ACME"), blocked={HOLIDAYS, DIVIDENDS, ECON})
+    c = contract.build(*both(fake))
+    assert validate(c, SCHEMA) == []
+    assert c["data_quality"]["calendar_source"] == "rules"
+    d, mc = c["dividend"], c["macro"]
+    assert d["available"] is False and d["reason"].startswith("restricted:") and d["pays_dividends"] is None
+    assert d["next_ex_date"] is None and d["last_ex_date"] is None
+    assert mc["available"] is False and mc["reason"].startswith("restricted:") and mc["events"] is None
+    assert (mc["window_from"], mc["window_to"]) == ("2026-10-16", "2027-01-12")
+    for h in c["horizons"].values():
+        assert h["ex_dividend_within_horizon"] is None and h["macro_within_horizon"] is None
+        assert h["macro_complete"] is None
+    assert set(c["skipped"]) == {"dividends", "macro_events"}
+    assert {"dividends", "macro_events"} <= set(c["modules_unavailable"])
+
+
+def test_an_empty_economic_calendar_is_missing_not_a_quiet_horizon():
+    # FMP answering [] for the window: the contract must not read as "no FOMC or CPI inside the horizon"
+    c = contract.build(*both(market(earnings=earnings_history("ACME"), macro=[])))
+    assert validate(c, SCHEMA) == []
+    why = "FMP economic-calendar returned no US rows for 2026-10-16 to 2027-01-12"
+    assert c["macro"]["available"] is False and c["macro"]["reason"] == why and c["macro"]["events"] is None
+    for h in c["horizons"].values():
+        assert h["macro_within_horizon"] is None and h["macro_complete"] is None
+    assert c["skipped"]["macro_events"] == why and c["modules_unavailable"]["macro_events"] == why
+
+
+def test_a_symbol_without_dividends_has_none_inside_any_horizon():
+    c = contract.build(*both(market(earnings=earnings_history("ACME"), dividends={})))
+    assert validate(c, SCHEMA) == []
+    assert c["dividend"]["available"] is True and c["dividend"]["pays_dividends"] is False
+    assert c["dividend"]["next_ex_date"] is None and c["dividend"]["last_ex_date"] is None
+    assert all(h["ex_dividend_within_horizon"] is False for h in c["horizons"].values())
+
+
+def test_an_older_metrics_file_without_the_new_modules_still_builds(stock):
+    swing, position, _ = stock
+    old = [{k: v for k, v in m.items() if k not in ("dividends", "macro_events")} for m in (swing, position)]
+    c = contract.build(*old)
+    assert validate(c, SCHEMA) == []
+    assert c["dividend"]["available"] is False and c["macro"]["available"] is False
+    assert c["dividend"]["reason"] and c["horizons"]["swing"]["macro_within_horizon"] is None
+
+
 # ---------------------------------------------------------------------------- derived facts
 @pytest.mark.parametrize("close, state, zone", [
     (100.0, "inside_support", 0), (110.5, "inside_resistance", 0), (105.0, "between", None), (95.5, "inside_support", 1),
@@ -208,6 +328,11 @@ def test_spy_contract():
     assert c["horizons"]["swing"]["earnings_within_horizon"] is None
     assert c["event"]["last_earnings"] is None and c["event"]["days_since_last_earnings"] is None
     assert set(c["skipped"]) == {"earnings", "sector"}
+    assert c["dividend"]["available"] and c["dividend"]["next_ex_date"] == SPY_NEXT_EX_DATE
+    assert c["dividend"]["next_trading_days_to"] == 44
+    assert (c["horizons"]["swing"]["ex_dividend_within_horizon"], c["horizons"]["position"]["ex_dividend_within_horizon"]) \
+        == (False, True)
+    assert c["macro"]["available"] and c["horizons"]["swing"]["macro_within_horizon"]
 
 
 def test_short_history_contract():
@@ -215,6 +340,7 @@ def test_short_history_contract():
     c = contract.build(*both(market(stock_start=start, profile=profile_row("ACME", ipo=start), earnings=[])))
     assert validate(c, SCHEMA) == []
     assert c["trend"]["sma200"] is None and c["regime"]["vol"] is None
+    assert c["trend"]["sma100"] is not None                                # 150 bars: the 100-day mean exists
     assert c["event"]["available"] is False
 
 

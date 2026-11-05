@@ -293,6 +293,19 @@ def _head(direction: dict, strength: str | None, plus_di, minus_di) -> str:
     return direction["label"] or "Undetermined"
 
 
+def dividend_drift_note(bars: pd.DataFrame) -> str | None:
+    """A note when the total return over the last C.TRADING_DAYS_PER_YEAR bars beats the price as traded
+    by C.DIVIDEND_DRIFT_NOTE or more: the dividends paid pull down the readings built on prices as traded."""
+    k = C.TRADING_DAYS_PER_YEAR
+    price, total = window_return(bars["close"], k), window_return(return_index(bars), k)
+    if price is None or total is None or total - price < C.DIVIDEND_DRIFT_NOTE:
+        return None
+    return (f"dividends: over the last {k} bars the price as traded returned {price * 100:+.1f}% against a total "
+            f"return of {total * 100:+.1f}%; the SMAs, MACD, trend votes, weekly direction and 52-week high use "
+            "prices as traded, which drop by each dividend on its ex-date, so the dividends paid pull these "
+            "readings down")
+
+
 def build_regime(ctx) -> dict:
     """B: direction (SMA votes), trend strength (ADX) and volatility (percentiles) -> one label and type."""
     ind = ctx["ind"]
@@ -305,6 +318,9 @@ def build_regime(ctx) -> dict:
     if gone:
         notes.append(f"direction inputs unavailable with {n} bars: {', '.join(gone)}; "
                      "direction uses the remaining inputs")
+    drift = dividend_drift_note(ctx["bars"])
+    if drift:
+        notes.append(drift)
 
     adx, plus_di, minus_di = num(row["adx14"]), num(row["plus_di"]), num(row["minus_di"])
     strength = _strength(adx)
@@ -365,10 +381,11 @@ def alignment(weekly_sign: int | None, daily_sign: int) -> str | None:
 
 
 def build_multi_timeframe(ctx) -> dict:
-    """I: weekly (W-FRI) close vs 10w/40w SMA and weekly RSI, and whether it confirms the daily direction."""
+    """I: weekly (W-FRI) close vs 10w/40w SMA and weekly RSI, and whether it confirms the daily direction.
+    The latest week is partial while sessions of it remain (ctx["calendar"]; weekdays without one)."""
     notes: list[str] = []
     fast, slow = C.WEEKLY_SMA_FAST, C.WEEKLY_SMA_SLOW
-    wk = I.resample_weekly(ctx["bars"])
+    wk = I.resample_weekly(ctx["bars"], ctx.get("calendar"))
     close = wk["close"]
     c, f, s = last(close), last(I.sma(close, fast)), last(I.sma(close, slow))
     rsi_w = last(I.rsi(close, C.WEEKLY_RSI_PERIOD))

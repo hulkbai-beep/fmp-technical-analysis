@@ -307,6 +307,20 @@ def test_resample_weekly_holiday_and_partial_week():
     assert ind.resample_weekly(full)["partial"].tolist() == [False, False, False]
 
 
+def test_resample_weekly_partial_flag_follows_the_exchange_calendar():
+    import market_calendar as MC
+    cal = MC.build_calendar(None, end_year=2025)                     # rules only: Good Friday 2024-03-29 closed
+    days = pd.to_datetime(["2024-03-25", "2024-03-26", "2024-03-27", "2024-03-28"])
+    k = np.arange(len(days), dtype=float)
+    df = pd.DataFrame({"open": 100 + k, "high": 102 + k, "low": 99 + k, "close": 101 + k,
+                       "volume": 10 + k}, index=pd.DatetimeIndex(days, name="date"))
+    assert ind.resample_weekly(df)["partial"].tolist() == [True]            # weekdays: Thursday is not Friday
+    assert ind.resample_weekly(df, cal)["partial"].tolist() == [False]      # NYSE: Thursday is the week's last session
+    assert ind.resample_weekly(df.iloc[:3], cal)["partial"].tolist() == [True]   # Wednesday: Thursday still to come
+    two = pd.concat([df.set_axis(df.index - pd.Timedelta(days=7)), df])
+    assert ind.resample_weekly(two, cal)["partial"].tolist() == [False, False]   # only the latest week can be partial
+
+
 # ---------------------------------------------------------------------------- compute_all
 def test_compute_all_columns_and_types(bars):
     out = ind.compute_all(bars)
@@ -342,3 +356,77 @@ def test_compute_all_has_no_look_ahead():
     for k in (1, 2, 15, 30, 60, 201, 253, 300, 520, 699):
         part = ind.compute_all(bars.iloc[:k])
         pd.testing.assert_frame_equal(part, full.iloc[:k], check_exact=False, rtol=1e-10, atol=1e-10)
+
+
+# ---------------------------------------------------------------------------- SMA100 (context only)
+def test_sma100_and_its_slope_are_a_plain_rolling_mean():
+    bars = synthetic_bars(n=300, seed=5)
+    out = ind.compute_all(bars)
+    expected = bars["close"].rolling(100).mean()
+    assert out["sma100"].iloc[:99].isna().all() and out["sma100"].iloc[99:].notna().all()
+    np.testing.assert_allclose(out["sma100"].iloc[99:], expected.iloc[99:], rtol=1e-12)
+    slope = expected / expected.shift(C.SLOPE_BARS) - 1.0
+    assert out["sma100_slope"].iloc[:99 + C.SLOPE_BARS].isna().all()
+    np.testing.assert_allclose(out["sma100_slope"].iloc[99 + C.SLOPE_BARS:], slope.iloc[99 + C.SLOPE_BARS:], rtol=1e-9)
+    assert list(ind.IND_COLUMNS[:8]) == ["sma20", "sma50", "sma200", "sma20_slope", "sma50_slope", "sma200_slope",
+                                         "sma100", "sma100_slope"]
+
+
+def test_sma100_is_nan_on_a_short_history():
+    out = ind.compute_all(synthetic_bars(n=99))
+    assert out["sma100"].isna().all() and out["sma100_slope"].isna().all()
+    assert out["sma50"].notna().iloc[-1]
+
+
+def test_sma_periods_keep_their_roles():
+    """SMA_PERIODS is (fast, mid, long) = (20, 50, 200): regime.py and signal_stats.py take [1] and [2] as the 50-
+    and 200-day lines and compute_all names the columns by position. SMA100 lives in SMA_CONTEXT_PERIODS, and the
+    chart, levels, crosscheck, the contract and the UI name it. Both are fixed: any other layout is refused (next
+    test), because it would silently put another line under one of these names."""
+    import levels
+    import regime
+    import signal_stats
+    assert C.SMA_PERIODS == (20, 50, 200) and C.SMA_CONTEXT_PERIODS == (100,)
+    assert (regime.SMA_MID, regime.SMA_LONG, signal_stats.SMA_LONG) == (50, 200, 200)
+    assert ind.TREND_SMA_COLUMNS == ("sma20", "sma50", "sma200") and ind.CONTEXT_SMA_COLUMNS == ("sma100",)
+    bars = synthetic_bars(n=260, seed=2)
+    out = ind.compute_all(bars)
+    for name, period in (*zip(ind.TREND_SMA_COLUMNS, C.SMA_PERIODS),
+                         *zip(ind.CONTEXT_SMA_COLUMNS, C.SMA_CONTEXT_PERIODS)):
+        np.testing.assert_allclose(out[name].dropna(), bars["close"].rolling(period).mean().dropna(), rtol=1e-12)
+    # every context SMA is a moving-average level candidate, like the 50- and 200-day lines
+    for name in ind.CONTEXT_SMA_COLUMNS:
+        assert name in levels.MA_LEVELS and levels.source_type(name) == "moving_average"
+
+
+@pytest.mark.parametrize("setting, value", [
+    ("SMA_PERIODS", (20, 50, 100, 200)),     # SMA100 inserted: the "sma200" column would hold the 100-day line
+    ("SMA_PERIODS", (20, 50, 100)),          # long line replaced: the same, and the "sma100" column hid the error
+    ("SMA_PERIODS", (20, 100, 200)),         # mid line replaced: "sma50" would hold the 100-day line
+    ("SMA_PERIODS", (10, 50, 200)),
+    ("SMA_PERIODS", (20, 50)),
+    ("SMA_CONTEXT_PERIODS", (150,)),         # the chart, levels, crosscheck, contract and UI name sma100
+    ("SMA_CONTEXT_PERIODS", ()),
+    ("SMA_CONTEXT_PERIODS", (100, 150)),
+    ("SMA_CONTEXT_PERIODS", 100),            # not a tuple
+])
+def test_compute_all_refuses_another_sma_layout(monkeypatch, setting, value):
+    monkeypatch.setattr(C, setting, value)
+    with pytest.raises(ValueError, match=rf"^config\.{setting} must be \("):
+        ind.compute_all(synthetic_bars(n=60))
+
+
+def test_compute_all_accepts_the_sma_periods_as_a_list(monkeypatch):
+    bars = synthetic_bars(n=260, seed=2)
+    default = ind.compute_all(bars)
+    monkeypatch.setattr(C, "SMA_PERIODS", [20, 50, 200])
+    monkeypatch.setattr(C, "SMA_CONTEXT_PERIODS", [100])
+    pd.testing.assert_frame_equal(ind.compute_all(bars), default)
+
+
+def test_compute_all_refuses_a_context_column_that_repeats_a_trend_one(monkeypatch):
+    # a code edit rather than a config one: the context columns name a trend SMA (with a matching period)
+    monkeypatch.setattr(ind, "CONTEXT_SMA_COLUMNS", ("sma200",))
+    monkeypatch.setattr(C, "SMA_CONTEXT_PERIODS", (200,))
+    with pytest.raises(ValueError, match="repeats a trend SMA column: sma200"):
+        ind.compute_all(synthetic_bars(n=60))

@@ -14,10 +14,19 @@ from pandas.tseries.frequencies import to_offset
 
 import config as C
 
-# Columns of compute_all(), in contract order. Names carry the default periods; the periods
-# themselves come from config.
+# The SMA columns. The rest of the skill reads them by name, so their periods are fixed (_check_sma_config):
+# - the trend SMAs, C.SMA_PERIODS in this order (fast, mid, long): the stack, the regime votes, the scorecard,
+#   the signals and the contract read sma20 / sma50 / sma200 as these three lines;
+# - the context SMA, C.SMA_CONTEXT_PERIODS: the chart, levels, crosscheck, the contract and the UI name sma100,
+#   a reference line that is reported, drawn and used as a low-weight level candidate only.
+TREND_SMA_COLUMNS = ("sma20", "sma50", "sma200")
+CONTEXT_SMA_COLUMNS = ("sma100",)
+
+# Columns of compute_all(), in contract order. Names carry the default periods; the periods themselves come
+# from config (except the SMA periods, fixed above).
 IND_COLUMNS = (
-    "sma20", "sma50", "sma200", "sma20_slope", "sma50_slope", "sma200_slope",
+    *TREND_SMA_COLUMNS, *(f"{name}_slope" for name in TREND_SMA_COLUMNS),
+    *(col for name in CONTEXT_SMA_COLUMNS for col in (name, f"{name}_slope")),
     "ema12", "ema26", "macd", "macd_signal", "macd_hist",
     "rsi14", "rsi2",
     "tr", "atr14", "atr_pct",
@@ -244,12 +253,14 @@ def daily_returns(bars: pd.DataFrame) -> pd.Series:
 
 
 # ---------------------------------------------------------------------------- resampling
-def resample_weekly(df: pd.DataFrame) -> pd.DataFrame:
+def resample_weekly(df: pd.DataFrame, calendar=None) -> pd.DataFrame:
     """Weekly bars (C.WEEKLY_RULE, W-FRI) indexed by the last actual trading date of each week.
 
-    OHLCV and adj_* use first/max/min/last/sum. `partial` is True only for the latest week when
-    its last bar is not on the rule's anchor day (no exchange calendar: a latest week cut short by
-    a Friday holiday is flagged too).
+    OHLCV and adj_* use first/max/min/last/sum. `partial` is True only for the latest week: with an
+    exchange calendar (market_calendar.MarketCalendar) when its last bar comes before the week's last
+    session (calendar.week_last_session), so a week that ends on Thursday before Good Friday is
+    complete; without one when its last bar is not on the rule's anchor day (a latest week cut short
+    by a Friday holiday is flagged too).
     """
     spec = {c: f for c, f in _WEEKLY_AGG.items() if c in df.columns}
     week = df.index.to_period(C.WEEKLY_RULE)
@@ -258,18 +269,54 @@ def resample_weekly(df: pd.DataFrame) -> pd.DataFrame:
     out.index = pd.DatetimeIndex(last_day.to_numpy(), name="date")
     partial = np.zeros(len(out), dtype=bool)
     if len(out):
-        partial[-1] = out.index[-1].dayofweek != to_offset(C.WEEKLY_RULE).weekday
+        last = out.index[-1]
+        if calendar is None:
+            partial[-1] = last.dayofweek != to_offset(C.WEEKLY_RULE).weekday
+        else:
+            end = calendar.week_last_session(last)
+            partial[-1] = end is not None and last.normalize() < end
     out["partial"] = partial
     return out
 
 
 # ---------------------------------------------------------------------------- everything
+_SMA_WIRING = {
+    "SMA_PERIODS": "the columns sma20 / sma50 / sma200, the regime votes and the signals are bound to these fast, "
+                   "mid and long lines by position, so another period, inserted or replaced, would silently "
+                   "relabel one of them (the 100-day line is the context SMA, SMA_CONTEXT_PERIODS)",
+    "SMA_CONTEXT_PERIODS": "the chart, levels, crosscheck, the contract (trend.sma100) and the UI name the 100-day "
+                           "context line, so another reference line needs its own column wired into all of them, "
+                           "not just a config entry",
+}
+
+
+def _sma_periods(columns) -> tuple:
+    return tuple(int(name[len("sma"):]) for name in columns)          # ("sma20", "sma200") -> (20, 200)
+
+
+def _check_sma_config() -> None:
+    """C.SMA_PERIODS and C.SMA_CONTEXT_PERIODS must be exactly the periods their columns are named for. The
+    rest of the skill reads the SMAs by name, so another period, inserted or replaced, would put another line
+    under a fixed name without an error (with SMA_PERIODS = (20, 50, 100), the "sma200" column, the regime's
+    long line and a second level candidate would all be the 100-day mean). Refuse it, also when a constant
+    was changed after import."""
+    for setting, columns in (("SMA_PERIODS", TREND_SMA_COLUMNS), ("SMA_CONTEXT_PERIODS", CONTEXT_SMA_COLUMNS)):
+        periods, wired = getattr(C, setting), _sma_periods(columns)
+        if (tuple(periods) if isinstance(periods, (tuple, list)) else periods) != wired:
+            raise ValueError(f"config.{setting} must be {wired}, got {periods!r}: {_SMA_WIRING[setting]}")
+    clash = sorted(set(TREND_SMA_COLUMNS) & set(CONTEXT_SMA_COLUMNS))
+    if clash:
+        raise ValueError(f"indicators.CONTEXT_SMA_COLUMNS repeats a trend SMA column: {', '.join(clash)}")
+
+
 def compute_all(bars: pd.DataFrame) -> pd.DataFrame:
     """All daily indicators used by the modules, on bars.index, with columns IND_COLUMNS."""
     close = bars["close"]
     out = {}
 
-    for name, period in zip(("sma20", "sma50", "sma200"), C.SMA_PERIODS):
+    _check_sma_config()
+    # trend SMAs (stack, regime votes, scorecard, signals), then the context SMA (reported, drawn, a level candidate)
+    for name, period in (*zip(TREND_SMA_COLUMNS, C.SMA_PERIODS), *zip(CONTEXT_SMA_COLUMNS, C.SMA_CONTEXT_PERIODS)):
         out[name] = sma(close, period)
         out[name + "_slope"] = out[name] / out[name].shift(C.SLOPE_BARS) - 1.0
 

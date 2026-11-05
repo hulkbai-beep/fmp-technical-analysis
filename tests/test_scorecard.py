@@ -345,6 +345,24 @@ def test_confidence_medium_with_opposing_backed_signal():
     assert conf["signal_support"]["opposing"] == ["extension_2sigma"] and conf["level"] == "medium"
 
 
+def test_confidence_reason_counts_every_active_signal():
+    # AAPL 2026-11-04: five bullish signals, one confirmed; the reason said "1 ... in favour, 0 against, 0 with
+    # an insufficient sample" and left out the other four, three of them with edges against their own bias
+    m = modules_for(1)
+    m["signals"]["active"] = [signal("new_52w_high", pillar="momentum"),
+                              signal("gap_up_atr", pillar="momentum", edge_median=-0.013, edge_hit=-0.09),
+                              signal("breakout_55d", pillar="momentum", edge_median=0.006, edge_hit=-0.005),
+                              signal("downtrend_oversold", conf="insufficient", n=9)]
+    conf = S.build_scorecard(ctx_for(), m)["confidence"]
+    assert conf["signal_support"]["unconfirmed"] == ["gap_up_atr", "breakout_55d"]
+    (reason,) = [r for r in conf["reasons"] if r.startswith("active signals")]
+    assert reason.startswith("active signals: 1 confirmed in favour, 0 confirmed against, 2 unconfirmed")
+    assert reason.endswith("1 with an insufficient sample") and "neither for nor against" in reason
+    assert conf["level"] == "high" and "no confirmed signal against the bias" in conf["reasons"][-1]
+    (f,) = [f for f in conf["factors"] if f["code"] == "signals"]
+    assert (f["supporting"], f["opposing"], f["unconfirmed"], f["insufficient"]) == (1, 0, 2, 1)
+
+
 def test_confidence_low_on_poor_agreement():
     m = modules_for(1)
     for k in ("trend_momentum", "relative_strength", "volume_flow"):
@@ -486,6 +504,28 @@ def test_base_case_earnings_caveat():
     assert base["earnings_caveat"] in base["text"]
 
 
+def test_earnings_caveat_and_meaning_follow_the_numbers():
+    # NVDA 2026-11-04: median two-day move 3.7% against a 10-day 1-sigma of 6.7%, 4 of 12 beyond it; the fixed
+    # text said "so the realized range can be much wider" and "reactions often exceed the 1-sigma range"
+    m = modules_for(1)
+    moves = [-0.034, 0.131, 0.088, -0.083, -0.002, -0.051, 0.027, -0.009, -0.004, -0.041, -0.005, 0.070]
+    m["event_risk"].update(within_horizon=True, next_earnings={"date": "2026-11-17", "trading_days_est": 9},
+                           reactions={"n": 12, "median_abs_move": 0.0374,
+                                      "items": [{"date": "x", "move": v} for v in moves]})
+    sd = 0.30 * math.sqrt(10 / 252)                                   # 5.98%
+    caveat = S.build_scenarios(ctx_for(), m, None)["base"]["earnings_caveat"]
+    assert caveat == ("Earnings on 2026-11-17 fall inside the 10-day horizon and add a jump to the ordinary range "
+                      "the band describes: over the last 12 reports the median absolute two-day move was 3.7%, "
+                      f"and 4 of 12 moved more than the 10-day 1-sigma move of {sd * 100:.1f}% (the largest 13.1%).")
+    assert "much wider" not in caveat
+    (c,) = [c for c in S.build_scorecard(ctx_for(), m)["conflicts"] if c["type"] == "earnings_in_horizon"]
+    assert "often exceed" not in c["typical_meaning"] and "adds a jump to the ordinary range" in c["typical_meaning"]
+    m["event_risk"]["reactions"] = {"n": 0, "median_abs_move": None}
+    assert S.build_scenarios(ctx_for(), m, None)["base"]["earnings_caveat"] == (
+        "Earnings on 2026-11-17 fall inside the 10-day horizon and add a jump to the ordinary range the band "
+        "describes.")
+
+
 def test_scenarios_at_all_time_high():
     m = modules_for(1)
     m["levels"].update(resistances=[], high_52w=CLOSE,
@@ -572,6 +612,62 @@ def test_risk_arithmetic_exact():
     assert risk["label"] == S.ILLUSTRATIVE and C.DISCLAIMER in risk["notes"]
     assert any("reference only" in n for n in risk["notes"])
     assert "ladder_ref" not in risk and not any("back-tested" in n for n in risk["notes"])
+
+
+def test_ex_dividend_inside_the_horizon_adds_a_risk_note_and_changes_nothing_else():
+    m = modules_for(1)
+    dv = {"available": True, "pays_dividends": True, "within_horizon": True,
+          "next_ex_dividend": {"date": "2026-11-09", "amount": 0.53, "amount_pct": 0.0053, "amount_atr": 0.25,
+                               "trading_days_to": 4}}
+    me = {"available": True, "within_horizon": [{"id": "cpi", "label": "CPI", "tier": 1, "date": "2026-11-10",
+                                                 "trading_days_to": 5}]}
+    events = {**m, "dividends": dv, "macro_events": me}
+    assert S.build_scorecard(ctx_for(), events) == S.build_scorecard(ctx_for(), m)    # context, never scored
+    sc = S.build_scenarios(ctx_for(), m, None)
+    assert S.build_scenarios(ctx_for(), events, None) == sc
+    plain, risk = S.build_risk(ctx_for(), m, sc), S.build_risk(ctx_for(), events, sc)
+    (extra,) = [n for n in risk["notes"] if n not in plain["notes"]]
+    assert risk["notes"].index(extra) == 1 and extra.startswith("Ex-dividend date 2026-11-09 falls inside the horizon")
+    assert "$0.53 (0.53% of the close, 0.25 ATR)" in extra and "touched by the ex-dividend drop alone" in extra
+    assert not re.search(r"\b(buy|sell|hold)\b", extra, flags=re.IGNORECASE)
+    assert {k: v for k, v in risk.items() if k != "notes"} == {k: v for k, v in plain.items() if k != "notes"}
+    for other in ({**dv, "within_horizon": False}, {**dv, "within_horizon": None, "next_ex_dividend": None},
+                  {"available": False, "reason": "restricted: dividends"}):
+        assert S.build_risk(ctx_for(), {**m, "dividends": other}, sc)["notes"] == plain["notes"]
+    m["event_risk"]["within_horizon"] = True                          # earnings first, then the ex-dividend date
+    notes = S.build_risk(ctx_for(), {**m, "dividends": dv}, sc)["notes"]
+    assert notes[1].startswith("Earnings on") and notes[2].startswith("Ex-dividend date")
+
+
+def test_projected_ex_dividend_dates_add_a_risk_note_and_change_nothing_else():
+    # HYG 2026-11-04 (position): monthly, none announced, about 3 ex-dates inside 60 sessions, 1.6% in all
+    m = modules_for(1)
+    dv = {"available": True, "pays_dividends": True, "within_horizon": None, "next_ex_dividend": None,
+          "last_ex_dividend": {"date": "2026-11-02", "amount": 0.40, "amount_pct": 0.0052},
+          "projected_in_horizon": {"ex_dates": 3, "amount_pct": 0.0155}}
+    sc = S.build_scenarios(ctx_for("position"), m, None)
+    plain = S.build_risk(ctx_for("position"), m, sc)
+    risk = S.build_risk(ctx_for("position"), {**m, "dividends": dv}, sc)
+    assert S.build_scorecard(ctx_for("position"), {**m, "dividends": dv}) == S.build_scorecard(ctx_for("position"), m)
+    (extra,) = [n for n in risk["notes"] if n not in plain["notes"]]
+    assert extra.startswith("No ex-dividend date is announced yet, but at the spacing of the last 12 months about 3 "
+                            "would fall inside the horizon, about 1.6% of the close in all at the last amount")
+    assert "touched by these drops alone" in extra and extra.endswith("so they leave these drops out.")
+    assert {k: v for k, v in risk.items() if k != "notes"} == {k: v for k, v in plain.items() if k != "notes"}
+    one = S.build_risk(ctx_for("position"), {**m, "dividends": {**dv, "projected_in_horizon":
+                                                                {"ex_dates": 1, "amount_pct": 0.015}}}, sc)
+    (single,) = [n for n in one["notes"] if n.startswith("No ex-dividend date is announced yet")]
+    assert "about 1 would fall inside the horizon, about 1.5% of the close at the last amount" in single
+    assert "on it for mechanical reasons" in single and single.endswith("so they leave this drop out.")
+    for proj in ({"ex_dates": 0, "amount_pct": 0.0}, None):         # none projected, or too few ex-dates to tell
+        assert S.build_risk(ctx_for("position"), {**m, "dividends": {**dv, "projected_in_horizon": proj}},
+                            sc)["notes"] == plain["notes"]
+    announced = {**dv, "within_horizon": True,
+                 "next_ex_dividend": {"date": "2026-12-01", "amount": 0.40, "amount_pct": 0.0052, "amount_atr": 0.9}}
+    (note,) = [n for n in S.build_risk(ctx_for("position"), {**m, "dividends": announced}, sc)["notes"]
+               if n.startswith("Ex-dividend date 2026-12-01")]
+    assert "At the spacing of the last 12 months about 3 ex-dates would fall inside the horizon, about 1.6% of " \
+           "the close in all." in note and note.endswith("so they leave these drops out.")
 
 
 def test_touch_rate_interpolates_the_calibration():

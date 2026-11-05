@@ -110,3 +110,55 @@ def test_patterns_have_no_lookahead(full, full_patterns, t):
         known = lambda ws: [w for w in ws if w["confirm"] <= t]  # noqa: E731
         assert known(fr["wedges"]) == known(fr_full["wedges"])
         assert [f for f in fr["fails"] if f["fail"] <= t] == [f for f in fr_full["fails"] if f["fail"] <= t]
+
+
+# A dividend read one bar early can only change row t, and only by switching off a gap down at t, so the
+# dividend cuts sit on gap_down_atr bars of the fixture (D[t] = 0): GAP_DOWN_CUTS with no dividend on t+1, which
+# a later dividend made huge would cancel, and AHEAD_CUTS, where the fixture pays at least the drop on t+1.
+GAP_DOWN_CUTS = (267, 340)
+AHEAD_CUTS = (345, 423)
+
+
+@pytest.fixture(scope="module")
+def full_dividends(full):
+    """The fixture bars with a dividend column (as fetch attaches it): 2% of the close every 63 bars; on every
+    other gap_down_atr fire the whole opening drop, which the gap-down rule (close[t-1] - D[t]) then no longer
+    counts; and on the bar after each AHEAD_CUTS fire that fire's drop, which only a rule reading the next bar's
+    dividend would take out of it."""
+    bars, ind, ev = full
+    drop = (bars["close"].shift(1) - bars["open"]).to_numpy()
+    div = np.zeros(len(bars))
+    div[5::63] = bars["close"].to_numpy()[5::63] * 0.02
+    downs = np.flatnonzero(ev["gap_down_atr"].to_numpy())[::2]
+    div[downs] = drop[downs]
+    ahead = np.array(AHEAD_CUTS)
+    div[ahead + 1] = np.maximum(div[ahead + 1], drop[ahead])
+    with_div = bars.assign(dividend=div)
+    return with_div, S.events(with_div, ind)
+
+
+@pytest.mark.parametrize("t", CUTS + GAP_DOWN_CUTS + AHEAD_CUTS)
+def test_dividend_adjusted_gap_rules_have_no_lookahead(full, full_dividends, t):
+    _, ind, ev_plain = full
+    bars, ev_full = full_dividends
+    div = bars["dividend"].to_numpy()
+    if t in GAP_DOWN_CUTS + AHEAD_CUTS:
+        # the cut can catch a leak: facts of the fixture, not of the rule under test
+        drop = bars["close"].iloc[t - 1] - bars["open"].iloc[t]
+        assert ev_plain["gap_down_atr"].iloc[t] and div[t] == 0
+        assert div[t + 1] >= drop if t in AHEAD_CUTS else div[t + 1] == 0
+    later = np.arange(len(bars)) > t
+    variants = [(bars.iloc[:t + 1], None),                                  # the history ends at t
+                (scramble_after(bars, t, seed=t), None),                    # every column after t scrambled
+                (bars.assign(dividend=np.where(later, 1e9, div)), ind),     # only the later dividends: huge ...
+                (bars.assign(dividend=np.where(later, 0.0, div)), ind)]     # ... or none
+    for variant, variant_ind in variants:
+        ev = S.events(variant, I.compute_all(variant) if variant_ind is None else variant_ind)
+        pd.testing.assert_frame_equal(ev.iloc[:t + 1], ev_full.iloc[:t + 1])
+
+
+def test_the_dividend_fixture_changes_a_gap_event(full, full_dividends):
+    _, _, ev_plain = full
+    _, ev_div = full_dividends
+    changed = (ev_plain != ev_div).sum()
+    assert changed[changed > 0].index.tolist() == ["gap_down_atr"]    # a dividend never changes gap_up_atr

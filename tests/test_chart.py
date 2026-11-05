@@ -95,13 +95,40 @@ def test_chart_data_is_json_safe_and_sized_to_the_window():
     # split-adjusted OHLCV (not the dividend-adjusted columns), prices rounded to 4 decimals
     assert d["candles"][-1][4] == round(float(win["close"].iloc[-1]), 4)
     assert d["candles"][-1][5] == int(round(win["volume"].iloc[-1]))
-    for key in ("sma20", "sma50", "sma200", "rsi14", "rvol"):
+    for key in ("sma20", "sma50", "sma100", "sma200", "rsi14", "rvol"):
         assert 0 < len(d[key]) <= n
         assert d[key][-1][0] == ctx["as_of"]
     assert d["sma200"][-1][1] == pytest.approx(ctx["ind"]["sma200"].iloc[-1], abs=1e-4)
     assert d["weekly"][-1][0] == ctx["as_of"] and d["weekly"][0][0] >= d["candles"][0][0]
     assert d["default_timeframe"] == "daily"
     assert d["meta"]["ticker"] == "TEST" and d["meta"]["chart_bars"] == n
+
+
+def test_sma100_series_is_emitted():
+    ctx, d = _data()
+    win = ctx["bars"].index[-C.HORIZONS["swing"]["chart_bars"]:]
+    expected = ctx["bars"]["close"].rolling(100).mean().loc[win]
+    assert [p[0] for p in d["sma100"]] == [str(x.date()) for x in win]
+    np.testing.assert_allclose([p[1] for p in d["sma100"]], expected, atol=1e-4)
+    assert d["sma100"][-1][1] == round(float(ctx["ind"]["sma100"].iloc[-1]), C.CHART_PRICE_DECIMALS)
+    _, short = _data(n=150, horizon="position")                # pairs only where the 100-day mean exists
+    assert len(short["sma100"]) == 150 - 99 and short["sma100"][0][0] == short["candles"][99][0]
+    assert short["sma200"] == []
+
+
+def test_ui_draws_sma100_in_its_own_colour_in_both_themes():
+    css = (UI / "chart.css").read_text(encoding="utf-8")
+    blocks = [b for b in re.findall(r"\{([^{}]*)\}", css) if "--sma20:" in b]
+    assert len(blocks) == 3                                    # light, dark (media query), dark (data-theme)
+    for b in blocks:
+        colours = dict(re.findall(r"--(sma\d+):\s*(#[0-9a-fA-F]{6})", b))
+        assert set(colours) == {"sma20", "sma50", "sma100", "sma200"}
+        assert len({c.lower() for c in colours.values()}) == 4, colours
+    js, i18n = (UI / "chart.js").read_text(encoding="utf-8"), (UI / "i18n.js").read_text(encoding="utf-8")
+    assert 'const SMA_KEYS = ["sma20", "sma50", "sma100", "sma200"];' in js
+    assert i18n.count('lg_sma100: "SMA100"') == 2                                   # legend, zh and en
+    assert len(re.findall(r'(?<!\w)sma100: "SMA100"', i18n)) == 2                    # level source, zh and en
+    assert i18n.count("sma100_title:") == 2
 
 
 def test_rs_line_is_normalized_and_absent_for_spy():
@@ -137,6 +164,26 @@ def test_summary_panels_follow_the_module_outputs():
     assert vp["available"] and len(vp["bins"]) == 10 and vp["val"] < vp["poc"] <= vp["vah"]
     assert {"module": "event_risk", "reason": "test: no event module"} in d["data_notes"]["skipped"]
     assert len(d["data_notes"]["approximations"]) == 2
+
+
+def test_weekly_candles_follow_the_exchange_calendar():
+    import market_calendar as MC
+    bars = synthetic_bars(n=600, seed=3).loc[:"2022-04-14"]          # the Thursday before Good Friday 2022
+    start = bars.index[-60]
+    plain, cal = chart._weekly(bars, start), chart._weekly(bars, start, MC.build_calendar(None, end_year=2023))
+    assert plain[-1][0] == cal[-1][0] == "2022-04-14"
+    assert plain[-1][7] is True and cal[-1][7] is False
+
+
+def test_unavailable_dividends_and_macro_events_reach_the_data_notes():
+    ctx = _ctx(skipped={"dividends": "restricted: dividends: not included in your plan"})
+    m = _modules(ctx)
+    m["dividends"] = {"available": False, "reason": "restricted: dividends: not included in your plan"}
+    m["macro_events"] = {"available": False, "reason": "economic calendar unavailable"}
+    skipped = chart.build_chart_data(ctx, m)["data_notes"]["skipped"]
+    assert {"module": "macro_events", "reason": "economic calendar unavailable"} in skipped
+    assert [s["module"] for s in skipped].count("dividends") == 1          # fetch's reason, not repeated
+    assert {"dividends", "macro_events"} <= set(chart.MODULE_NAMES)
 
 
 def test_avwap_series_fall_back_to_volume_flow_anchors(monkeypatch):

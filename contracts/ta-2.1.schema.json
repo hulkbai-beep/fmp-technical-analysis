@@ -1,16 +1,16 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "ta-2.0",
-  "title": "Technical analysis contract ta-2.0",
-  "description": "The stable summary of one stock's swing and position runs that other tools read, built by scripts/contract.py. Within a major version fields are only ever added; renaming or removing one means ta-3.0. 1.1 adds event.last_earnings, event.days_since_last_earnings, event.last_earnings_move and the kind of each scenario target. 1.2 adds levels_note, range_95 and the volatility-band stop and target with calibrated touch rates in stops_ref; the support/resistance zones are reference only. 2.0 removes event.eps_estimated: the contract carries no fundamentals. Horizon-independent blocks sit at the top, the rest under horizons.swing / horizons.position. Prices are split-adjusted closes; fractions are decimals (0.05 = 5%); null means missing, never estimated.",
+  "$id": "ta-2.1",
+  "title": "Technical analysis contract ta-2.1",
+  "description": "The stable summary of one stock's swing and position runs that other tools read, built by scripts/contract.py. Within a major version fields are only ever added; renaming or removing one means ta-3.0. 1.1 adds event.last_earnings, event.days_since_last_earnings, event.last_earnings_move and the kind of each scenario target. 1.2 adds levels_note, range_95 and the volatility-band stop and target with calibrated touch rates in stops_ref; the support/resistance zones are reference only. 2.0 removes event.eps_estimated: the contract carries no fundamentals. 2.1 adds data_quality.calendar_source, the dividend and macro blocks, trend.sma100 (a context line, not part of the SMA stack) and, per horizon, ex_dividend_within_horizon, macro_within_horizon and macro_complete; trading-day counts (event.trading_days_to, data_quality.business_days_behind) now count NYSE sessions, exchange holidays excluded. Ex-dividend dates and macro events are context: they never change the bias. Horizon-independent blocks sit at the top, the rest under horizons.swing / horizons.position. Prices are split-adjusted closes; fractions are decimals (0.05 = 5%); null means missing, never estimated.",
   "type": "object",
   "additionalProperties": false,
   "required": ["contract", "config_hash", "ticker", "generated_at", "as_of", "as_of_basis", "data_source", "last_close",
-               "quote", "atr14", "company", "data_quality", "market", "event", "volatility", "extension", "trend",
-               "regime", "rs", "flow", "weekly", "context_only", "horizons", "skipped", "modules_unavailable",
-               "restricted", "warnings", "errors", "disclaimer"],
+               "quote", "atr14", "company", "data_quality", "market", "event", "dividend", "macro", "volatility",
+               "extension", "trend", "regime", "rs", "flow", "weekly", "context_only", "horizons", "skipped",
+               "modules_unavailable", "restricted", "warnings", "errors", "disclaimer"],
   "properties": {
-    "contract": {"const": "ta-2.0"},
+    "contract": {"const": "ta-2.1"},
     "config_hash": {"type": "string", "description": "hash of both runs' meta.config_snapshot"},
     "ticker": {"type": "string"},
     "generated_at": {"type": "string"},
@@ -37,10 +37,11 @@
     "data_quality": {
       "type": "object", "additionalProperties": false,
       "required": ["stale", "business_days_behind", "partial_bar_excluded", "adj_coverage", "illiquid", "illiquid_reason",
-                   "avg_volume", "avg_dollar_volume", "spac_like_start", "history_start_override", "warnings"],
+                   "avg_volume", "avg_dollar_volume", "spac_like_start", "history_start_override", "calendar_source",
+                   "warnings"],
       "properties": {
         "stale": {"type": "boolean"},
-        "business_days_behind": {"type": ["integer", "null"]},
+        "business_days_behind": {"type": ["integer", "null"], "description": "NYSE sessions after the last bar up to the session that should be complete at the run's time (exchange holidays excluded; the name is kept from 2.0)"},
         "partial_bar_excluded": {"$ref": "#/$defs/str", "description": "date of today's bar when it was dropped"},
         "adj_coverage": {"$ref": "#/$defs/num"},
         "illiquid": {"type": "boolean"},
@@ -49,6 +50,8 @@
         "avg_dollar_volume": {"$ref": "#/$defs/num"},
         "spac_like_start": {"type": ["object", "null"]},
         "history_start_override": {"$ref": "#/$defs/str"},
+        "calendar_source": {"enum": ["fmp+rules", "rules", "weekdays", null],
+                            "description": "the exchange calendar behind every session count: FMP's NYSE holiday list united with the exchange rules, or the rules alone when FMP's list could not be loaded"},
         "warnings": {"$ref": "#/$defs/strings"}
       }
     },
@@ -79,13 +82,43 @@
         "reason": {"$ref": "#/$defs/str", "description": "why not, e.g. an ETF or a restricted plan"},
         "next_earnings": {"$ref": "#/$defs/str"},
         "calendar_days": {"type": ["integer", "null"]},
-        "trading_days_to": {"type": ["integer", "null"], "description": "estimate; US holidays not excluded"},
+        "trading_days_to": {"type": ["integer", "null"], "description": "NYSE sessions from as_of to the report date (exchange holidays excluded; FMP gives no before-open / after-close time)"},
         "last_earnings": {"$ref": "#/$defs/str", "description": "latest report on or before as_of (YYYY-MM-DD)"},
         "days_since_last_earnings": {"type": ["integer", "null"], "description": "calendar days from last_earnings to as_of"},
         "last_earnings_move": {"$ref": "#/$defs/num", "description": "two-day move around the latest report; null while the bar after it is missing"},
         "reactions_n": {"type": ["integer", "null"]},
         "median_abs_move": {"$ref": "#/$defs/num", "description": "median absolute two-day move around past reports"},
         "mean_abs_move": {"$ref": "#/$defs/num"}
+      }
+    },
+    "dividend": {
+      "type": "object", "additionalProperties": false,
+      "description": "ex-dividend dates from FMP dividends (amounts split-adjusted, the basis of the prices). On the ex-date the price opens lower by about the dividend for mechanical reasons. Context only; no dividend yield. Whether the next ex-date falls inside a horizon is under horizons.*",
+      "required": ["available", "reason", "pays_dividends", "next_ex_date", "next_amount", "next_amount_pct",
+                   "next_trading_days_to", "last_ex_date", "last_amount"],
+      "properties": {
+        "available": {"type": "boolean"},
+        "reason": {"$ref": "#/$defs/str", "description": "why not, e.g. a restricted plan"},
+        "pays_dividends": {"type": ["boolean", "null"], "description": "false for a symbol FMP lists no dividends for, or whose dividends look suspended"},
+        "next_ex_date": {"$ref": "#/$defs/str", "description": "first announced ex-dividend date after as_of; null when none is announced yet"},
+        "next_amount": {"$ref": "#/$defs/num"},
+        "next_amount_pct": {"$ref": "#/$defs/num", "description": "next_amount / last_close"},
+        "next_trading_days_to": {"type": ["integer", "null"], "description": "NYSE sessions from as_of to the ex-date"},
+        "last_ex_date": {"$ref": "#/$defs/str", "description": "latest ex-dividend date on or before as_of"},
+        "last_amount": {"$ref": "#/$defs/num"}
+      }
+    },
+    "macro": {
+      "type": "object", "additionalProperties": false,
+      "description": "scheduled US macro releases after as_of from FMP's economic calendar, tiers 1-2 (metrics.json also lists tier 3). Dates and times only, never an expected outcome; context only. Which fall inside a horizon is under horizons.*",
+      "required": ["available", "reason", "window_from", "window_to", "listed_through", "events"],
+      "properties": {
+        "available": {"type": "boolean"},
+        "reason": {"$ref": "#/$defs/str", "description": "why not: a restricted plan, a failed request, or an answer without US rows (missing data, not a window without events)"},
+        "window_from": {"$ref": "#/$defs/str", "description": "first date requested (YYYY-MM-DD)"},
+        "window_to": {"$ref": "#/$defs/str", "description": "last date requested; FMP returns at most ~90 days per request"},
+        "listed_through": {"$ref": "#/$defs/str", "description": "FMP lists releases other than FOMC dates only some weeks ahead: the date of the last one listed; events after it may be missing"},
+        "events": {"type": ["array", "null"], "items": {"$ref": "#/$defs/macro_event"}, "description": "in session order; null when unavailable"}
       }
     },
     "volatility": {
@@ -110,12 +143,15 @@
     },
     "trend": {
       "type": ["object", "null"], "additionalProperties": false,
-      "required": ["sma20", "sma50", "sma200", "slopes", "close_vs", "stack", "stack_state", "mom_12_1", "returns", "macd",
-                   "high_52w", "high_52w_date", "from_52w_high", "low_52w", "low_52w_date"],
+      "required": ["sma20", "sma50", "sma200", "sma100", "slopes", "close_vs", "stack", "stack_state", "mom_12_1",
+                   "returns", "macd", "high_52w", "high_52w_date", "from_52w_high", "low_52w", "low_52w_date"],
       "properties": {
         "sma20": {"$ref": "#/$defs/num"}, "sma50": {"$ref": "#/$defs/num"}, "sma200": {"$ref": "#/$defs/num"},
-        "slopes": {"type": ["object", "null"]}, "close_vs": {"type": ["object", "null"]},
-        "stack": {"$ref": "#/$defs/str"}, "stack_state": {"$ref": "#/$defs/str"},
+        "sma100": {"$ref": "#/$defs/num", "description": "100-day SMA, a widely watched reference line (2.1): context only, not part of stack / stack_state and never a trend vote; null with fewer than 100 bars"},
+        "slopes": {"type": ["object", "null"], "description": "20-bar slope of each SMA, keyed sma20 / sma50 / sma100 / sma200"},
+        "close_vs": {"type": ["object", "null"], "description": "close / SMA - 1, keyed sma20 / sma50 / sma100 / sma200"},
+        "stack": {"$ref": "#/$defs/str", "description": "SMA20 / SMA50 / SMA200 ordered top to bottom, e.g. 20>50>200 (SMA100 is not part of it)"},
+        "stack_state": {"$ref": "#/$defs/str"},
         "mom_12_1": {"$ref": "#/$defs/num"}, "returns": {"type": ["object", "null"]},
         "macd": {
           "type": "object", "additionalProperties": false, "required": ["macd", "signal", "hist", "last_cross"],
@@ -270,6 +306,33 @@
                      "target_touch_rate": {"$ref": "#/$defs/num", "description": "the same for vol_target"},
                      "primary": {"enum": ["vol", "atr", "structural", null], "description": "the stop the risk module sizes its example on"}}
     },
+    "macro_event": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "label", "tier", "date", "time_ny", "timing", "session", "trading_days_to"],
+      "properties": {
+        "id": {"type": "string", "description": "group id, e.g. fomc, cpi, jobs, pce, ppi, gdp, retail_sales (tier 1), fomc_minutes, fed_policy, ism_manufacturing, ism_services, jolts, consumer_sentiment (tier 2)"},
+        "label": {"type": "string"},
+        "tier": {"enum": [1, 2]},
+        "date": {"type": "string", "description": "release date in New York (YYYY-MM-DD)"},
+        "time_ny": {"$ref": "#/$defs/str", "description": "HH:MM New York time of the earliest release of the group that day; null when FMP gives a date only"},
+        "timing": {"enum": ["pre_open", "intraday", "after_close", "non_session", "date_only"]},
+        "session": {"type": "string", "description": "the first NYSE session the release can move: that day, or the next session after the close, a weekend or a holiday"},
+        "trading_days_to": {"type": "integer", "description": "NYSE sessions in (as_of, session]"}
+      }
+    },
+    "macro_brief": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "label", "tier", "date", "time_ny", "timing", "trading_days_to"],
+      "properties": {
+        "id": {"type": "string"}, "label": {"type": "string"},
+        "tier": {"enum": [1, 2]},
+        "date": {"type": "string", "description": "release date in New York (YYYY-MM-DD)"},
+        "time_ny": {"$ref": "#/$defs/str", "description": "HH:MM New York time; null when FMP gives a date only"},
+        "timing": {"enum": ["pre_open", "intraday", "after_close", "non_session", "date_only"],
+                   "description": "after_close and non_session first reach prices in the next NYSE session"},
+        "trading_days_to": {"type": "integer", "description": "NYSE sessions in (as_of, the session the release can first move]"}
+      }
+    },
     "evidence": {
       "type": "object", "additionalProperties": false,
       "required": ["id", "name", "bias", "pillar", "fired_date", "bars_ago", "n", "confidence", "hit_rate", "median",
@@ -291,7 +354,8 @@
       "type": "object", "additionalProperties": false,
       "required": ["horizon_days", "stat_horizons", "bias", "pillars", "weights_used", "conflicts", "price_location",
                    "supports", "resistances", "levels_window", "levels_note", "bull", "bear", "range_1sd", "range_95", "stops_ref",
-                   "earnings_within_horizon", "signals", "patterns"],
+                   "earnings_within_horizon", "ex_dividend_within_horizon", "macro_within_horizon", "macro_complete",
+                   "signals", "patterns"],
       "properties": {
         "horizon_days": {"type": ["integer", "null"], "description": "primary statistics horizon in trading days"},
         "stat_horizons": {"type": ["array", "null"], "items": {"type": "integer"}},
@@ -341,6 +405,10 @@
                       "description": "reference stops from the risk module; position sizing is the caller's job",
                       "properties": {"long": {"$ref": "#/$defs/stops"}, "short": {"$ref": "#/$defs/stops"}}},
         "earnings_within_horizon": {"type": ["boolean", "null"]},
+        "ex_dividend_within_horizon": {"type": ["boolean", "null"], "description": "the next ex-dividend date is at most horizon_days NYSE sessions away; null when unknown (none announced, or no dividend data); false for a symbol that pays none"},
+        "macro_within_horizon": {"type": ["array", "null"], "items": {"$ref": "#/$defs/macro_brief"},
+                                 "description": "tier 1-2 macro events at most horizon_days NYSE sessions away, each with its date, New York time and timing; null when the economic calendar is unavailable (restricted, failed or without US rows)"},
+        "macro_complete": {"type": ["boolean", "null"], "description": "whether FMP's listing reaches the horizon's end (macro.listed_through and the request window); false: events late in the horizon may be missing; null when the economic calendar is unavailable"},
         "signals": {"type": "array", "items": {"$ref": "#/$defs/evidence"}},
         "patterns": {"type": "array", "items": {"$ref": "#/$defs/evidence"}, "description": "context only, not scored"}
       }

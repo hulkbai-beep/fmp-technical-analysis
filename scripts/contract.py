@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-The ta-2.0 contract: a small, versioned summary of one stock's swing and position runs for other tools.
+The ta-2.1 contract: a small, versioned summary of one stock's swing and position runs for other tools.
 
 metrics.json is internal and may change between versions. The contract is the public interface: within a major
 version fields are only ever added, and renaming or removing one means a new major version (ta-3.0). It selects and
-normalises facts and judges nothing (no "buy", no target of its own). contracts/ta-2.0.schema.json describes every
+normalises facts and judges nothing (no "buy", no target of its own). contracts/ta-2.1.schema.json describes every
 field; tests/test_contract.py checks both.
 
-Blocks that do not depend on the horizon (data quality, market, event, volatility, extension, trend, regime, RS,
-flow, weekly, price-action context) sit at the top; what does (scorecard, levels, scenarios, stops, earnings inside
-the horizon, signal and pattern statistics) sits under horizons.swing and horizons.position.
+Blocks that do not depend on the horizon (data quality, market, event, dividend, macro, volatility, extension,
+trend, regime, RS, flow, weekly, price-action context) sit at the top; what does (scorecard, levels, scenarios,
+stops, earnings, the ex-dividend date and macro events inside the horizon, signal and pattern statistics) sits
+under horizons.swing and horizons.position.
 
   python scripts/contract.py SWING/metrics.json POSITION/metrics.json [-o contract.json]
   python scripts/analyze.py TICKER --contract contract.json     (runs the other horizon from the cache)
@@ -25,11 +26,17 @@ import json
 import sys
 from pathlib import Path
 
+import config as C
 import scorecard as SC
 
-CONTRACT = "ta-2.0"   # 1.1 adds event.last_earnings*, targets' kind; 1.2 levels_note, range_95, vol stops;
-#                       2.0 removes event.eps_estimated (no fundamentals); 2.x only add fields
+CONTRACT = "ta-2.1"   # 1.1 adds event.last_earnings*, targets' kind; 1.2 levels_note, range_95, vol stops;
+#                       2.0 removes event.eps_estimated (no fundamentals); 2.x only add fields:
+#                       2.1 data_quality.calendar_source, dividend, macro, horizons.*.ex_dividend_within_horizon /
+#                       macro_within_horizon / macro_complete (session counts exclude NYSE holidays),
+#                       trend.sma100 (a context line, not part of the stack; slopes / close_vs carry it too)
 HORIZONS = ("swing", "position")
+MACRO_EVENT_KEYS = ("id", "label", "tier", "date", "time_ny", "timing", "session", "trading_days_to")
+MACRO_BRIEF_KEYS = ("id", "label", "tier", "date", "time_ny", "timing", "trading_days_to")
 # Modules computed the same way for both horizons; the contract takes them from the swing run.
 SHARED = ("snapshot", "data_quality", "market_context", "regime", "trend_momentum", "relative_strength",
           "mean_reversion", "volume_flow", "volatility", "multi_timeframe")
@@ -112,7 +119,8 @@ def _data_quality(dq):
             "illiquid_reason": liq.get("reason"), "avg_volume": _num(liq.get("avg_volume")),
             "avg_dollar_volume": _num(liq.get("avg_dollar_volume")),
             "spac_like_start": None if not spac else _pick(spac, ("first_date", "median_close")),
-            "history_start_override": dq.get("history_start_override"), "warnings": list(dq.get("warnings") or [])}
+            "history_start_override": dq.get("history_start_override"),
+            "calendar_source": _get(dq, "calendar", "source"), "warnings": list(dq.get("warnings") or [])}
 
 
 def _market(mc):
@@ -147,6 +155,38 @@ def _event(er):
             "mean_abs_move": _num(rx.get("mean_abs_move"))}
 
 
+def _reason(block):
+    """None for a module that ran; else its reason (a metrics.json from before the module has no block)."""
+    if isinstance(block, dict):
+        return None if block.get("available") else (block.get("reason") or "unavailable")
+    return "not in the metrics (made before this module existed)"
+
+
+def _dividend(dv):
+    """The last and the next ex-dividend dates (metrics dividends). Whether the next one falls inside a horizon is
+    under horizons.*."""
+    ok = isinstance(dv, dict) and bool(dv.get("available"))
+    nx, la = (_get(dv, k) or {} for k in ("next_ex_dividend", "last_ex_dividend"))
+    return {"available": ok, "reason": _reason(dv), "pays_dividends": dv.get("pays_dividends") if ok else None,
+            "next_ex_date": nx.get("date"), "next_amount": _num(nx.get("amount")),
+            "next_amount_pct": _num(nx.get("amount_pct")), "next_trading_days_to": nx.get("trading_days_to"),
+            "last_ex_date": la.get("date"), "last_amount": _num(la.get("amount"))}
+
+
+def _contract_tier(e) -> bool:
+    tier = _get(e, "tier")
+    return isinstance(tier, int) and not isinstance(tier, bool) and tier <= C.MACRO_CONTRACT_MAX_TIER
+
+
+def _macro(me):
+    """Scheduled US macro events after as_of (metrics macro_events), tiers up to C.MACRO_CONTRACT_MAX_TIER."""
+    ok = isinstance(me, dict) and bool(me.get("available"))
+    events = me.get("events") if ok else None
+    return {"available": ok, "reason": _reason(me), "window_from": _get(me, "window", "from"),
+            "window_to": _get(me, "window", "to"), "listed_through": _get(me, "coverage", "listed_through"),
+            "events": None if events is None else [_pick(e, MACRO_EVENT_KEYS) for e in events if _contract_tier(e)]}
+
+
 def _volatility(v):
     if not v:
         return None
@@ -166,6 +206,7 @@ def _trend(tm, lv):
     sma, macd, hi = tm.get("sma") or {}, tm.get("macd") or {}, tm.get("from_52w_high") or {}
     cross = macd.get("last_cross")
     return {"sma20": _num(sma.get("sma20")), "sma50": _num(sma.get("sma50")), "sma200": _num(sma.get("sma200")),
+            "sma100": _num(sma.get("sma100")),        # context only: not part of stack / stack_state
             "slopes": sma.get("slopes"), "close_vs": sma.get("close_vs"), "stack": sma.get("stack"),
             "stack_state": sma.get("stack_state"), "mom_12_1": _num(tm.get("mom_12_1")), "returns": tm.get("returns"),
             "macd": {"macd": _num(macd.get("macd")), "signal": _num(macd.get("signal")), "hist": _num(macd.get("hist")),
@@ -292,6 +333,9 @@ def _evidence(entries, primary, source=None):
 def _horizon(m):
     sc, lv, sn, rk = _mod(m, "scorecard"), _mod(m, "levels"), _mod(m, "scenarios"), _mod(m, "risk")
     sig, pa, cs, er = m.get("signals") or {}, m.get("price_action") or {}, m.get("candlesticks") or {}, _mod(m, "event_risk")
+    dv, me = _mod(m, "dividends"), _mod(m, "macro_events")
+    macro_in = None if not me or me.get("within_horizon") is None else \
+        [_pick(e, MACRO_BRIEF_KEYS) for e in me["within_horizon"] if _contract_tier(e)]
     primary = int(_num(sig.get("primary_horizon")) or _num(_get(sc, "primary_horizon")) or 0)
     supports = [_zone(z) for z in _get(lv, "supports") or []]
     resistances = [_zone(z) for z in _get(lv, "resistances") or []]
@@ -326,6 +370,11 @@ def _horizon(m):
             "coverage": _num(_get(base, "coverage", "within_95_band"))},
         "stops_ref": None if not rk else {"long": _stops(rk.get("long_side")), "short": _stops(rk.get("short_side"))},
         "earnings_within_horizon": None if not er else er.get("within_horizon"),
+        # a symbol that pays no dividends has no ex-date inside any horizon; unknown (none announced) stays null
+        "ex_dividend_within_horizon": None if not dv else (False if dv.get("pays_dividends") is False
+                                                           else dv.get("within_horizon")),
+        "macro_within_horizon": macro_in,
+        "macro_complete": None if not me else _get(me, "coverage", "complete"),
         "signals": _evidence(sig.get("active"), primary),
         "patterns": _evidence(pa.get("active"), primary, "price_action") + _evidence(cs.get("active"), primary, "candlesticks"),
     }
@@ -350,7 +399,8 @@ def build(swing: dict, position: dict) -> dict:
                 for k in SHARED if swing.get(k) != position.get(k)]
     dq = _data_quality(m.get("data_quality"))
     if dq["stale"]:
-        warnings.append(f"stale data: the last bar is {dq['business_days_behind']} business days behind")
+        unit = "NYSE sessions" if dq["calendar_source"] in ("fmp+rules", "rules") else "business days"
+        warnings.append(f"stale data: the last bar is {dq['business_days_behind']} {unit} behind")
     if dq["partial_bar_excluded"]:
         warnings.append(f"today's partial bar ({dq['partial_bar_excluded']}) is excluded")
     if dq["illiquid"]:
@@ -383,6 +433,8 @@ def build(swing: dict, position: dict) -> dict:
         "data_quality": dq,
         "market": _market(_mod(m, "market_context")),
         "event": event,
+        "dividend": _dividend(m.get("dividends")),
+        "macro": _macro(m.get("macro_events")),
         "volatility": _volatility(_mod(m, "volatility")),
         "extension": _extension(_mod(m, "mean_reversion")),
         "trend": _trend(_mod(m, "trend_momentum"), _mod(m, "levels")),

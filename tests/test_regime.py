@@ -198,6 +198,26 @@ def test_regime_short_history_still_labels():
     assert tiny["label"] == "Undetermined"
 
 
+def test_regime_notes_when_dividends_pull_the_price_as_traded_below_the_total_return():
+    # HYG 2026-11-04: the price as traded fell 3.3% over 252 bars while the total return was +2.6%, so every vote
+    # read "down"; the readings stay on prices as traded, and a note says why they lean down
+    bars = bars_from_close(np.linspace(100.0, 97.0, 300))           # -2.5% over the last 252 bars
+    plain = regime.build_regime(make_ctx(bars))
+    assert plain["direction_sign"] == -1 and plain["notes"] == []
+    paid = bars.copy()
+    paid["adj_close"] = paid["close"] * np.cumprod(np.full(300, 1.0002))   # +5.2% a year of dividends
+    out = regime.build_regime(make_ctx(paid))
+    assert out["notes"] == [
+        "dividends: over the last 252 bars the price as traded returned -2.5% against a total return of +2.5%; "
+        "the SMAs, MACD, trend votes, weekly direction and 52-week high use prices as traded, which drop by each "
+        "dividend on its ex-date, so the dividends paid pull these readings down"]
+    assert (out["direction"], out["strength"], out["label"]) == (plain["direction"], plain["strength"], plain["label"])
+    small = bars.copy()
+    small["adj_close"] = small["close"] * np.cumprod(np.full(300, 1.0001))  # 2.5 points a year: below the 3-point bar
+    assert regime.build_regime(make_ctx(small))["notes"] == []
+    assert regime.dividend_drift_note(paid.iloc[-252:]) is None               # needs 253 bars
+
+
 # ---------------------------------------------------------------------------- I. multi-timeframe
 def test_alignment_truth_table():
     assert regime.alignment(1, 1) == "confirms"
@@ -233,3 +253,13 @@ def test_multi_timeframe_partial_week_and_short_history():
     short = regime.build_multi_timeframe(make_ctx(synthetic_bars(150)))
     assert short["weekly"]["sma40w"] is None and short["alignment"] is None
     assert any("40 weekly bars" in n for n in short["notes"])
+
+
+def test_multi_timeframe_week_cut_short_by_a_holiday_is_complete_with_the_calendar():
+    import market_calendar as MC
+    bars = synthetic_bars(400, start="2023-01-02").loc[:"2024-03-28"]   # the Thursday before Good Friday 2024
+    plain = regime.build_multi_timeframe(make_ctx(bars))
+    cal = regime.build_multi_timeframe(make_ctx(bars, calendar=MC.build_calendar(None, end_year=2025)))
+    assert plain["weekly"]["partial_week"] is True and any("partial" in n for n in plain["notes"])
+    assert cal["weekly"]["partial_week"] is False and not any("partial" in n for n in cal["notes"])
+    assert cal["weekly"]["date"] == plain["weekly"]["date"] == "2024-03-28"

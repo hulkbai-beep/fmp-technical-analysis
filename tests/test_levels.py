@@ -10,7 +10,7 @@ import config as C
 import levels as L
 from conftest import synthetic_bars
 
-REQUIRED_LEVEL_KEYS = {"price", "zone_low", "zone_high", "sources", "touches", "holds", "breaks", "flips",
+REQUIRED_LEVEL_KEYS = {"price", "zone_low", "zone_high", "sources", "touches", "holds", "breaks", "weak", "flips",
                        "fresh", "volume_share", "score", "distance_pct", "distance_atr"}
 
 
@@ -234,7 +234,7 @@ def test_zone_tests_hold_break_and_flip():
         (2, 1, "hold", False), (5, 1, "break", False), (8, -1, "hold", True)]
     scored, = L.score_zones([{"price": 10.25, "zone_low": 10.0, "zone_high": 10.5, "weight": 2.0}],
                             df, {"available": False}, atr=1.0, half_life=1e12)
-    assert (scored["touches"], scored["holds"], scored["breaks"], scored["flips"]) == (3, 2, 1, 1)
+    assert (scored["touches"], scored["holds"], scored["breaks"], scored["weak"], scored["flips"]) == (3, 2, 1, 0, 1)
     assert scored["score"] == pytest.approx(1.0 - 0.5 + 1.5 + C.LEVEL_CONFLUENCE_WEIGHT * 2.0)
     assert scored["fresh"] is False and scored["last_test"] == df.index[8].strftime("%Y-%m-%d")
 
@@ -248,6 +248,10 @@ def test_zone_tests_leave_out_unresolved_tests_and_count_jumps_and_weak_ones():
     assert [t["result"] for t in L.zone_tests(jump, 10.0, 10.5, atr=1.0)] == ["break"]
     weak = frame([12, 11, 11.1, 10.9, 11.0], [11, 10.2, 10.7, 10.3, 10.8])   # out above, no 1-ATR rally, back in
     assert [t["result"] for t in L.zone_tests(weak, 10.0, 10.5, atr=1.0)] == ["weak"]
+    (scored,) = L.score_zones([{"price": 10.25, "zone_low": 10.0, "zone_high": 10.5, "weight": 0.0}],
+                              weak, {"available": False}, atr=1.0, half_life=1e12)
+    # touches = holds + breaks + weak, so a report can print all three without arithmetic
+    assert (scored["touches"], scored["holds"], scored["breaks"], scored["weak"]) == (1, 0, 0, 1)
 
 
 def test_score_zones_decay_and_volume_share():
@@ -429,6 +433,44 @@ def test_build_levels_at_all_time_high_has_no_resistances():
     assert out["supports"] and all(x["zone_high"] < df["close"].iloc[-1] for x in out["supports"])
 
 
+def test_a_record_close_well_below_its_own_high_is_at_the_high():
+    # AAPL 2026-11-04: a record close (349.51 > 348.91) and a record high (354.47) on one bar, but the close
+    # ended 0.58 ATR below that high; within-0.5-ATR-of-the-high alone said "not at a high"
+    n = 300
+    close = 100.0 + np.arange(n, dtype=float)
+    high, low = close + 0.5, close - 1.0
+    high[-1] = close[-1] + 4.0                             # a long upper wick on the last bar
+    df = frame(high, low)
+    df["close"] = close
+    out = L.build_levels(make_ctx(df))
+    assert df["close"].iloc[-1] < out["high_52w"] - C.EXTREME_NEAR_ATR * out["atr"]
+    ext = out["extremes"]
+    assert (ext["at_high_52w"], ext["at_all_time_high"], ext["at_low_52w"], ext["at_all_time_low"]) == \
+        (True, True, False, False)
+    assert "highest close of the period" in ext["rule"] and f"{C.EXTREME_NEAR_ATR:g} ATR" in ext["rule"]
+    assert any(n.startswith("price at an all-time high") for n in out["notes"])
+    # a pullback 3 below the prior close is neither the highest close nor near the high: not at a high
+    close2 = close[:-1].copy()
+    close2[-1] = close2[-2] - 3.0
+    df2 = frame(close2 + 0.5, close2 - 1.0)
+    df2["close"] = close2
+    ext2 = L.build_levels(make_ctx(df2))["extremes"]
+    assert not ext2["at_high_52w"] and not ext2["at_all_time_high"]
+
+
+def test_extremes_closing_basis_mirrors_for_lows_and_separates_52_weeks_from_history():
+    bars = frame([30.0] * 50 + [20.0] * 260, [28.0] * 50 + [18.0] * 260)
+    bars["close"] = [29.0] * 50 + [19.5] * 259 + [19.0]   # the lowest close, 1 above the lowest low (18)
+    r52 = L._range_52w(bars, [])
+    ext = L._extremes(bars, r52, 19.0, near=0.1)
+    assert ext["at_low_52w"] and ext["at_all_time_low"] and not ext["at_high_52w"]
+    old = bars.copy()
+    old.iloc[0, old.columns.get_loc("close")] = 10.0        # a lower close outside the last 252 bars
+    old.iloc[0, old.columns.get_loc("low")] = 9.0
+    ext = L._extremes(old, L._range_52w(old, []), 19.0, near=0.1)
+    assert ext["at_low_52w"] and not ext["at_all_time_low"]
+
+
 def test_build_levels_short_history_and_missing_sma200():
     out = L.build_levels(make_ctx(synthetic_bars(n=120)))
     assert out["available"] is True
@@ -438,6 +480,31 @@ def test_build_levels_short_history_and_missing_sma200():
     assert "only 120 bars" in notes
     assert "SMA200 unavailable" in notes
     assert "52-week high/low computed over 120 bars" in notes
+
+
+def test_sma100_is_a_moving_average_candidate():
+    bars = synthetic_bars()
+    ctx = make_ctx(bars)
+    out = L.build_levels(ctx)
+    mas = {c["source"]: c for c in out["candidates"] if L.source_type(c["source"]) == "moving_average"}
+    assert list(mas) == ["sma50", "sma100", "sma200"]
+    w = C.LEVEL_SOURCE_WEIGHTS["moving_average"]
+    assert all(c["weight"] == w for c in mas.values())                     # same weight as the 50 / 200-day lines
+    assert mas["sma100"]["price"] == pytest.approx(ctx["ind"]["sma100"].iloc[-1])
+    assert mas["sma100"]["price"] == pytest.approx(bars["close"].iloc[-100:].mean())
+    assert "date" not in mas["sma100"]                                     # undated, like the other averages
+    zone = L.density_zones([mas["sma100"]], out["atr"])[0]                 # a zone names it with its family
+    assert zone["sources"] == ["sma100"] and zone["source_types"] == ["moving_average"]
+
+
+def test_build_levels_without_sma100():
+    out = L.build_levels(make_ctx(synthetic_bars(n=90)))
+    assert out["available"] is True
+    sources = {c["source"] for c in out["candidates"]}
+    assert "sma50" in sources and not {"sma100", "sma200"} & sources
+    notes = " | ".join(out["notes"])
+    assert "SMA100 unavailable at the last bar: not used as a level" in notes and "SMA200 unavailable" in notes
+    assert "sma100" in {c["source"] for c in L.build_levels(make_ctx(synthetic_bars(n=120)))["candidates"]}
 
 
 def test_build_levels_without_atr_is_unavailable():
@@ -454,3 +521,180 @@ def test_build_levels_ignores_bars_after_as_of():
     ref = L.build_levels(make_ctx(bars.loc[:cut]))
     assert out["window_end"] == ref["window_end"] == ctx["as_of"]
     assert out["supports"] == ref["supports"] and out["resistances"] == ref["resistances"]
+
+
+# ---------------------------------------------------------------------------- ex-dividend gaps
+def legacy_unfilled_gaps(df):
+    """levels.unfilled_gaps before the dividend handling (verbatim), the reference for "no change"."""
+    high = df["high"].to_numpy(dtype=float, na_value=np.nan)
+    low = df["low"].to_numpy(dtype=float, na_value=np.nan)
+    if len(df) < 2:
+        return []
+    later_low = np.r_[np.fmin.accumulate(low[::-1])[::-1][1:], np.inf]
+    later_high = np.r_[np.fmax.accumulate(high[::-1])[::-1][1:], -np.inf]
+    later_low = np.where(np.isnan(later_low), np.inf, later_low)
+    later_high = np.where(np.isnan(later_high), -np.inf, later_high)
+    out = []
+    for t in range(1, len(df)):
+        if low[t] > high[t - 1] and later_low[t] > high[t - 1]:
+            top = min(low[t], later_low[t])
+            out.append({"date": L._iso(df.index[t]), "direction": "up",
+                        "top": float(top), "bottom": float(high[t - 1]), "filled": False,
+                        "partially_filled": bool(top < low[t]),
+                        "gap_top": float(low[t]), "gap_bottom": float(high[t - 1])})
+        elif high[t] < low[t - 1] and later_high[t] < low[t - 1]:
+            bottom = max(high[t], later_high[t])
+            out.append({"date": L._iso(df.index[t]), "direction": "down",
+                        "top": float(low[t - 1]), "bottom": float(bottom), "filled": False,
+                        "partially_filled": bool(bottom > high[t]),
+                        "gap_top": float(low[t - 1]), "gap_bottom": float(high[t])})
+    return out
+
+
+def with_dividend(df, at, amount):
+    """df with a "dividend" column: `amount` on the bar positions in `at`, 0 elsewhere."""
+    div = np.zeros(len(df))
+    div[np.atleast_1d(at)] = amount
+    return df.assign(dividend=div)
+
+
+def test_ex_dividend_drop_within_the_dividend_is_not_a_gap():
+    # bar 1 drops below bar 0's low by 0.2 on its ex-date, paying 0.3; later bars stay below
+    df = frame([11.0, 9.8, 9.7, 9.75], [10.0, 9.5, 9.4, 9.45])
+    raw = L.unfilled_gaps(df)
+    assert [(g["direction"], g["top"], g["bottom"], g["ex_dividend"]) for g in raw] == [("down", 10.0, 9.8, None)]
+    ex = with_dividend(df, 1, 0.3)
+    assert L.unfilled_gaps(ex) == []
+    assert L.ex_dividend_gaps(ex) == [{"date": L._iso(df.index[1]), "amount": 0.3, "raw_direction": "down",
+                                       "raw_unfilled": True}]
+    assert L.ex_dividend_gaps(df) == [] and L.ex_dividend_gaps(df.iloc[:1]) == []
+    # filled later in raw terms (a high back at bar 0's low): still listed, flagged as no level change
+    refilled = with_dividend(frame([11.0, 9.8, 10.0], [10.0, 9.5, 9.4]), 1, 0.3)
+    assert L.ex_dividend_gaps(refilled)[0]["raw_unfilled"] is False
+
+
+def test_ex_dividend_gap_beyond_the_dividend_stays_with_its_zone_net_of_it():
+    # bar 1's high is 0.5 under bar 0's low: 0.2 more than the 0.3 dividend; bar 2 trades into it
+    df = with_dividend(frame([11.0, 9.5, 9.6, 9.4], [10.0, 9.0, 9.1, 9.0]), 1, 0.3)
+    (g,) = L.unfilled_gaps(df)
+    assert g["direction"] == "down" and g["ex_dividend"] == 0.3
+    assert (g["gap_bottom"], g["gap_top"]) == pytest.approx((9.5, 9.7))     # zone edge 10.0 - 0.3
+    assert (g["bottom"], g["top"], g["partially_filled"]) == pytest.approx((9.6, 9.7, True))
+    assert L.ex_dividend_gaps(df) == []
+    # a later high reaching the net edge fills it, although the raw edge (10.0) is not reached
+    filled = with_dividend(frame([11.0, 9.5, 9.7], [10.0, 9.0, 9.1]), 1, 0.3)
+    assert L.unfilled_gaps(filled) == []
+
+
+def test_ex_dividend_up_gap_keeps_its_raw_zone():
+    # a dividend can only explain a drop: a gap up on an ex-dividend bar is tested and bounded with high[t-1]
+    df = frame([11.0, 12.0, 12.2], [10.0, 11.2, 11.5])
+    up = with_dividend(df, 1, 0.3)
+    (g,) = L.unfilled_gaps(up)
+    assert g == {**legacy_unfilled_gaps(df)[0], "ex_dividend": 0.3}
+    assert (g["direction"], g["bottom"], g["top"], g["gap_bottom"], g["gap_top"]) == ("up", 11.0, 11.2, 11.0, 11.2)
+    assert L.ex_dividend_gaps(up) == []
+    # filled at the raw edge: a later low of 10.9 closes it, although it stays above high[t-1] - D = 10.7
+    assert L.unfilled_gaps(with_dividend(frame([11.0, 12.0, 12.2], [10.0, 11.2, 10.9]), 1, 0.3)) == []
+
+
+@pytest.mark.parametrize("highs, lows, amount", [
+    ([11.0, 11.0, 11.0], [10.0, 10.0, 10.0], 1.5),     # trades flat on its ex-date
+    ([11.0, 10.9, 11.0], [10.0, 10.6, 10.65], 0.5),    # a little lower, above the prior high net of D
+    ([11.0, 11.4, 11.5], [10.0, 10.8, 10.9], 0.5),     # a little higher, overlapping the prior bar
+])
+def test_an_ex_dividend_bar_that_holds_up_is_no_gap_up(highs, lows, amount):
+    df = frame(highs, lows)
+    assert L.unfilled_gaps(df) == []
+    ex = with_dividend(df, 1, amount)
+    assert L.unfilled_gaps(ex) == [] and L.ex_dividend_gaps(ex) == []
+
+
+@pytest.mark.parametrize("seed", [3, 11])
+def test_dividends_never_change_gaps_up(seed):
+    bars = synthetic_bars(n=600, seed=seed, vol=0.03)
+    div = (0.02 * bars["close"].shift(1)).fillna(0.0)                 # a 2% dividend on every bar but the first
+    ex = bars.assign(dividend=div)
+    legacy_up = [g for g in legacy_unfilled_gaps(bars) if g["direction"] == "up"]
+    got_up = [g for g in L.unfilled_gaps(ex) if g["direction"] == "up"]
+    assert legacy_up and [{k: v for k, v in g.items() if k != "ex_dividend"} for g in got_up] == legacy_up
+    assert all(g["ex_dividend"] == pytest.approx(div.loc[pd.Timestamp(g["date"])]) for g in got_up)
+    assert {g["raw_direction"] for g in L.ex_dividend_gaps(ex)} <= {"down"}
+
+
+def test_a_dividend_on_a_bar_after_the_gap_changes_nothing():
+    df = frame([11.0, 9.5, 9.6, 9.4], [10.0, 9.0, 9.1, 9.0])
+    later = with_dividend(df, 2, 0.4)                 # the gap is on bar 1; bar 2 goes ex
+    assert L.unfilled_gaps(later) == [{**g, "ex_dividend": None} for g in legacy_unfilled_gaps(df)]
+
+
+@pytest.mark.parametrize("seed", [1, 7, 11, 23])
+def test_gaps_without_dividends_match_the_legacy_function(seed):
+    bars = synthetic_bars(n=600, seed=seed, vol=0.03)
+    expected = [{**g, "ex_dividend": None} for g in legacy_unfilled_gaps(bars)]
+    assert expected                                                   # the series has gaps to compare
+    assert L.unfilled_gaps(bars) == expected
+    assert L.unfilled_gaps(bars.assign(dividend=0.0)) == expected
+    assert L.unfilled_gaps(bars.assign(dividend=np.nan)) == expected
+    assert L.ex_dividend_gaps(bars.assign(dividend=0.0)) == []
+
+
+def test_ex_dividend_gaps_list_raw_gaps_the_dividend_explains_filled_or_not():
+    bars = synthetic_bars(n=400, seed=3, vol=0.03)
+    raw = legacy_unfilled_gaps(bars)
+    downs = [i for i in range(1, len(bars)) if bars["high"].iloc[i] < bars["low"].iloc[i - 1]]
+    assert len(downs) >= 3
+    # each raw gap down goes ex with a dividend 1 cent larger than the gap: all of them neutralized
+    div = np.zeros(len(bars))
+    for i in downs:
+        div[i] = bars["low"].iloc[i - 1] - bars["high"].iloc[i] + 0.01
+    ex = bars.assign(dividend=div)
+    got = L.ex_dividend_gaps(ex)
+    assert [g["date"] for g in got] == [L._iso(bars.index[i]) for i in downs]
+    assert all(g["raw_direction"] == "down" and g["amount"] > 0 for g in got)
+    # raw_unfilled marks exactly the raw gaps the legacy function still listed as levels
+    assert [g["date"] for g in got if g["raw_unfilled"]] == [g["date"] for g in raw if g["direction"] == "down"]
+    assert any(not g["raw_unfilled"] for g in got)
+    assert [g for g in L.unfilled_gaps(ex) if g["direction"] == "down"] == []
+    assert [g["date"] for g in L.unfilled_gaps(ex) if g["direction"] == "up"] == \
+        [g["date"] for g in raw if g["direction"] == "up"]
+
+
+def test_build_levels_gap_adjustment_and_unchanged_without_dividends():
+    bars = synthetic_bars(n=400, vol=0.03)
+    ctx = make_ctx(bars)
+    base = L.build_levels(ctx)
+    lookback = C.HORIZONS["swing"]["levels_lookback"]
+    assert base["gap_adjustment"] == {"method": L.GAP_DIVIDEND_METHOD, "ex_dividend_bars": 0, "neutralized": []}
+    assert [{k: v for k, v in g.items() if k != "ex_dividend"} for g in base["gaps"]] == \
+        legacy_unfilled_gaps(bars.iloc[-(lookback + 1):])
+    assert L.build_levels({**ctx, "bars": bars.assign(dividend=0.0)}) == base
+
+    # ex-dividend drops on raw gap-down bars of the window, each 1 cent larger than its gap
+    gap_bars = bars.iloc[-(lookback + 1):]
+    downs = [i for i in range(1, len(gap_bars)) if gap_bars["high"].iloc[i] < gap_bars["low"].iloc[i - 1]]
+    assert downs
+    div = pd.Series(0.0, index=bars.index)
+    for i in downs:
+        div[gap_bars.index[i]] = gap_bars["low"].iloc[i - 1] - gap_bars["high"].iloc[i] + 0.01
+    div[bars.index[-lookback - 5]] = 0.2                             # before the window: not counted
+    out = L.build_levels({**ctx, "bars": bars.assign(dividend=div)})
+    adj = out["gap_adjustment"]
+    assert adj["ex_dividend_bars"] == len(downs)
+    assert [g["date"] for g in adj["neutralized"]] == [L._iso(gap_bars.index[i]) for i in downs]
+    assert not any(g["direction"] == "down" for g in out["gaps"])
+    assert not any(c["source"].startswith("gap_down") for c in out["candidates"])
+    open_raw = [g["date"] for g in legacy_unfilled_gaps(gap_bars) if g["direction"] == "down"]
+    assert [g["date"] for g in adj["neutralized"] if g["raw_unfilled"]] == open_raw
+    note = next(n for n in out["notes"] if "raw gap(s) on ex-dividend bars" in n)
+    assert note.startswith(f"{len(downs)} raw gap(s) on ex-dividend bars are no larger than the dividend")
+    assert (f"{len(open_raw)} of them would otherwise be unfilled-gap levels" in note if open_raw
+            else "no gap level changes" in note)
+    assert not any("raw gap(s) on ex-dividend bars" in n for n in base["notes"])
+
+
+def test_build_levels_notes_when_dividend_data_is_missing():
+    bars = synthetic_bars(n=400)
+    out = L.build_levels({**make_ctx(bars), "skipped": {"dividends": "restricted: Premium endpoint"}})
+    assert any("dividend data unavailable (restricted: Premium endpoint)" in n for n in out["notes"])
+    assert out["gap_adjustment"]["ex_dividend_bars"] == 0

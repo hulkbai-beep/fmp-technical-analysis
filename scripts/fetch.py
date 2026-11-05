@@ -1,11 +1,19 @@
 """
 Data layer: fetch daily bars and reference data from FMP, then validate them.
 
-load_all() makes about ten requests for an uncached stock (profile, quote, earnings, two
-chunks each of /full and /dividend-adjusted history, SPY, the sector ETF and ^VIX); a
-same-day re-run is served from the client's cache. Missing or plan-restricted data is
-recorded in `skipped` / `notes` and never filled in. A benchmark without dividend-adjusted
-prices falls back to split-adjusted /full prices (price return), and says so.
+load_all() makes about thirteen requests for an uncached stock (profile, the NYSE holiday list,
+quote, earnings, two chunks each of /full and /dividend-adjusted history, the symbol's dividends, SPY,
+the sector ETF, ^VIX and the economic calendar; eleven for an ETF, ten for SPY); a same-day re-run is
+served from the client's cache. Missing or plan-restricted data is recorded in `skipped` / `notes`
+and never filled in. A benchmark without dividend-adjusted prices falls back to split-adjusted /full
+prices (price return), and says so.
+
+The NYSE calendar (market_calendar.py: FMP's holiday list united with the exchange rules, the rules
+alone when FMP's list cannot be loaded) drives validation: the partial-bar rule, the stale check and
+data-gap flags count NYSE sessions. It also sets the client's cache cutoff (client.complete_from), so
+a copy cached before today's bar is complete (13:15 on an early close) is not served as complete. The
+stock's bars carry a "dividend" column: the split-adjusted dividend going ex on each bar
+(dividends.py), 0 elsewhere and everywhere when the dividends could not be loaded.
 """
 from __future__ import annotations
 
@@ -13,11 +21,16 @@ import numpy as np
 import pandas as pd
 
 import config as C
+import dividends as D
 import fmp_client
+import market_calendar as MC
 from symbols import normalize_symbol
 
 FULL = "historical-price-eod/full"
 ADJUSTED = "historical-price-eod/dividend-adjusted"
+HOLIDAYS = "holidays-by-exchange"
+DIVIDENDS = "dividends"
+ECONOMIC_CALENDAR = "economic-calendar"
 
 LIST_MAX = 10  # dates kept per data-quality flag (most recent)
 
@@ -52,12 +65,35 @@ def _day(ts) -> str:
     return pd.Timestamp(ts).strftime("%Y-%m-%d")
 
 
-def expected_session(now_ny: pd.Timestamp) -> pd.Timestamp:
-    """Date of the last session that should be complete at `now_ny` (exchange holidays not modelled)."""
+def expected_session(now_ny: pd.Timestamp, calendar=None) -> pd.Timestamp:
+    """Date of the last session that should be complete at `now_ny`: calendar.expected_session with
+    an exchange calendar (market_calendar.MarketCalendar), else weekdays (exchange holidays not
+    modelled)."""
+    if calendar is not None:
+        return calendar.expected_session(now_ny)
     today = pd.Timestamp(now_ny.date())
     if today.weekday() < 5 and _after_close(now_ny):
         return today
     return today - pd.offsets.BDay(1)
+
+
+def _complete_from(calendar, day) -> str:
+    """"HH:MM" New York time from which a bar dated `day` counts as complete: the session's close +
+    C.CLOSE_BUFFER_MINUTES with a calendar (13:15 on a 13:00 early close), else C.MARKET_CLOSE_BUFFER."""
+    if calendar is None:
+        return C.MARKET_CLOSE_BUFFER
+    h, m = calendar.close_time(day).split(":")
+    due = int(h) * 60 + int(m) + C.CLOSE_BUFFER_MINUTES
+    return f"{due // 60:02d}:{due % 60:02d}"
+
+
+def _count_basis(calendar) -> str:
+    """What the stale check counts: NYSE sessions with an exchange calendar, else weekdays."""
+    if calendar is None:
+        return "weekdays (no exchange calendar)"
+    if calendar.source == "weekdays":
+        return "weekdays (calendar without exchange holidays)"
+    return f"{C.CALENDAR_EXCHANGE} sessions"
 
 
 # ---------------------------------------------------------------------------- reference data
@@ -195,13 +231,21 @@ def stock_frame(full_rows, adj_rows) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------- validation
-def validate(bars, now_ny=None, symbol=None, check_volume=True):
+def validate(bars, now_ny=None, symbol=None, check_volume=True, calendar=None):
     """Sort, de-duplicate and sanity-check daily bars. Returns (clean_bars, data_quality).
 
     Drops: duplicate dates (keeps the last), rows with missing or non-positive OHLC (and,
     when check_volume, missing or negative volume), and today's bar while the session is not
-    yet over (partial). Flags only: inconsistent OHLC, zero volume, calendar gaps, staleness,
-    dividend-adjusted coverage and liquidity. Set check_volume=False for ^VIX (no volume)."""
+    yet over (partial). Flags only: inconsistent OHLC, zero volume, data gaps, staleness,
+    dividend-adjusted coverage and liquidity. Set check_volume=False for ^VIX (no volume).
+
+    With an exchange calendar (market_calendar.MarketCalendar), today's bar is partial until the
+    session's close + C.CLOSE_BUFFER_MINUTES (16:15, 13:15 on an early close), staleness counts
+    NYSE sessions after the last bar up to calendar.expected_session (stale.business_days_behind
+    keeps its name) and a data gap is at least C.GAP_MISSING_SESSIONS sessions without a bar
+    between consecutive bars, so exchange holidays and closures (9/11, Hurricane Sandy) are not
+    gaps. Without one: C.MARKET_CLOSE_BUFFER, weekdays, and bars more than C.GAP_CALENDAR_DAYS
+    calendar days apart. stale.basis and gaps.basis say which rule applied."""
     now = to_ny(now_ny)
     tag = f"{symbol}: " if symbol else ""
     warnings = []
@@ -224,10 +268,13 @@ def validate(bars, now_ny=None, symbol=None, check_volume=True):
 
     partial = None
     today = pd.Timestamp(now.date())
-    if len(df) and df.index[-1].normalize() == today and not _after_close(now):
+    after_close = _after_close(now) if calendar is None else calendar.after_close(now)
+    if len(df) and df.index[-1].normalize() == today and not after_close:
         last = df.iloc[-1]
+        early = (f", the {calendar.close_time(today)} early close + {C.CLOSE_BUFFER_MINUTES} minutes"
+                 if calendar is not None and today in calendar.early else "")
         reason = (f"bar dated {_day(today)} is partial (run at {now:%H:%M} New York time, before "
-                  f"{C.MARKET_CLOSE_BUFFER}); excluded from the analysis")
+                  f"{_complete_from(calendar, today)}{early}); excluded from the analysis")
         partial = {"date": _day(today), **{c: float(last[c]) for c in PRICE + ["volume"]}, "reason": reason}
         df = df.iloc[:-1]
         warnings.append(f"{tag}{reason}")
@@ -244,23 +291,30 @@ def validate(bars, now_ny=None, symbol=None, check_volume=True):
         if len(zv):
             warnings.append(f"{tag}{len(zv)} zero-volume bars (latest {_day(zv[-1])})")
 
-    steps = pd.Series(df.index, index=df.index).diff().dt.days
-    gap_at = steps.index[steps > C.GAP_CALENDAR_DAYS]
-    gap_items = [{"after": _day(df.index[df.index.get_loc(d) - 1]), "before": _day(d),
-                  "calendar_days": int(steps[d])} for d in gap_at[-LIST_MAX:]]
-    if len(gap_at):
-        g = gap_items[-1]
-        warnings.append(f"{tag}{len(gap_at)} gaps longer than {C.GAP_CALENDAR_DAYS} calendar days "
-                        f"(latest {g['after']} -> {g['before']})")
+    gaps = _data_gaps(df, calendar)
+    if gaps["count"]:
+        g = gaps["items"][-1]
+        if calendar is None:
+            warnings.append(f"{tag}{gaps['count']} gaps longer than {C.GAP_CALENDAR_DAYS} calendar days "
+                            f"(latest {g['after']} -> {g['before']})")
+        else:
+            warnings.append(f"{tag}{gaps['count']} data gaps: no bar on {C.CALENDAR_EXCHANGE} sessions between "
+                            f"consecutive bars (latest {g['after']} -> {g['before']}, {g['missing_sessions']} "
+                            f"session(s) missing)")
 
-    expected = expected_session(now)
-    stale = {"is_stale": False, "last_bar": None, "expected_session": _day(expected), "business_days_behind": None}
+    expected = expected_session(now, calendar)
+    stale = {"is_stale": False, "last_bar": None, "expected_session": _day(expected),
+             "business_days_behind": None, "basis": _count_basis(calendar)}
     if len(df):
         last_bar = df.index[-1].normalize()
-        behind = len(pd.bdate_range(last_bar + pd.Timedelta(days=1), expected)) if expected > last_bar else 0
+        if calendar is None:
+            behind = len(pd.bdate_range(last_bar + pd.Timedelta(days=1), expected)) if expected > last_bar else 0
+        else:
+            behind = calendar.sessions_between(last_bar, expected)
         stale.update(last_bar=_day(last_bar), business_days_behind=behind, is_stale=behind > C.STALE_BDAYS)
         if stale["is_stale"]:
-            warnings.append(f"{tag}last bar {_day(last_bar)} is {behind} business days behind the "
+            unit = "business days" if calendar is None else stale["basis"]
+            warnings.append(f"{tag}last bar {_day(last_bar)} is {behind} {unit} behind the "
                             f"expected session {_day(expected)} (stale data)")
 
     adj_coverage, adj_missing = None, None
@@ -296,7 +350,7 @@ def validate(bars, now_ny=None, symbol=None, check_volume=True):
         "inconsistent_ohlc": {"count": int(inconsistent.sum()),
                               "dates": [_day(d) for d in df.index[inconsistent][-LIST_MAX:]]},
         "zero_volume": zero_volume,
-        "gaps": {"count": int(len(gap_at)), "items": gap_items},
+        "gaps": gaps,
         "partial_bar_excluded": partial,
         "stale": stale,
         "adj_coverage": adj_coverage,
@@ -305,6 +359,32 @@ def validate(bars, now_ny=None, symbol=None, check_volume=True):
         "warnings": warnings,
     }
     return df, dq
+
+
+def _data_gaps(df: pd.DataFrame, calendar=None) -> dict:
+    """{count, items (the latest LIST_MAX), basis}: consecutive bars with at least C.GAP_MISSING_SESSIONS
+    sessions of `calendar` between them (items carry missing_sessions), or, without a calendar, more
+    than C.GAP_CALENDAR_DAYS calendar days apart."""
+    idx = df.index
+    days = pd.Series(idx, index=idx).diff().dt.days
+    if calendar is None:
+        at = np.flatnonzero((days > C.GAP_CALENDAR_DAYS).to_numpy())
+        missing = None
+        basis = f"consecutive bars more than {C.GAP_CALENDAR_DAYS} calendar days apart (no exchange calendar)"
+    else:
+        missing = np.zeros(len(idx), dtype=np.int64)          # missing[i]: sessions between bar i-1 and bar i
+        if len(idx) > 1:
+            missing[1:] = calendar.missing_sessions_between(idx[:-1], idx[1:])
+        at = np.flatnonzero(missing >= C.GAP_MISSING_SESSIONS)
+        basis = (f"{C.GAP_MISSING_SESSIONS} or more {_count_basis(calendar)} without a bar between consecutive "
+                 f"bars (exchange holidays and closures are not sessions, so not gaps)")
+    items = []
+    for i in at[-LIST_MAX:]:
+        item = {"after": _day(idx[i - 1]), "before": _day(idx[i]), "calendar_days": int(days.iloc[i])}
+        if missing is not None:
+            item["missing_sessions"] = int(missing[i])
+        items.append(item)
+    return {"count": int(len(at)), "items": items, "basis": basis}
 
 
 def _liquidity(df):
@@ -332,10 +412,11 @@ def _reference(client, endpoint, symbol):
     return row, (None if row else problem or "no data returned")
 
 
-def _benchmark(client, symbol, endpoints, now, start):
+def _benchmark(client, symbol, endpoints, now, start, calendar=None):
     """Benchmark bars (benchmark column convention) from the first of `endpoints` that returns
     valid rows -> (bars|None, data_quality|None, problems). data_quality["basis"] names the price
-    basis used; `problems` says why each earlier endpoint (or every one) gave nothing."""
+    basis used; `problems` says why each earlier endpoint (or every one) gave nothing. The bars
+    are validated against `calendar` like the analysed symbol's."""
     problems = []
     for endpoint in endpoints:
         rows, problem = fetch_history(client, endpoint, symbol, start, pd.Timestamp(now.date()))
@@ -343,7 +424,8 @@ def _benchmark(client, symbol, endpoints, now, start):
             problems.append(problem)
             continue
         fields = BENCH_FIELDS if endpoint == ADJUSTED else FULL_FIELDS
-        bars, dq = validate(_with_adj_copy(_frame(rows, fields)), now, symbol, check_volume=symbol != C.VIX)
+        bars, dq = validate(_with_adj_copy(_frame(rows, fields)), now, symbol, check_volume=symbol != C.VIX,
+                            calendar=calendar)
         if bars.empty:
             problems.append(f"{endpoint}: no valid rows")
             continue
@@ -351,10 +433,78 @@ def _benchmark(client, symbol, endpoints, now, start):
     return None, None, problems
 
 
+def load_calendar(client, today) -> tuple[MC.MarketCalendar, str | None]:
+    """The NYSE calendar from ONE holidays-by-exchange request (C.HISTORY_START through Dec 31 of the
+    year after `today`, so the parameters change once a year and the client's C.CALENDAR_TTL_SECONDS
+    cache nearly always answers) united with the exchange rules. Returns (calendar, problem): when
+    FMP's list is restricted, fails or holds no usable row, the calendar comes from the rules alone
+    (source "rules") and `problem` says why; it is None when FMP's list was used."""
+    year = pd.Timestamp(today).year
+    rows, problem = fmp_client.get_with_reason(
+        client, HOLIDAYS, exchange=C.CALENDAR_EXCHANGE,
+        **{"from": C.HISTORY_START, "to": f"{year + C.CALENDAR_FUTURE_YEARS}-12-31"})
+    calendar = MC.build_calendar(None if problem else rows, problem,
+                                 end_year=year + C.CALENDAR_FUTURE_YEARS + 1)
+    return calendar, calendar.problem
+
+
+def fetch_dividends(client, symbol) -> tuple[list[dict] | None, int, str | None]:
+    """The symbol's ex-dividend dates from ONE dividends request -> (entries, dropped, problem).
+
+    entries is dividends.parse_dividends' list (ascending by ex-date, amounts split-adjusted; []
+    for a symbol that pays none) and dropped the rows it could not use; entries is None, with the
+    reason in `problem`, when the request was restricted or failed."""
+    data, problem = fmp_client.get_with_reason(client, DIVIDENDS, symbol=symbol)
+    if problem:
+        return None, 0, problem
+    entries, dropped = D.parse_dividends(data)
+    return entries, dropped, None
+
+
+def macro_window(as_of) -> dict:
+    """The economic-calendar window for a run whose last bar is `as_of`: C.MACRO_WINDOW_DAYS days
+    starting on as_of itself (FMP silently keeps only ~90 days per request, counted back from `to`).
+    FMP filters by UTC date, and a release after the as_of close is still dated as_of in UTC (until
+    20:00 New York in summer, 19:00 in winter), so the window starts on as_of; macro.py drops every
+    release at or before the as_of close. It does not depend on the horizon, so the other horizon's
+    run is served from the cache."""
+    start = pd.Timestamp(as_of).normalize()
+    return {"from": _day(start), "to": _day(start + pd.Timedelta(days=C.MACRO_WINDOW_DAYS - 1))}
+
+
+def _has_country_rows(data, country=C.MACRO_COUNTRY) -> bool:
+    """True when `data` is a list holding at least one row of `country` (macro.py's test: any case,
+    surrounding spaces ignored)."""
+    return isinstance(data, list) and any(
+        isinstance(r, dict) and str(r.get("country") or "").strip().upper() == country for r in data)
+
+
+def fetch_macro(client, as_of) -> tuple[list | None, dict, str | None]:
+    """ONE economic-calendar request over macro_window(as_of) -> (rows, window, problem): FMP's rows
+    as returned (every country; macro.py keeps C.MACRO_COUNTRY), or None with the reason in
+    `problem` when the request was restricted or failed, or returned no C.MACRO_COUNTRY row. An
+    89-day window always lists US releases, so an empty answer (FMP answers [] without an error for
+    a range it does not serve) is missing data, not a window without events."""
+    window = macro_window(as_of)
+    data, problem = fmp_client.get_with_reason(client, ECONOMIC_CALENDAR, **window)
+    if problem is None and not _has_country_rows(data):
+        problem = (f"FMP economic-calendar returned no {C.MACRO_COUNTRY} rows for {window['from']} to "
+                   f"{window['to']}")
+    return (None if problem else data), window, problem
+
+
 def load_all(client, ticker, now=None, start=None) -> dict:
     """Fetch and validate everything the analysis needs for `ticker` (see CONTRACT "fetch.py").
     `start` (a date) cuts the history requested for the symbol, e.g. to drop a pre-merger SPAC shell.
-    Raises ValueError when the symbol has no usable price history."""
+    Raises ValueError when the symbol has no usable price history.
+
+    Requests, in order: profile, holidays-by-exchange, quote, earnings (stocks), /full and
+    /dividend-adjusted history, dividends, the benchmarks (SPY unless it is the symbol, the sector
+    ETF for a stock), ^VIX and the economic calendar. The calendar comes before every request the
+    client caches by the session rule, because it sets the client's cutoff (client.complete_from).
+    Besides the bars and benchmarks it returns `calendar` (the NYSE MarketCalendar), `dividends`
+    (parse_dividends entries; None when they could not be loaded), `macro_rows` (the economic-calendar
+    rows; None on failure or without a US row) and `macro_window`."""
     now = to_ny(now)
     symbol = normalize_symbol(ticker)
     today = pd.Timestamp(now.date())
@@ -368,12 +518,22 @@ def load_all(client, ticker, now=None, start=None) -> dict:
     profile, why = _reference(client, "profile", symbol)
     if profile is None:
         unavailable("profile", why)
-    quote, why = _reference(client, "quote", symbol)
-    if quote is None:
-        unavailable("quote", why)
     is_etf = bool(profile and (profile.get("isEtf") or profile.get("isFund")))
     if profile and profile.get("isActivelyTrading") is False:
         notes.append(f"profile reports {symbol} as not actively trading")
+
+    calendar, cal_problem = load_calendar(client, today)
+    if cal_problem:
+        notes.append(f"exchange calendar: {cal_problem}; {C.CALENDAR_EXCHANGE} holidays and early closes come "
+                     f"from the built-in exchange rules")
+    # the client's cache keeps a session endpoint's copy (bars, quote, earnings, dividends) only until the bar
+    # it holds is complete by validate()'s rule: the session's close + C.CLOSE_BUFFER_MINUTES (13:15 on an early
+    # close). With the fixed 16:15 a copy cached at noon would pass for the complete bar from 13:15 to 16:15.
+    client.complete_from = lambda day: _complete_from(calendar, day)
+
+    quote, why = _reference(client, "quote", symbol)
+    if quote is None:
+        unavailable("quote", why)
 
     earnings = None
     if is_etf:
@@ -395,10 +555,11 @@ def load_all(client, ticker, now=None, start=None) -> dict:
     adj_rows, adj_problem = fetch_history(client, ADJUSTED, symbol, max(start, first_full), today)
     if adj_problem:
         notes.append(f"dividend-adjusted prices: {adj_problem}")
-    bars, dq = validate(stock_frame(full_rows, adj_rows), now, symbol)
+    bars, dq = validate(stock_frame(full_rows, adj_rows), now, symbol, calendar=calendar)
     if bars.empty:
         raise ValueError(f"no price data for {symbol} (no valid rows after validation)")
     notes.extend(dq["warnings"])
+    dq["calendar"] = calendar.summary()
     dq["history_start_override"] = _day(pd.Timestamp(override)) if override is not None else None
     dq["spac_like_start"] = spac_like_start(bars) if override is None else None
     if dq["spac_like_start"]:
@@ -410,6 +571,15 @@ def load_all(client, ticker, now=None, start=None) -> dict:
                      f"--history-start set to the merger date to exclude it")
         dq["warnings"].append(notes[-1])
 
+    # ex-dividend dates as a bar column (0 on other bars, and on every bar when they could not be loaded);
+    # an ex-date without a bar goes to the bar of its first NYSE session (a multi-day closure included)
+    divs, dropped, why = fetch_dividends(client, symbol)
+    if divs is None:
+        unavailable("dividends", why)
+    bars = bars.assign(dividend=D.dividend_column(bars.index, divs or [], calendar))
+    dq["dividends"] = {"ex_dates": None if divs is None else len(divs),
+                       "rows_dropped": None if divs is None else dropped, "problem": why}
+
     # a plan without /dividend-adjusted: benchmarks go straight to /full (no wasted requests)
     adj_restricted = not adj_rows and str(adj_problem or "").startswith("restricted")
     bench_endpoints = (FULL,) if adj_restricted else (ADJUSTED, FULL)
@@ -417,7 +587,7 @@ def load_all(client, ticker, now=None, start=None) -> dict:
     benchmarks, basis = {}, {}
 
     def benchmark(module, sym):
-        frame, bdq, problems = _benchmark(client, sym, bench_endpoints, now, bench_start)
+        frame, bdq, problems = _benchmark(client, sym, bench_endpoints, now, bench_start, calendar)
         if frame is None:
             unavailable(module, f"{sym} data unavailable ({'; '.join(problems)})")
             return None
@@ -449,7 +619,7 @@ def load_all(client, ticker, now=None, start=None) -> dict:
             sector = benchmark("sector", etf)
             sector_etf = etf if sector is not None else None
 
-    vix, vix_dq, problems = _benchmark(client, C.VIX, (FULL,), now, bench_start)
+    vix, vix_dq, problems = _benchmark(client, C.VIX, (FULL,), now, bench_start, calendar)
     if vix is None:
         unavailable("vix", f"{C.VIX} data unavailable ({'; '.join(problems)})")
     else:
@@ -462,9 +632,16 @@ def load_all(client, ticker, now=None, start=None) -> dict:
     dq["benchmarks"] = benchmarks
     dq["benchmark_basis"] = basis
 
+    # scheduled US macro events after the last bar's close (the window starts on its date and does not
+    # depend on the horizon)
+    macro_rows, window, why = fetch_macro(client, bars.index[-1])
+    if macro_rows is None:
+        unavailable("macro_events", why)
+
     return {
         "bars": bars, "spy": spy, "sector": sector, "sector_etf": sector_etf, "vix": vix,
         "profile": profile, "quote": quote, "earnings": earnings, "is_etf": is_etf,
+        "calendar": calendar, "dividends": divs, "macro_rows": macro_rows, "macro_window": window,
         "data_quality": dq, "notes": notes, "skipped": skipped,
         "calls": client.stats["network_calls"] - calls_before,
         "connection": client.describe(),

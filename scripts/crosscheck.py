@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Optional cross-check of the skill's own SMA(50) and RSI(14) against FMP's
+Optional cross-check of the skill's own SMA(50), SMA(100) and RSI(14) against FMP's
 technical-indicator endpoints (never used by the analysis itself).
 
   python scripts/crosscheck.py TICKER [--json PATH]
 
 Both series are aligned by date and compared over the last CROSSCHECK_WINDOW dates they share.
-Tolerances: SMA within 0.01% of the close; RSI within 0.5 points, after a 250-bar warm-up on
+Tolerances: each SMA within 0.01% of the close; RSI within 0.5 points, after a 250-bar warm-up on
 both series. If the plan does not include the endpoints, the script says so and exits 0.
 """
 from __future__ import annotations
@@ -28,6 +28,7 @@ import indicators
 # key, endpoint, request params, FMP value field, compute_all column, label
 CHECKS = (
     ("sma50", "technical-indicators/sma", {"periodLength": 50, "timeframe": "1day"}, "sma", "sma50", "SMA(50)"),
+    ("sma100", "technical-indicators/sma", {"periodLength": 100, "timeframe": "1day"}, "sma", "sma100", "SMA(100)"),
     ("rsi14", "technical-indicators/rsi", {"periodLength": 14, "timeframe": "1day"}, "rsi", "rsi14", "RSI(14)"),
 )
 
@@ -36,8 +37,8 @@ NOTES = [
     "bar the averages were seeded on and on how much history precedes it (the seed's weight decays "
     "like (13/14)^k). FMP does not document its seeding or history depth, so small RSI differences "
     "can come from that alone; both series are compared only after a 250-bar warm-up.",
-    "SMA(50) is a plain rolling mean of split-adjusted closes; a difference beyond rounding means "
-    "the two sides used different input prices (e.g. a missing or revised bar).",
+    "SMA(50) and SMA(100) are plain rolling means of split-adjusted closes; a difference beyond rounding "
+    "means the two sides used different input prices (e.g. a missing or revised bar).",
 ]
 
 
@@ -80,8 +81,8 @@ def compare(ours: pd.Series, theirs: pd.Series, tol, skip_ours=0, skip_theirs=0,
 
 
 def crosscheck(client, ticker, now=None) -> dict:
-    """Compare FMP's SMA(50)/RSI(14) with indicators.compute_all on the skill's own /full bars.
-    status: "ok" (at least one indicator compared), "restricted" (plan lacks both endpoints)
+    """Compare FMP's SMA(50)/SMA(100)/RSI(14) with indicators.compute_all on the skill's own /full bars.
+    status: "ok" (at least one indicator compared), "restricted" (plan lacks the endpoints)
     or "unavailable" (other failures)."""
     now = fetch.to_ny(now)
     symbol = normalize_symbol(ticker)
@@ -121,7 +122,7 @@ def crosscheck(client, ticker, now=None) -> dict:
     for key, _, _, _, column, label in CHECKS:
         if key not in fmp:
             continue
-        if key == "sma50":
+        if key.startswith("sma"):
             stats = compare(ours[column], fmp[key], C.CROSSCHECK_SMA_TOL * bars["close"], rel_to=bars["close"])
             tolerance = f"{C.CROSSCHECK_SMA_TOL:.2%} of close"
         else:
@@ -169,7 +170,7 @@ def _json_safe(x):
 def main(argv=None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    parser = argparse.ArgumentParser(description="Cross-check SMA(50)/RSI(14) against FMP's technical-indicator endpoints.")
+    parser = argparse.ArgumentParser(description="Cross-check SMA(50)/SMA(100)/RSI(14) against FMP's technical-indicator endpoints.")
     parser.add_argument("ticker")
     parser.add_argument("--json", metavar="PATH", help="also write the result as JSON")
     args = parser.parse_args(argv)
