@@ -32,7 +32,8 @@ import scorecard as SC
 CONTRACT = "ta-2.1"   # 1.1 adds event.last_earnings*, targets' kind; 1.2 levels_note, range_95, vol stops;
 #                       2.0 removes event.eps_estimated (no fundamentals); 2.x only add fields:
 #                       2.1 data_quality.calendar_source, dividend, macro, horizons.*.ex_dividend_within_horizon /
-#                       macro_within_horizon / macro_complete (session counts exclude NYSE holidays)
+#                       macro_within_horizon / macro_complete (session counts exclude NYSE holidays),
+#                       trend.sma100 (a context line, not part of the stack; slopes / close_vs carry it too)
 HORIZONS = ("swing", "position")
 MACRO_EVENT_KEYS = ("id", "label", "tier", "date", "time_ny", "timing", "session", "trading_days_to")
 MACRO_BRIEF_KEYS = ("id", "label", "tier", "date", "time_ny", "timing", "trading_days_to")
@@ -205,6 +206,7 @@ def _trend(tm, lv):
     sma, macd, hi = tm.get("sma") or {}, tm.get("macd") or {}, tm.get("from_52w_high") or {}
     cross = macd.get("last_cross")
     return {"sma20": _num(sma.get("sma20")), "sma50": _num(sma.get("sma50")), "sma200": _num(sma.get("sma200")),
+            "sma100": _num(sma.get("sma100")),        # context only: not part of stack / stack_state
             "slopes": sma.get("slopes"), "close_vs": sma.get("close_vs"), "stack": sma.get("stack"),
             "stack_state": sma.get("stack_state"), "mom_12_1": _num(tm.get("mom_12_1")), "returns": tm.get("returns"),
             "macd": {"macd": _num(macd.get("macd")), "signal": _num(macd.get("signal")), "hist": _num(macd.get("hist")),

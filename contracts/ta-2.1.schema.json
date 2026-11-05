@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "ta-2.1",
   "title": "Technical analysis contract ta-2.1",
-  "description": "The stable summary of one stock's swing and position runs that other tools read, built by scripts/contract.py. Within a major version fields are only ever added; renaming or removing one means ta-3.0. 1.1 adds event.last_earnings, event.days_since_last_earnings, event.last_earnings_move and the kind of each scenario target. 1.2 adds levels_note, range_95 and the volatility-band stop and target with calibrated touch rates in stops_ref; the support/resistance zones are reference only. 2.0 removes event.eps_estimated: the contract carries no fundamentals. 2.1 adds data_quality.calendar_source, the dividend and macro blocks and, per horizon, ex_dividend_within_horizon, macro_within_horizon and macro_complete; trading-day counts (event.trading_days_to, data_quality.business_days_behind) now count NYSE sessions, exchange holidays excluded. Ex-dividend dates and macro events are context: they never change the bias. Horizon-independent blocks sit at the top, the rest under horizons.swing / horizons.position. Prices are split-adjusted closes; fractions are decimals (0.05 = 5%); null means missing, never estimated.",
+  "description": "The stable summary of one stock's swing and position runs that other tools read, built by scripts/contract.py. Within a major version fields are only ever added; renaming or removing one means ta-3.0. 1.1 adds event.last_earnings, event.days_since_last_earnings, event.last_earnings_move and the kind of each scenario target. 1.2 adds levels_note, range_95 and the volatility-band stop and target with calibrated touch rates in stops_ref; the support/resistance zones are reference only. 2.0 removes event.eps_estimated: the contract carries no fundamentals. 2.1 adds data_quality.calendar_source, the dividend and macro blocks, trend.sma100 (a context line, not part of the SMA stack) and, per horizon, ex_dividend_within_horizon, macro_within_horizon and macro_complete; trading-day counts (event.trading_days_to, data_quality.business_days_behind) now count NYSE sessions, exchange holidays excluded. Ex-dividend dates and macro events are context: they never change the bias. Horizon-independent blocks sit at the top, the rest under horizons.swing / horizons.position. Prices are split-adjusted closes; fractions are decimals (0.05 = 5%); null means missing, never estimated.",
   "type": "object",
   "additionalProperties": false,
   "required": ["contract", "config_hash", "ticker", "generated_at", "as_of", "as_of_basis", "data_source", "last_close",
@@ -143,12 +143,15 @@
     },
     "trend": {
       "type": ["object", "null"], "additionalProperties": false,
-      "required": ["sma20", "sma50", "sma200", "slopes", "close_vs", "stack", "stack_state", "mom_12_1", "returns", "macd",
-                   "high_52w", "high_52w_date", "from_52w_high", "low_52w", "low_52w_date"],
+      "required": ["sma20", "sma50", "sma200", "sma100", "slopes", "close_vs", "stack", "stack_state", "mom_12_1",
+                   "returns", "macd", "high_52w", "high_52w_date", "from_52w_high", "low_52w", "low_52w_date"],
       "properties": {
         "sma20": {"$ref": "#/$defs/num"}, "sma50": {"$ref": "#/$defs/num"}, "sma200": {"$ref": "#/$defs/num"},
-        "slopes": {"type": ["object", "null"]}, "close_vs": {"type": ["object", "null"]},
-        "stack": {"$ref": "#/$defs/str"}, "stack_state": {"$ref": "#/$defs/str"},
+        "sma100": {"$ref": "#/$defs/num", "description": "100-day SMA, a widely watched reference line (2.1): context only, not part of stack / stack_state and never a trend vote; null with fewer than 100 bars"},
+        "slopes": {"type": ["object", "null"], "description": "20-bar slope of each SMA, keyed sma20 / sma50 / sma100 / sma200"},
+        "close_vs": {"type": ["object", "null"], "description": "close / SMA - 1, keyed sma20 / sma50 / sma100 / sma200"},
+        "stack": {"$ref": "#/$defs/str", "description": "SMA20 / SMA50 / SMA200 ordered top to bottom, e.g. 20>50>200 (SMA100 is not part of it)"},
+        "stack_state": {"$ref": "#/$defs/str"},
         "mom_12_1": {"$ref": "#/$defs/num"}, "returns": {"type": ["object", "null"]},
         "macd": {
           "type": "object", "additionalProperties": false, "required": ["macd", "signal", "hist", "last_cross"],

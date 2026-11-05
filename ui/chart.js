@@ -11,7 +11,7 @@
   const t = (key, ...a) => I18N.t(key, ...a);
   const tv = (prefix, value) => I18N.tv(prefix, value);
   const VIS_KEY = "ta-vis";
-  const SMA_KEYS = ["sma20", "sma50", "sma200"];
+  const SMA_KEYS = ["sma20", "sma50", "sma100", "sma200"];   // sma100: context line, not part of the stack
   const MIN_PX_PER_DAY = 3;   // below this the chart switches to weekly candles by itself
   const MIN_VIEW = 10;        // fewest daily bars a zoom can show
   const WEEKLY_MIN_DAYS = 140; // a weekly-default chart shows daily candles for views up to ~6 months
@@ -238,7 +238,8 @@
 
   // ------------------------------------------------------------------ legend
   function legendItems(d, prep) {
-    const items = SMA_KEYS.map(k => ({ key: k, label: t("lg_" + k), color: `var(--${k})`, sw: "" }));
+    const items = SMA_KEYS.map(k => ({ key: k, label: t("lg_" + k), color: `var(--${k})`, sw: "",
+      title: k === "sma100" ? t("sma100_title") : "" }));
     for (const a of prep.avwaps) {
       items.push({ key: a.key, label: "AVWAP·" + tv("anchor_", a.name), color: `var(--av-${a.name}, var(--muted))`, sw: "dash",
         title: t("avwap_title", tv("anchor_", a.name), d.avwap_anchors?.[a.name] ?? "") });

@@ -68,7 +68,8 @@ def _last_macd_cross(ind: pd.DataFrame) -> dict | None:
 
 
 def build_trend_momentum(ctx) -> dict:
-    """C: 12-1 momentum, period returns, SMA stack and slopes, MACD, distance from the 52-week high."""
+    """C: 12-1 momentum, period returns, SMA stack (SMA20/50/200) and slopes, the context SMA100, MACD,
+    distance from the 52-week high."""
     bars, ind = ctx["bars"], ctx["ind"]
     n = len(bars)
     notes: list[str] = []
@@ -88,17 +89,23 @@ def build_trend_momentum(ctx) -> dict:
         if returns[name] is None:
             notes.append(f"{name} return needs {k + 1} bars (have {n})")
 
-    smas = {p: num(row[f"sma{p}"]) for p in C.SMA_PERIODS}
-    stack, stack_state = _sma_stack(smas)
-    missing = [f"SMA{p}" for p, v in smas.items() if v is None]
+    # the stack uses the trend SMAs only; the context SMAs (SMA100) are reported next to them
+    periods = sorted({*C.SMA_PERIODS, *C.SMA_CONTEXT_PERIODS})
+    smas = {p: num(row[f"sma{p}"]) for p in periods}
+    stack, stack_state = _sma_stack({p: smas[p] for p in C.SMA_PERIODS})
+    missing = [f"SMA{p}" for p in C.SMA_PERIODS if smas[p] is None]
     if missing:
         notes.append(f"{', '.join(missing)} unavailable with {n} bars; stack uses the remaining SMAs")
+    missing = [f"SMA{p}" for p in C.SMA_CONTEXT_PERIODS if smas[p] is None]
+    if missing:
+        notes.append(f"{', '.join(missing)} unavailable with {n} bars (context only, not part of the stack)")
     sma = {
-        **{f"sma{p}": v for p, v in smas.items()},
-        "slopes": {f"sma{p}": num(row[f"sma{p}_slope"]) for p in C.SMA_PERIODS},
-        "close_vs": {f"sma{p}": pct(close, v) for p, v in smas.items()},
+        **{f"sma{p}": smas[p] for p in periods},
+        "slopes": {f"sma{p}": num(row[f"sma{p}_slope"]) for p in periods},
+        "close_vs": {f"sma{p}": pct(close, smas[p]) for p in periods},
         "stack": stack,
         "stack_state": stack_state,
+        "stack_periods": list(C.SMA_PERIODS),
         "slope_bars": C.SLOPE_BARS,
     }
 

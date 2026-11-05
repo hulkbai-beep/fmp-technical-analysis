@@ -416,6 +416,7 @@ def build_chart_data(ctx, modules: dict) -> dict:
         "weekly": _weekly(bars, start, ctx.get("calendar")),
         "sma20": _pairs(iw["sma20"], C.CHART_PRICE_DECIMALS),
         "sma50": _pairs(iw["sma50"], C.CHART_PRICE_DECIMALS),
+        "sma100": _pairs(iw["sma100"], C.CHART_PRICE_DECIMALS),    # context line: not part of the stack
         "sma200": _pairs(iw["sma200"], C.CHART_PRICE_DECIMALS),
         "avwaps": avwaps,
         "avwap_anchors": avwap_anchors,

@@ -245,14 +245,28 @@ keeps the weekday rules: 16:15 (`MARKET_CLOSE_BUFFER`), weekdays for the stale c
 ## 2. Indicators (`scripts/indicators.py`)
 
 Every indicator is NaN until it has its full window; nothing is back-filled. Column names carry the
-default periods (`sma20`, `rsi14`, …); the periods themselves come from config.
+default periods (`rsi14`, `atr14`, …); the periods themselves come from config, except the SMA periods,
+which are fixed (below).
+
+**Trend SMAs and the context SMA100.** `SMA_PERIODS` = (20, 50, 200) are the trend SMAs: the SMA stack,
+the regime direction votes, the scorecard and the signal rules use them, and regime.py and signal_stats.py
+read its second and third periods as the 50- and 200-day lines. `SMA_CONTEXT_PERIODS` = (100,) adds the
+100-day SMA (`sma100`, `sma100_slope`), a widely watched reference line. SMA100 is context only: it is
+reported, drawn and used as a low-weight level candidate, and it is not in the regime votes, the stack,
+the scorecard or the signals. Both settings are fixed, not tuning knobs: the columns are named `sma20` /
+`sma50` / `sma200` (fast, mid, long, by position) and `sma100`, and the chart, levels, crosscheck, the
+contract (`trend.sma100`) and the UI name the 100-day line. A period inserted or replaced would silently
+put another line under one of these names (with (20, 50, 100), the `sma200` column, the regime's long
+line and a second level candidate would all be the 100-day mean), so `compute_all` refuses any other
+value of either setting. Another reference line would need its own column wired into the chart, levels,
+crosscheck, contract and UI, not just a config entry.
 
 | Indicator | Definition |
 |---|---|
-| SMA(n) | rolling mean, first value at bar n-1 |
+| SMA(n) | rolling mean, first value at bar n-1; n = 20, 50, 200 (trend) and 100 (context) |
 | EMA(n) | `ewm(span=n, adjust=False)`, alpha = 2/(n+1), seeded at the first value (so MACD is biased toward 0 in roughly the first 3×26 bars of a short history) |
 | Wilder RMA(n) | first value = mean of the first n values; then avg += (x - avg)/n |
-| SMA slope | `SMA[t] / SMA[t - SLOPE_BARS] - 1`, `SLOPE_BARS` = 20 |
+| SMA slope | `SMA[t] / SMA[t - SLOPE_BARS] - 1`, `SLOPE_BARS` = 20 (all four SMAs) |
 | MACD(12, 26, 9) | line = EMA12 - EMA26; signal = EMA9 of the line; hist = line - signal |
 | RSI(n), n = 14 and 2 | Wilder averages of gains and losses from the first change; RSI = 100·AG/(AG+AL); 100 with only gains, 0 with only losses, 50 when both are 0 |
 | True range | max(H-L, \|H-C₋₁\|, \|L-C₋₁\|); H-L on the first bar |
@@ -337,10 +351,13 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   section 1.2).
 - **12-1 momentum** = P[t-21] / P[t-252] - 1. It needs 253 bars; otherwise it is null with a note.
 - **Returns:** 1m / 3m / 6m / 12m over 21 / 63 / 126 / 252 bars.
-- **SMA20/50/200:**
+- **SMA20/50/200 (the trend SMAs):**
   - values, 20-bar slopes and close vs each SMA;
   - the stack: the available SMAs ordered top to bottom. "20>50>200" is bullish, "200>50>20" bearish,
-    any other order mixed.
+    any other order mixed. `stack_periods` = [20, 50, 200] names the SMAs it uses.
+- **SMA100 (context only):** `sma100`, `slopes.sma100` and `close_vs.sma100` sit next to them (null with
+  a note before bar 100). It is a reference line: not part of the stack or `stack_state`, and not used
+  by the regime votes, the scorecard or the signals.
 - **MACD:** latest values, and the most recent signal-line cross after the EMA warm-up (bar index ≥
   `MACD_SLOW` + `MACD_SIGNAL` = 35), with the side of zero it happened on.
 - **Distance from the 52-week high:** the highest split-adjusted high of the last 252 bars, as a
@@ -446,7 +463,15 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   - POC (volume_profile, 1.0), VAL, VAH and HVNs (0.5);
   - 52-week high and low (range_52w, 1.0);
   - each remaining gap: one zone if at most `GAP_ZONE_MAX_ATR` = 1 ATR wide, else its two edges (gap, 0.75);
-  - current SMA50 and SMA200 (moving_average, 0.25) and anchored VWAPs (anchored_vwap, 0.25);
+  - current SMA50, SMA100 and SMA200 (moving_average, 0.25 each; SMA100 is the context line of
+    section 2) and anchored VWAPs (anchored_vwap, 0.25). SMA100 joined on 2026-11-05: one more
+    low-weight candidate can shift a zone's density, edges and score and so, marginally, which zones
+    are chosen and what is built from them (section 6): the scenario triggers and targets, and the risk
+    block's reference-only structural stop and level target, with their distance, touch rate,
+    reward/risk and `by_stop.structural` size (contract `horizons.*.stops_ref.*.structural`,
+    `structural_distance_pct` and `touch_rate.structural`). The volatility-band stop and target, the
+    ATR stop and the headline position-size example do not use the levels and do not move (the first
+    target falls back to the level target only when there is no volatility target, e.g. without rv20);
   - dated candidates (pivots, supply/demand zones, gaps) are also x 0.5 ^ (bars since / half-life),
     half-life = `LEVEL_HALF_LIFE` (0.5) x the window: 63 bars for swing, 252 for position.
 - **Zones** (`KDE_BANDWIDTH_ATR` = 0.25): candidates below and above the close are handled apart.
@@ -878,7 +903,7 @@ drop out.
 
 - **What it shows:** the last `chart_bars` complete bars (252 for swing, 504 for position) of
   split-adjusted candles, with:
-  - SMA20/50/200 and the anchored VWAPs;
+  - SMA20/50/100/200 (SMA100, the context line, in its own colour) and the anchored VWAPs;
   - the nearest 3 supports and resistances as zones;
   - earnings markers;
   - a volume-profile sidebar (POC, value area);
@@ -898,17 +923,17 @@ drop out.
 
 ## 9. Cross-check against FMP's indicator endpoints (optional)
 
-`python scripts/crosscheck.py TICKER [--json PATH]` compares the skill's SMA(50) and RSI(14) with FMP's
-`technical-indicators/sma` (periodLength 50, timeframe 1day) and `technical-indicators/rsi`
-(periodLength 14). The analysis never uses these endpoints.
+`python scripts/crosscheck.py TICKER [--json PATH]` compares the skill's SMA(50), SMA(100) and RSI(14)
+with FMP's `technical-indicators/sma` (periodLength 50 and 100, timeframe 1day) and
+`technical-indicators/rsi` (periodLength 14). The analysis never uses these endpoints.
 
 - **Inputs:** the skill's side runs `indicators.compute_all` on its own validated `/full` bars, from the
   same earliest date as the analysis.
 - **Comparison:** the two series are aligned by date and compared over the last `CROSSCHECK_WINDOW` =
   250 shared dates. The output gives max and mean absolute difference, share within tolerance and the
   worst date.
-- **SMA(50) tolerance:** `CROSSCHECK_SMA_TOL` = 0.01% of that day's close. A rolling mean has no
-  smoothing choices, so a larger difference means different input prices.
+- **SMA(50) and SMA(100) tolerance:** `CROSSCHECK_SMA_TOL` = 0.01% of that day's close. A rolling mean
+  has no smoothing choices, so a larger difference means different input prices.
 - **RSI(14) tolerance:** `CROSSCHECK_RSI_TOL` = 0.5 points, after skipping `CROSSCHECK_RSI_WARMUP` = 250
   bars of each series.
   - Wilder smoothing is path-dependent: a value depends on the seed bar and on how much history comes
@@ -916,7 +941,7 @@ drop out.
   - FMP does not document its seeding or history depth, so small RSI differences can come from that
     alone.
 - **Today's partial bar** is excluded on the skill's side.
-- **Restricted plan:** if the plan lacks both endpoints, the script says so and exits 0.
+- **Restricted plan:** if the plan lacks the endpoints, the script says so and exits 0.
 
 ---
 
@@ -932,7 +957,8 @@ drop out.
   are fractions (0.05 = 5%).
 - **`meta`** holds network calls, cache hits, restricted endpoints, errors, skipped data,
   `modules_unavailable`, notes, the connection (`route`, `base`, `tls_verify`; never the key) and a
-  `config_snapshot` of the key parameters (including the `calendar`, `dividends` and `macro` settings).
+  `config_snapshot` of the key parameters (including the `calendar`, `dividends` and `macro` settings and
+  the context SMA periods, `indicators.sma_context`).
 - **Module failures:** a module that raises becomes `available: false` with "internal error: …" and is
   listed in `meta.errors`. The rest of the run continues.
 

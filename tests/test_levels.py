@@ -482,6 +482,31 @@ def test_build_levels_short_history_and_missing_sma200():
     assert "52-week high/low computed over 120 bars" in notes
 
 
+def test_sma100_is_a_moving_average_candidate():
+    bars = synthetic_bars()
+    ctx = make_ctx(bars)
+    out = L.build_levels(ctx)
+    mas = {c["source"]: c for c in out["candidates"] if L.source_type(c["source"]) == "moving_average"}
+    assert list(mas) == ["sma50", "sma100", "sma200"]
+    w = C.LEVEL_SOURCE_WEIGHTS["moving_average"]
+    assert all(c["weight"] == w for c in mas.values())                     # same weight as the 50 / 200-day lines
+    assert mas["sma100"]["price"] == pytest.approx(ctx["ind"]["sma100"].iloc[-1])
+    assert mas["sma100"]["price"] == pytest.approx(bars["close"].iloc[-100:].mean())
+    assert "date" not in mas["sma100"]                                     # undated, like the other averages
+    zone = L.density_zones([mas["sma100"]], out["atr"])[0]                 # a zone names it with its family
+    assert zone["sources"] == ["sma100"] and zone["source_types"] == ["moving_average"]
+
+
+def test_build_levels_without_sma100():
+    out = L.build_levels(make_ctx(synthetic_bars(n=90)))
+    assert out["available"] is True
+    sources = {c["source"] for c in out["candidates"]}
+    assert "sma50" in sources and not {"sma100", "sma200"} & sources
+    notes = " | ".join(out["notes"])
+    assert "SMA100 unavailable at the last bar: not used as a level" in notes and "SMA200 unavailable" in notes
+    assert "sma100" in {c["source"] for c in L.build_levels(make_ctx(synthetic_bars(n=120)))["candidates"]}
+
+
 def test_build_levels_without_atr_is_unavailable():
     out = L.build_levels(make_ctx(synthetic_bars(n=10)))
     assert out["available"] is False and "ATR" in out["reason"]

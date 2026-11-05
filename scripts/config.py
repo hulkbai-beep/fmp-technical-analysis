@@ -75,7 +75,15 @@ DEFAULT_HORIZON = "swing"
 TRADING_DAYS_PER_YEAR = 252
 
 # ---------------------------------------------------------------------------- indicators
+# Trend SMAs (SMA_PERIODS: fast, mid, long, in this order) drive the SMA stack, the regime direction votes, the
+# scorecard and the signals. Context SMAs (SMA_CONTEXT_PERIODS) are reported, drawn and used as low-weight level
+# candidates only: they never vote, never enter the stack, the scorecard or the signals.
+# Both are fixed, not tuning knobs, and indicators.compute_all refuses any other value: indicators.py names the
+# columns sma20 / sma50 / sma200 (in this order) and sma100, regime.py and signal_stats.py take SMA_PERIODS[1] /
+# [2] as the 50- and 200-day lines, and the chart, levels, crosscheck, the contract (trend.sma100) and the UI name
+# the 100-day line, so a period inserted or replaced here would silently put another line under one of these names.
 SMA_PERIODS = (20, 50, 200)
+SMA_CONTEXT_PERIODS = (100,)
 SLOPE_BARS = 20                   # slope = SMA today / SMA SLOPE_BARS bars ago - 1
 RSI_PERIOD = 14
 RSI_SHORT_PERIOD = 2
@@ -356,7 +364,7 @@ METRICS_SIG_DIGITS = 6            # metrics.json floats are rounded to this many
 # ---------------------------------------------------------------------------- cross-check (crosscheck.py, optional)
 CROSSCHECK_WINDOW = 250           # compare the last N dates both series have
 CROSSCHECK_RSI_WARMUP = 250       # bars skipped at the start of each RSI series before comparing
-CROSSCHECK_SMA_TOL = 0.0001       # SMA(50) tolerance as a share of the close (0.01%)
+CROSSCHECK_SMA_TOL = 0.0001       # SMA(50) / SMA(100) tolerance as a share of the close (0.01%)
 CROSSCHECK_RSI_TOL = 0.5          # RSI(14) tolerance in points
 
 DISCLAIMER = "This is technical analysis for information only, not investment advice."

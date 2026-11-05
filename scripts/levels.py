@@ -1,6 +1,6 @@
 """
 Key levels (module H): ATR ZigZag swing pivots, supply/demand base zones, a volume profile, the
-52-week range and unfilled gaps, plus the current SMA50/SMA200 and anchored VWAPs, as weighted
+52-week range and unfilled gaps, plus the current SMA50/SMA100/SMA200 and anchored VWAPs, as weighted
 candidate prices. Per side of the last close, a Gaussian density of the candidates gives the zones
 (its peaks, as wide as the density stays above half the peak); each zone is scored by how price
 reacted on earlier tests (holds, breaks, role reversals, recent ones counting more) plus the
@@ -43,8 +43,10 @@ _SOURCE_TYPES = {
     "value_area_high": "volume_profile", "hvn": "volume_profile",
     "high_52w": "range_52w", "low_52w": "range_52w",
     "demand": "supply_demand", "supply": "supply_demand",
-    "sma50": "moving_average", "sma200": "moving_average",
+    "sma50": "moving_average", "sma100": "moving_average", "sma200": "moving_average",
 }
+# moving averages used as level candidates: the 50- and 200-day trend SMAs and the context SMA100
+MA_LEVELS = ("sma50", "sma100", "sma200")
 
 
 def _num(x) -> float | None:
@@ -632,7 +634,7 @@ def _candidates(pivots: dict, bases: list, profile: dict, r52: dict, gaps: list,
               {"price": r52["low_52w"], "source": "low_52w", "date": r52["low_52w_date"], "weight": W["range_52w"]}]
     for g in gaps:
         cands += [{**c, "weight": W["gap"] * age(g["date"])} for c in _gap_candidates(g, atr)]
-    for name in ("sma50", "sma200"):
+    for name in MA_LEVELS:
         v = _num(ind_row.get(name))
         if v is None:
             notes.append(f"{name.upper()} unavailable at the last bar: not used as a level")

@@ -450,3 +450,87 @@ def weekday_calendar() -> MarketCalendar                                # 无节
   得到同样结果，`--refresh` 可重试。
 - 半日市的缓存修正依赖「FMP 在盘中提供当天未完成的 K 线」这一假设（部分 K 线规则本身也依赖它）；本会话在收盘后
   运行，未能实测。
+
+---
+
+## 11. 追加：SMA100（2026-11-05）
+
+**决定（与用户商定）：** 加入 100 日简单均线，**只作背景**。SMA100 是市场上广泛关注的参考线，报告和图表里应当能看到；
+但它不参与任何判断，已有的趋势投票和评分卡保持不变。
+
+**不改变：** regime 的方向投票；评分卡的六个支柱、权重、偏向和置信度；信号库及其统计；SMA20/50/200 的排列
+（`stack` / `stack_state`）；所有周线读数（10w/40w）；价格行为的 EMA20。
+
+**改动：**
+1. `config.py`：新增 `SMA_CONTEXT_PERIODS = (100,)`，`SMA_PERIODS` 保持 `(20, 50, 200)`，注释写明分工：趋势均线决定
+   排列、投票、评分卡和信号；背景均线只报告、只画线、只作低权重价位候选。`regime.py` 和 `signal_stats.py` 把
+   `SMA_PERIODS[1]` / `[2]` 当作 50 日和 200 日线，`indicators.py` 按位置命名 `sma20/sma50/sma200`，所以把 100
+   插进 `SMA_PERIODS` 会把「200 日线」悄悄变成 100 日线。注释也写明：两组周期都是固定的，不是可调参数。
+2. `indicators.py`：背景均线单独一个循环（列 `sma100`、`sma100_slope`，斜率定义同 `SLOPE_BARS` = 20）。列名固定为
+   `TREND_SMA_COLUMNS = ("sma20", "sma50", "sma200")` 和 `CONTEXT_SMA_COLUMNS = ("sma100",)`；`compute_all` 要求
+   两个设置恰好等于列名里的周期，否则报 `ValueError`：`SMA_PERIODS` 插入或替换一个周期（例如 `(20, 50, 100)`，
+   `sma200` 列、regime 的长线和第二个价位候选都会变成 100 日均值）、`SMA_CONTEXT_PERIODS` 改成别的值（图表、价位、
+   crosscheck、合约 `trend.sma100` 和 UI 都按名字使用 `sma100`），以及背景列与趋势列重名。`analyze.py` 对以
+   `config.` 开头的错误提示「Restore that setting in scripts/config.py.」，而不是「Check the symbol」。
+3. `modules.py`：`trend_momentum.sma` 增加 `sma100`、`slopes.sma100`、`close_vs.sma100` 和
+   `stack_periods = [20, 50, 200]`；排列只用 20/50/200；不足 100 根 K 线时为 `null` 并加注（"context only, not part
+   of the stack"）。
+4. `levels.py`：`sma100` 与 `sma50` / `sma200` 一样是 `moving_average` 候选（权重 0.25，缺失时同样加注）。
+5. 图表：`chart.py` 输出 `sma100` 序列；`chart.js` 按 20/50/100/200 画线、图例和十字线读数，SMA100 的图例悬停提示
+   「仅作参考线」；`chart.css` 新增 `--sma100`（浅色 `#7d1984` 梅紫，深色 `#a92ab3` 品红紫，三个主题块都定义）。
+   颜色用 dataviz 校验器选出：与另外三条均线、五条 AVWAP 和涨跌色相比，两种主题下正常视觉 ΔE ≥ 15、
+   色盲模拟 ΔE ≥ 8，对比度 ≥ 3:1；`i18n.js` 增加中英文图例和价位来源标签。
+6. 合约 ta-2.1（尚未发布，直接加字段）：`trend.sma100`（数字或 `null`），`trend.slopes` / `trend.close_vs` 也带
+   `sma100`；schema 说明它是背景线、不属于 `stack`；`contract.py` 版本注释和 schema 描述的 2.1 条目已写明。
+7. `crosscheck.py`：增加 SMA(100) 与 FMP `technical-indicators/sma`（periodLength=100）的对比，容差规则同 SMA(50)
+   （当日收盘价的 0.01%）。
+8. `analyze.py`：`config_snapshot.indicators.sma_context = [100]`（因此 `config_hash` 会变）。
+9. 文档：`methodology.md`（指标、趋势模块、价位候选、图表、交叉核对）、`report_template.md`（SMA100 作参考线；
+   价位来源标签）、`SKILL.md`（解读规则「SMA100 是参考，不是投票」、合约和 crosscheck 说明）、`README.md`（合约 2.1 条目）。
+
+**预期副作用（可接受）：** 多一个低权重价位候选，可能改变区间的密度、边界与得分，从而微调所选的支撑阻力区，以及由它们
+得出的：情景的触发价和目标价；risk 中仅作参考的结构止损和价位目标，连同它们的距离、触及率、盈亏比和
+`by_stop.structural` 仓位（合约 `horizons.*.stops_ref.*.structural`、`structural_distance_pct`、
+`touch_rate.structural`）。波动带止损和目标、ATR 止损、主仓位示例不用价位，不会变（只有没有波动带目标时，例如 20 日
+波动率缺失，第一目标才退回价位目标）。实测（as_of 2026-11-04，同一份缓存数据，0 次网络调用，有 / 无 SMA100 候选对比）：
+- AAPL swing：S3 由 322.49–329.41（得分 5.46）变为 322.06–329.41（5.00，来源多了 `sma100`），空头情景第二目标
+  325.596 → 325.421；position：S2 / S3 的分界移动约 0.1，空头第二目标 325.608 → 325.444；AAPL 的 risk 恰好不变。
+- SPY swing：多头结构止损 751.328 → 751.432（最近支撑区下沿上移，来源多了 `sma100`），`by_stop.structural` 股数
+  64 → 65，结构止损触及率 0.4151 → 0.4180；空头价位目标 758.92 → 759.285。SPY position：多头结构止损
+  750.888 → 750.992（股数 62 → 63）。
+- NVDA swing：空头结构止损 214.522 → 214.441；TSLA swing：多头结构止损 368.175 → 368.351（股数 58 → 59）。
+  合约的 `stops_ref.*.structural` 随之移动。
+- 以上所有运行中，regime、scorecard、signals 以及波动带 / ATR 止损和主仓位示例完全相同。
+
+**测试（827 → 856）：**
+- indicators：`sma100` / `sma100_slope` 等于普通滚动均值，前 99 根为 NaN；`SMA_PERIODS` 角色守卫（`(20, 50, 200)`、
+  `regime.SMA_MID` / `SMA_LONG`、`signal_stats.SMA_LONG`，各列等于对应周期的滚动均值）；任何其他布局都报错：
+  `SMA_PERIODS` 为 `(20, 50, 100, 200)`、`(20, 50, 100)`、`(20, 100, 200)`、`(10, 50, 200)`、`(20, 50)`，
+  `SMA_CONTEXT_PERIODS` 为 `(150,)`、`()`、`(100, 150)`、`100`，以及背景列与趋势列重名；同样数值的 list 可以接受。
+- CLI：上面三种改法（替换长线、替换中线、改背景周期）退出码 1，提示 `config.…` 和「Restore that setting in
+  scripts/config.py.」，不写任何文件；crosscheck 对改过的背景周期报同样的 `ValueError`（以前是未捕获的
+  `KeyError 'sma100'`），`main` 返回 1。
+- modules：`sma` 块含 `sma100` 及其斜率和距离；把 SMA100 设成极端值时 `stack` 不变；短历史为 `null` 并加注。
+- levels：`sma100` 是 `moving_average` 候选、权重 0.25；不足 100 根时不作价位并加注。
+- chart：输出 `sma100` 序列；CSS 三个主题块各有一个与其他均线不同的 `--sma100`；i18n 中英文标签齐全。
+- contract：`trend.sma100` 取自 metrics，通过 schema；旧 metrics 缺这个字段时为 `null`。
+- crosscheck：按 periodLength 分别请求、容差相同；把 SMA(50) 的数据当作 SMA(100) 返回时会被标出；受限套餐为 3 次调用。
+- 不变性 e2e（swing、position，以及只有 150 根 K 线、SMA100 已有而 SMA200 还没有的 swing）：把指标表的 `sma100`
+  加 1e6、斜率设为 -1e6，regime、整个 scorecard、signals、market_context、multi_timeframe、mean_reversion、
+  price_action、candlesticks 与正常运行完全相同；risk 中波动带 / ATR 止损、波动带目标、它们的距离 / 触及率 /
+  盈亏比和主仓位示例也相同（这些运行里结构止损和价位目标确实移动了）。变异检查：让 regime 的 50 日投票改读
+  SMA100，或让主仓位示例改用结构止损时，这个测试会失败；把守卫退回只检查周期个数时，新的守卫测试有 11 个失败。
+
+**复审修正：** ① 守卫原先只检查趋势周期的个数，`(20, 50, 100)` 能通过，而新的 `sma100` 列恰好满足
+`modules.py` 的查找，旧代码会报的 `KeyError` 也没了：整次运行无错误，输出自相矛盾；现在要求周期与列名完全一致。
+② 注释、方法论和报错信息原先暗示 `SMA_CONTEXT_PERIODS` 可以随意改或追加，实际上图表、价位、crosscheck、合约和 UI
+都按名字使用 `sma100`；现在把它固定为 `(100,)`，并改写这些文字。③ 副作用说明原先只提区间和情景，漏了 risk 的
+结构止损 / 价位目标和合约的 `stops_ref`；已补上（methodology.md、本节、e2e 测试说明），并在 e2e 测试里钉住不变的部分。
+
+**实盘验证（AAPL，2026-11-04）：**
+- swing / position 和 `--contract` 均退出码 0、无错误；SMA100 = 322.861（收盘高出 8.25%，20 日斜率 +2.48%），
+  `stack` 仍为 "20>50>200"；swing 的 S3 来源包含 `sma100`；合约通过 schema。
+- `crosscheck.py AAPL`：SMA(100) 在 250 个共同日期上最大差 2.3e-13，100% 在容差内（SMA(50) 1.7e-13，
+  RSI(14) 2.8e-14）。
+- 图表（Playwright，浅色与深色）：SMA100 的线、图例（含悬停提示）和十字线读数都正常，颜色与其他均线可区分，
+  控制台无错误。

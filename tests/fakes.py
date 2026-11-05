@@ -159,7 +159,8 @@ class FakeClient:
         if endpoint == "earnings":
             return self.earnings.get(sym, [])
         if endpoint.startswith("technical-indicators/"):
-            return self.indicator_rows.get((endpoint, sym), [])
+            rows = self.indicator_rows   # keyed (endpoint, symbol, periodLength), or (endpoint, symbol) for any period
+            return rows.get((endpoint, sym, params.get("periodLength")), rows.get((endpoint, sym), []))
         if endpoint in (FULL, ADJ):
             return self._eod(endpoint, sym, params)
         if endpoint == HOLIDAYS:

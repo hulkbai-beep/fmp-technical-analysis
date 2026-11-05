@@ -170,7 +170,8 @@ def config_snapshot(horizon: str) -> dict:
                   "groups": {gid: {"label": label, "tier": tier, "patterns": list(patterns)}
                              for gid, label, tier, patterns in C.MACRO_GROUPS},
                   "exclude": list(C.MACRO_EXCLUDE), "far_ahead_groups": list(C.MACRO_FAR_AHEAD_GROUPS)},
-        "indicators": {"sma": list(C.SMA_PERIODS), "slope_bars": C.SLOPE_BARS, "rsi": [C.RSI_PERIOD, C.RSI_SHORT_PERIOD],
+        "indicators": {"sma": list(C.SMA_PERIODS), "sma_context": list(C.SMA_CONTEXT_PERIODS),
+                       "slope_bars": C.SLOPE_BARS, "rsi": [C.RSI_PERIOD, C.RSI_SHORT_PERIOD],
                        "atr": C.ATR_PERIOD, "adx": C.ADX_PERIOD, "macd": [C.MACD_FAST, C.MACD_SLOW, C.MACD_SIGNAL],
                        "bollinger": [C.BB_PERIOD, C.BB_STD], "keltner": [C.KC_PERIOD, C.KC_ATR_PERIOD, C.KC_MULT],
                        "rvol": C.RVOL_PERIOD, "realized_vol": C.REALIZED_VOL_PERIOD,
@@ -426,6 +427,7 @@ def main(argv=None) -> int:
         msg = _redact(str(e))
         hint = ("Run `python scripts/fmp_client.py check` to test the connection and your plan."
                 if "error:" in msg or "restricted:" in msg else
+                "Restore that setting in scripts/config.py." if msg.startswith("config.") else
                 "Check the symbol: a US-listed stock or ETF; share classes such as BRK.B are read as BRK-B.")
         print(f"Cannot analyse {symbol}: {msg}\n{hint}", file=sys.stderr)
         return 1

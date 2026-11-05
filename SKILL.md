@@ -101,6 +101,9 @@ describes conditions and historical base rates. It is not advice.
 - **Regime first.** In trend regimes, trend, momentum and RS carry the scorecard. In range regimes,
   mean reversion, flow and the volatility setup do. An overbought RSI in a strong uptrend is not a
   sell signal.
+- **SMA100 is a reference, not a vote.** The 100-day SMA (`trend_momentum.sma.sma100`) is widely watched,
+  so say where the close sits against it, but it is not in the SMA stack (20/50/200), the regime votes,
+  the scorecard or the signals; never let it decide the trend.
 - **Signal statistics:**
   - always state n, the history start and the confidence;
   - `insufficient` (n < 15) is not evidence;
@@ -182,6 +185,8 @@ Tools that build on this skill (a decision engine, a screener) read the **ta-2.1
     amounts, the next one's share of the close and the trading days to it;
   - `macro`: the tier 1-2 macro events after `as_of` (date, New York time, timing, session, trading days),
     the requested window and `listed_through`, the last date FMP lists releases other than FOMC dates;
+  - `trend.sma100`: the 100-day SMA, a context line that is not part of `trend.stack`
+    (`trend.slopes` and `trend.close_vs` carry it too);
   - per horizon: `ex_dividend_within_horizon` (false for a symbol that pays none, null when unknown),
     `macro_within_horizon` (each with its date, New York time and timing; null when the economic
     calendar is unavailable) and `macro_complete` (false: events late in the horizon may be missing).
@@ -205,7 +210,8 @@ Tools that build on this skill (a decision engine, a screener) read the **ta-2.1
   and 52-week high use prices as traded, which drop by each dividend. When `regime.notes` says the dividends
   pull these readings down, quote it in sections 3 and 12 and next to the regime in the reply.
 - **Short history** (recent IPO, fewer than 200 bars): SMA200-based readings, percentiles and
-  signal statistics become unavailable or `insufficient`. Say so and do not extrapolate.
+  signal statistics become unavailable or `insufficient` (SMA100 too, below 100 bars). Say so and do not
+  extrapolate.
 - **Plan restrictions:** without the dividend-adjusted endpoint, returns are price-only
   (`data_quality.adj_coverage` is below 1). Without earnings, event risk is skipped. Without dividends or
   the economic calendar, `dividends` or `macro_events` is unavailable with its `reason` (without
@@ -240,7 +246,7 @@ Tools that build on this skill (a decision engine, a screener) read the **ta-2.1
 - "certificate verify failed" on the official API: something on the network (a corporate proxy or
   antivirus HTTPS scanning) is intercepting the connection. Do not turn verification off; the client
   keeps it on for the official host anyway. With a third-party proxy, see Setup 3.
-- `python scripts/crosscheck.py TICKER` compares the skill's SMA(50) and RSI(14) with FMP's own
+- `python scripts/crosscheck.py TICKER` compares the skill's SMA(50), SMA(100) and RSI(14) with FMP's own
   indicator endpoints. Use it when a number looks off.
 - `python scripts/fmp_client.py clear-cache` deletes cached responses and the saved proxy detection.
 - `python -m pytest -q` runs the offline test suite (no network, no key).

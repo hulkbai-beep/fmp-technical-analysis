@@ -12,6 +12,7 @@ import analyze
 import config as C
 import fetch
 import fmp_client
+import indicators
 from fakes import (ADJ, DIVIDENDS, ECON, FULL, HOLIDAYS, MACRO_EVENTS, NEXT_EX_DATE, NOW, SPY_NEXT_EX_DATE,
                    FakeClient, earnings_history, macro_rows, market, profile_row, series)
 
@@ -296,6 +297,60 @@ def test_macro_events_never_change_the_scorecard():
         assert with_macro[k] == without[k], k
 
 
+def short_market():
+    """150 bars: the SMA100 exists, the SMA200 does not yet."""
+    start = pd.bdate_range(end="2026-10-16", periods=150)[0].strftime("%Y-%m-%d")
+    return market(stock_start=start, profile=profile_row("ACME", ipo=start), earnings=[])
+
+
+@pytest.mark.parametrize("horizon, make", [("swing", stock_market), ("position", stock_market),
+                                           ("swing", short_market)])
+def test_sma100_never_changes_the_regime_scorecard_or_signals(monkeypatch, horizon, make):
+    """SMA100 is context only: with absurd SMA100 values in the indicator frame, the regime, the scorecard,
+    the signals, the SMA20/50/200 stack, everything weekly and the price-action EMA stay exactly as they were.
+    Only the SMA100 readings and, through its low-weight level candidate, the levels and what is built from
+    them may move: the scenarios, and the risk block's reference-only structural stop and level target (with
+    their distances, touch rates, reward/risk and by_stop.structural size; contract stops_ref.*.structural).
+    The volatility-band stop and target, the ATR stop and the headline position-size example do not use the
+    levels, so they stay too."""
+    normal, _ = run(make(), horizon=horizon)
+    compute_all = indicators.compute_all
+
+    def absurd(bars):
+        ind = compute_all(bars)
+        return ind.assign(sma100=ind["sma100"] + 1e6, sma100_slope=-1e6)
+    monkeypatch.setattr(indicators, "compute_all", absurd)
+    weird, _ = run(make(), horizon=horizon)
+
+    tm_n, tm_w = normal["trend_momentum"]["sma"], weird["trend_momentum"]["sma"]
+    assert tm_w["sma100"] > 1e6 and tm_w["slopes"]["sma100"] == -1e6        # the patch reached the run (6 sig. digits)
+    assert any(c["source"] == "sma100" and c["price"] > 1e6 for c in weird["levels"]["candidates"])
+    for k in ("sma20", "sma50", "sma200", "stack", "stack_state", "stack_periods"):
+        assert tm_w[k] == tm_n[k], k
+    assert weird["regime"] == normal["regime"]
+    sc_n, sc_w = normal["scorecard"], weird["scorecard"]
+    assert {p: v["score"] for p, v in sc_w["pillars"].items()} == {p: v["score"] for p, v in sc_n["pillars"].items()}
+    assert (sc_w["weighted_score"], sc_w["bias"], sc_w["confidence"]) == \
+        (sc_n["weighted_score"], sc_n["bias"], sc_n["confidence"])
+    assert sc_w == sc_n
+    assert weird["signals"] == normal["signals"]
+    for k in ("market_context", "multi_timeframe", "mean_reversion", "price_action", "candlesticks"):
+        assert weird[k] == normal[k], k
+    # risk: only the reference-only structural stop / level target built from the zones may follow them
+    for side in ("long_side", "short_side"):
+        r_n, r_w = normal["risk"][side], weird["risk"][side]
+        assert r_n["vol_target"] is not None                               # so first_target is not the level target
+        for k in ("entry_ref", "sigma_h_pct", "vol_stop", "vol_target", "atr_stop", "first_target",
+                  "first_target_sigma", "first_target_touch_rate", "vol_pair_odds"):
+            assert r_w[k] == r_n[k], (side, k)
+        for block in ("stop_distance_atr", "stop_distance_pct", "stop_distance_sigma", "stop_touch_rate",
+                      "reward_risk"):
+            assert {s: r_w[block][s] for s in ("vol", "atr")} == {s: r_n[block][s] for s in ("vol", "atr")}, block
+        ex_n, ex_w = r_n["position_size_example"], r_w["position_size_example"]
+        assert {k: v for k, v in ex_w.items() if k != "by_stop"} == {k: v for k, v in ex_n.items() if k != "by_stop"}
+        assert {s: ex_w["by_stop"][s] for s in ("vol", "atr")} == {s: ex_n["by_stop"][s] for s in ("vol", "atr")}
+
+
 def test_a_release_after_the_as_of_close_is_listed():
     # 16:30 New York on as_of 2026-10-16 is still 2026-10-16 in UTC: inside the window, which starts on as_of;
     # a release before that day's open is already in the as_of bar and is dropped
@@ -415,6 +470,19 @@ def test_cli_unknown_ticker_exits_1(cli, tmp_path, capsys):
     err = capsys.readouterr().err
     assert "Cannot analyse NOPE" in err and "no price data" in err
     assert not (tmp_path / "metrics.json").exists()
+
+
+@pytest.mark.parametrize("setting, value", [("SMA_PERIODS", (20, 50, 100)), ("SMA_PERIODS", (20, 100, 200)),
+                                            ("SMA_CONTEXT_PERIODS", (150,))])
+def test_cli_refuses_an_edited_sma_layout(cli, tmp_path, monkeypatch, capsys, setting, value):
+    """A replaced trend period used to run to the end without an error, with the 100-day mean as the regime's
+    "SMA200" and twice as a level; another context period broke the chart. Both now stop before any module."""
+    monkeypatch.setattr(C, setting, value)
+    assert analyze.main(["ACME", "--out", str(tmp_path / "out")]) == 1
+    err = capsys.readouterr().err
+    assert f"Cannot analyse ACME: config.{setting} must be" in err
+    assert "Restore that setting in scripts/config.py." in err and "Check the symbol" not in err
+    assert not (tmp_path / "out").exists()
 
 
 def test_cli_missing_key_exits_2(monkeypatch, tmp_path, capsys):

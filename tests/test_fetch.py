@@ -868,25 +868,60 @@ def test_crosscheck_matches_fmp_shaped_indicators():
     ind = pytest.importorskip("indicators")
     df = series("1996-10-01", seed=3)
     recent = df.loc["2021-10-18":]                     # FMP-like: about five years, its own RSI seed
+    sma_rows = lambda n: _indicator_rows(df, "sma", df["close"].rolling(n).mean())  # noqa: E731
     rows = {
-        ("technical-indicators/sma", "ACME"): _indicator_rows(df, "sma", df["close"].rolling(50).mean()),
+        ("technical-indicators/sma", "ACME", 50): sma_rows(50),
+        ("technical-indicators/sma", "ACME", 100): sma_rows(100),
         ("technical-indicators/rsi", "ACME"): _indicator_rows(recent, "rsi", ind.rsi(recent["close"], 14)),
     }
-    res = crosscheck.crosscheck(market(indicator_rows=rows), "ACME", now=NOW)
+    fake = market(indicator_rows=rows)
+    res = crosscheck.crosscheck(fake, "ACME", now=NOW)
     assert res["status"] == "ok" and res["as_of"] == "2026-10-16"
-    sma, rsi = res["indicators"]["sma50"], res["indicators"]["rsi14"]
-    assert sma["n"] == rsi["n"] == C.CROSSCHECK_WINDOW
+    assert [p.get("periodLength") for e, p in fake.requests if e == "technical-indicators/sma"] == [50, 100]
+    sma, sma100, rsi = res["indicators"]["sma50"], res["indicators"]["sma100"], res["indicators"]["rsi14"]
+    assert sma["n"] == sma100["n"] == rsi["n"] == C.CROSSCHECK_WINDOW
     assert sma["share_within_tol"] == 1.0 and sma["max_abs_diff"] < 1e-9
+    assert sma100["share_within_tol"] == 1.0 and sma100["max_abs_diff"] < 1e-9     # same tolerance rule as SMA(50)
+    assert sma100["tolerance"] == sma["tolerance"] == f"{C.CROSSCHECK_SMA_TOL:.2%} of close"
     assert rsi["share_within_tol"] == 1.0 and rsi["max_abs_diff"] < 0.01
     assert "path-dependent" in " ".join(res["notes"])
-    assert "SMA(50)" in crosscheck.format_report(res)
+    report = crosscheck.format_report(res)
+    assert "SMA(50)" in report and "SMA(100)" in report
+
+
+def test_crosscheck_flags_an_sma100_that_is_not_fmps():
+    """SMA(100) rows that are really SMA(50) values must fail the tolerance, not pass silently."""
+    crosscheck = pytest.importorskip("crosscheck")
+    df = series("1996-10-01", seed=3)
+    wrong = _indicator_rows(df, "sma", df["close"].rolling(50).mean())
+    res = crosscheck.crosscheck(market(indicator_rows={("technical-indicators/sma", "ACME"): wrong}), "ACME", now=NOW)
+    assert res["indicators"]["sma50"]["share_within_tol"] == 1.0
+    assert res["indicators"]["sma100"]["share_within_tol"] < 0.5
+    assert res["indicators"]["rsi14"]["available"] is False
+
+
+def test_crosscheck_refuses_an_edited_context_sma(monkeypatch, capsys):
+    """CHECKS names SMA(100): another context period used to end in an uncaught KeyError 'sma100'. compute_all now
+    refuses it with a ValueError, which main reports as an error."""
+    crosscheck = pytest.importorskip("crosscheck")
+    df = series("1996-10-01", seed=3)
+    fake = market(indicator_rows={("technical-indicators/sma", "ACME"):
+                                  _indicator_rows(df, "sma", df["close"].rolling(100).mean())})
+    monkeypatch.setattr(C, "SMA_CONTEXT_PERIODS", (150,))
+    with pytest.raises(ValueError, match=r"^config\.SMA_CONTEXT_PERIODS must be \(100,\)"):
+        crosscheck.crosscheck(fake, "ACME", now=NOW)
+    monkeypatch.setattr(crosscheck.fmp_client, "FMPClient", lambda: fake)
+    monkeypatch.setattr(fetch, "market_now", lambda: NOW)
+    assert crosscheck.main(["ACME"]) == 1
+    assert "Error: config.SMA_CONTEXT_PERIODS must be (100,)" in capsys.readouterr().err
 
 
 def test_crosscheck_reports_a_restricted_plan():
     crosscheck = pytest.importorskip("crosscheck")
     fake = market(blocked={"technical-indicators/sma", "technical-indicators/rsi"})
     res = crosscheck.crosscheck(fake, "ACME", now=NOW)
-    assert res["status"] == "restricted" and res["calls"] == 2
+    assert res["status"] == "restricted" and res["calls"] == 3          # SMA(50), SMA(100), RSI(14)
+    assert set(res["indicators"]) == {"sma50", "sma100", "rsi14"}
     assert all(v["reason"].startswith("restricted") for v in res["indicators"].values())
     assert "not included in this plan" in crosscheck.format_report(res)
 

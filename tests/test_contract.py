@@ -127,6 +127,24 @@ def test_numbers_are_the_metrics(stock):
     assert (c["horizons"]["swing"]["horizon_days"], c["horizons"]["position"]["horizon_days"]) == (10, 60)
 
 
+def test_trend_sma100_is_the_metrics_context_sma(stock):
+    swing, position, c = stock
+    sma, t = swing["trend_momentum"]["sma"], c["trend"]
+    assert isinstance(t["sma100"], float) and t["sma100"] == sma["sma100"]
+    assert t["slopes"]["sma100"] == sma["slopes"]["sma100"] and t["close_vs"]["sma100"] == sma["close_vs"]["sma100"]
+    assert (t["sma20"], t["sma50"], t["sma200"]) == (sma["sma20"], sma["sma50"], sma["sma200"])
+    assert t["stack"] == sma["stack"] and "100" not in t["stack"] and sma["stack_periods"] == [20, 50, 200]
+    spec = SCHEMA["properties"]["trend"]
+    assert "sma100" in spec["required"] and "context only" in spec["properties"]["sma100"]["description"]
+    assert "trend.sma100" in SCHEMA["description"]
+    # a run without the 100-day mean (short history, or an older metrics file) gives null, still valid
+    old = [copy.deepcopy(m) for m in (swing, position)]
+    for m in old:
+        del m["trend_momentum"]["sma"]["sma100"]
+    c_old = contract.build(*old)
+    assert c_old["trend"]["sma100"] is None and validate(c_old, SCHEMA) == []
+
+
 def test_shared_blocks_are_the_same_in_both_runs(stock):
     swing, position, c = stock
     for k in contract.SHARED:
@@ -322,6 +340,7 @@ def test_short_history_contract():
     c = contract.build(*both(market(stock_start=start, profile=profile_row("ACME", ipo=start), earnings=[])))
     assert validate(c, SCHEMA) == []
     assert c["trend"]["sma200"] is None and c["regime"]["vol"] is None
+    assert c["trend"]["sma100"] is not None                                # 150 bars: the 100-day mean exists
     assert c["event"]["available"] is False
 
 

@@ -88,6 +88,38 @@ def test_trend_momentum_short_history():
     assert exactly["mom_12_1"] is not None
 
 
+def test_sma100_is_reported_but_not_part_of_the_stack():
+    bars = bars_from_close(100 * 1.001 ** np.arange(400))
+    ctx = make_ctx(bars)
+    out = M.build_trend_momentum(ctx)["sma"]
+    row, close = ctx["ind"].iloc[-1], bars["close"].iloc[-1]
+    assert list(out)[:4] == ["sma20", "sma50", "sma100", "sma200"]
+    assert out["sma100"] == pytest.approx(bars["close"].iloc[-100:].mean())
+    assert out["slopes"]["sma100"] == pytest.approx(row["sma100_slope"])
+    assert out["close_vs"]["sma100"] == pytest.approx(close / out["sma100"] - 1)
+    assert set(out["slopes"]) == set(out["close_vs"]) == {"sma20", "sma50", "sma100", "sma200"}
+    assert out["stack"] == "20>50>200" and out["stack_state"] == "bullish" and out["stack_periods"] == [20, 50, 200]
+    # an SMA100 above the SMA20 or below the SMA200 would break a 20>50>100>200 stack: this one ignores it
+    for extreme in (close * 2, close / 2):
+        moved = M.build_trend_momentum(with_last(ctx, sma100=extreme))["sma"]
+        assert moved["sma100"] == pytest.approx(extreme)
+        assert (moved["stack"], moved["stack_state"]) == ("20>50>200", "bullish")
+        assert {k: moved[k] for k in ("sma20", "sma50", "sma200")} == {k: out[k] for k in ("sma20", "sma50", "sma200")}
+
+
+def test_sma100_short_history_is_null_with_a_note():
+    out = M.build_trend_momentum(make_ctx(synthetic_bars(80)))
+    sma = out["sma"]
+    assert sma["sma100"] is None and sma["slopes"]["sma100"] is None and sma["close_vs"]["sma100"] is None
+    assert sma["sma200"] is None and sma["stack"] in ("20>50", "50>20")
+    assert "SMA100 unavailable with 80 bars (context only, not part of the stack)" in out["notes"]
+    assert "SMA200 unavailable with 80 bars; stack uses the remaining SMAs" in out["notes"]
+    # 150 bars: SMA100 is there, SMA200 is not, and the stack still uses only SMA20 / SMA50
+    mid = M.build_trend_momentum(make_ctx(synthetic_bars(150)))
+    assert mid["sma"]["sma100"] is not None and mid["sma"]["sma200"] is None
+    assert mid["sma"]["stack"] in ("20>50", "50>20") and not any("SMA100" in n for n in mid["notes"])
+
+
 def test_macd_last_cross_matches_manual():
     # arithmetic decline: MACD falls toward a constant and stays below its signal; the rally crosses it
     path = np.r_[200 - 0.5 * np.arange(120), 200 - 0.5 * 119 + np.arange(1, 16)]

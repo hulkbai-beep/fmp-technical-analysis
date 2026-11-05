@@ -38,8 +38,9 @@ support/resistance zones are reference only), the calibrated 95% band (`range_95
 volatility-band stop and target with their calibrated touch rates (`stops_ref`). 2.0 removes
 `event.eps_estimated`: the skill carries no fundamentals. 2.1 adds the exchange-calendar source
 (`data_quality.calendar_source`), the last and next ex-dividend dates (`dividend`), the scheduled US macro
-releases after `as_of` (`macro`) and, per horizon, whether the next ex-dividend date and which macro events fall
-inside it; trading-day counts now exclude NYSE holidays. The contract selects facts and judges nothing; position
+releases after `as_of` (`macro`), the 100-day SMA as a context line outside the SMA stack (`trend.sma100`) and,
+per horizon, whether the next ex-dividend date and which macro events fall inside it; trading-day counts now
+exclude NYSE holidays. The contract selects facts and judges nothing; position
 sizing is left to the caller.
 Fields are only ever added within a major version; renaming or removing one means ta-3.0.
 

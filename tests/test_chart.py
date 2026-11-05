@@ -95,13 +95,40 @@ def test_chart_data_is_json_safe_and_sized_to_the_window():
     # split-adjusted OHLCV (not the dividend-adjusted columns), prices rounded to 4 decimals
     assert d["candles"][-1][4] == round(float(win["close"].iloc[-1]), 4)
     assert d["candles"][-1][5] == int(round(win["volume"].iloc[-1]))
-    for key in ("sma20", "sma50", "sma200", "rsi14", "rvol"):
+    for key in ("sma20", "sma50", "sma100", "sma200", "rsi14", "rvol"):
         assert 0 < len(d[key]) <= n
         assert d[key][-1][0] == ctx["as_of"]
     assert d["sma200"][-1][1] == pytest.approx(ctx["ind"]["sma200"].iloc[-1], abs=1e-4)
     assert d["weekly"][-1][0] == ctx["as_of"] and d["weekly"][0][0] >= d["candles"][0][0]
     assert d["default_timeframe"] == "daily"
     assert d["meta"]["ticker"] == "TEST" and d["meta"]["chart_bars"] == n
+
+
+def test_sma100_series_is_emitted():
+    ctx, d = _data()
+    win = ctx["bars"].index[-C.HORIZONS["swing"]["chart_bars"]:]
+    expected = ctx["bars"]["close"].rolling(100).mean().loc[win]
+    assert [p[0] for p in d["sma100"]] == [str(x.date()) for x in win]
+    np.testing.assert_allclose([p[1] for p in d["sma100"]], expected, atol=1e-4)
+    assert d["sma100"][-1][1] == round(float(ctx["ind"]["sma100"].iloc[-1]), C.CHART_PRICE_DECIMALS)
+    _, short = _data(n=150, horizon="position")                # pairs only where the 100-day mean exists
+    assert len(short["sma100"]) == 150 - 99 and short["sma100"][0][0] == short["candles"][99][0]
+    assert short["sma200"] == []
+
+
+def test_ui_draws_sma100_in_its_own_colour_in_both_themes():
+    css = (UI / "chart.css").read_text(encoding="utf-8")
+    blocks = [b for b in re.findall(r"\{([^{}]*)\}", css) if "--sma20:" in b]
+    assert len(blocks) == 3                                    # light, dark (media query), dark (data-theme)
+    for b in blocks:
+        colours = dict(re.findall(r"--(sma\d+):\s*(#[0-9a-fA-F]{6})", b))
+        assert set(colours) == {"sma20", "sma50", "sma100", "sma200"}
+        assert len({c.lower() for c in colours.values()}) == 4, colours
+    js, i18n = (UI / "chart.js").read_text(encoding="utf-8"), (UI / "i18n.js").read_text(encoding="utf-8")
+    assert 'const SMA_KEYS = ["sma20", "sma50", "sma100", "sma200"];' in js
+    assert i18n.count('lg_sma100: "SMA100"') == 2                                   # legend, zh and en
+    assert len(re.findall(r'(?<!\w)sma100: "SMA100"', i18n)) == 2                    # level source, zh and en
+    assert i18n.count("sma100_title:") == 2
 
 
 def test_rs_line_is_normalized_and_absent_for_spy():

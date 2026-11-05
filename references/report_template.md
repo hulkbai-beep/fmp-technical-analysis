@@ -117,7 +117,8 @@ or ^VIX block shows its `reason`.
 **Fields:**
 - `regime.label` and `regime.type`;
 - direction: `regime.direction.label` and `regime.direction.votes`; `close_vs_sma50`,
-  `close_vs_sma200` and `sma50_vs_sma200` are percent distances;
+  `close_vs_sma200` and `sma50_vs_sma200` are percent distances. The 100-day SMA
+  (`trend_momentum.sma.sma100`) is not one of the four votes: when you mention it, call it a reference line;
 - strength: `regime.strength.adx`, `.plus_di`, `.minus_di`, `.label`;
 - volatility: `regime.volatility.rv20`, `.rv20_pctl`, `.atr_pct`, `.atr_pct_pctl`, `.label`,
   `.compression`, `.bb_width_pctl`;
@@ -158,6 +159,9 @@ trend votes, weekly direction and 52-week high lean down).
 3. Supporting readings: a compact table of the most relevant raw values.
    - `trend_momentum.mom_12_1`, `.returns.1m/3m/6m/12m`, `.sma.stack`, `.macd.hist`,
      `.macd.last_cross` (type, date), `.from_52w_high.pct`;
+   - `trend_momentum.sma.sma100` and `.sma.close_vs.sma100`: the 100-day SMA as a reference line
+     (e.g. "close +3.1% vs SMA100, a widely watched reference line"). It is not part of `.sma.stack`
+     (SMA20/50/200, `.sma.stack_periods`) and no pillar or vote uses it;
    - `relative_strength.vs_spy.rel_return_3m/6m`, `relative_strength.beta_1y`, `.corr_1y`;
    - `mean_reversion.rsi14`, `.rsi2`, `.z20`, `.bb_pct_b`, `.dist_sma50_atr`;
    - `volume_flow.rvol`, `.updown_volume_ratio_50d`, `.obv.divergence`, `.ad.divergence`;
@@ -204,7 +208,9 @@ Do not invent conflicts, and do not drop any.
    zone source only when they fall inside a zone. None: "No unfilled gaps in the window."
 4. A small anchored-VWAP table.
 
-**Labels:** call the volume profile and VWAPs "daily-bar approximations". If a side has fewer than 3
+**Labels:** call the volume profile and VWAPs "daily-bar approximations". The sources `sma50`, `sma100`
+and `sma200` are the 50-, 100- and 200-day SMAs (low-weight moving-average candidates; write them SMA50,
+SMA100, SMA200). If a side has fewer than 3
 levels, quote the note (e.g. "price at an all-time high (available history): no resistance levels
 above the last close in the window"). Give the other `levels.notes` as short bullets (anchored VWAPs too
 young to be levels, gaps on ex-dividend bars that the dividend explains).
