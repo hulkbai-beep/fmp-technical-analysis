@@ -15,7 +15,7 @@
 |---|---|---|
 | `holidays-by-exchange?exchange=NYSE&from&to` | ✅ 一次调用 1990–2028 共 405 行 | `date, name, isClosed, adjCloseTime`；含特殊休市（2001-09-11…14、2012-10-29/30、2025-01-09 卡特国丧）与半日市（`adjCloseTime` 13:00/13:30）。不带 from/to 只给过去 12 个月 |
 | `dividends?symbol=` | ✅ | `date`（除息日）`, adjDividend`（**已按拆股调整**：NVDA 拆股前 0.04→0.004；AAPL 1987 0.1201→0.000536）`, dividend, frequency, declarationDate, paymentDate`；**包含已宣布、尚未到来的除息日**（KO 2026-12-01、AAPL 2026-11-12）；不派息的股票返回 `[]`（TSLA）；含特别股息（COST $15，2023-12-27，`frequency: Special`） |
-| `economic-calendar?from&to` | ✅ | `date`（**UTC**，如 NFP 13:30 = 美东 8:30；FOMC 19:00/18:00 = 美东 14:00，夏令时正确）`, country, event, impact(High/Medium/Low/None), previous, estimate, actual`。**范围上限约 90 天，且静默截断**：1 年窗口返回 0 行，整年窗口只返回最后约 90 天 |
+| `economic-calendar?from&to` | ✅ | `date`（**UTC**，如 NFP 13:30 = 美东 8:30；FOMC 19:00/18:00 = 美东 14:00，夏令时正确）`, country, event, impact(High/Medium/Low/None), previous, estimate, actual`。**范围上限约 90 天，且静默截断**：1 年窗口返回 0 行，整年窗口只返回最后约 90 天。**当前套餐不允许较早的 `from`**（`from=2025-11-01` 被拒：Premium Query Parameter；`2026-01-29` 起可用）→ 只能看未来/近期，历史反应统计受限。同一事件的 impact 标签会变（Michigan 消费者信心 7 次 High、4 次 Medium），所以按**事件名**分组 |
 | `earnings-calendar` / `earnings` | ⚠️ | **没有**盘前/盘后字段（所以两日反应窗口仍然合理） |
 | `aftermarket-quote` / `aftermarket-trade` | ✅ | `bidPrice, askPrice, timestamp` / `price, tradeSize, timestamp`（第二阶段用） |
 | `shares-float` | ✅ | `floatShares, freeFloat, outstandingShares`（第三阶段用） |
@@ -175,14 +175,21 @@ def weekday_calendar() -> MarketCalendar                                # 无节
 
 ### 4.2 新模块 `scripts/macro.py` → `macro_events`（放在 `dividends` 之后）
 
-- **分组（`config.MACRO_GROUPS`，按事件名正则匹配，不依赖 FMP 的 impact 标签）：**
-  - tier 1：`fomc`（Fed Interest Rate Decision / FOMC Statement / Economic Projections / Press Conference）、
-    `cpi`（Inflation Rate、Core Inflation Rate、CPI）、`jobs`（Non Farm Payrolls、Unemployment Rate、
-    Average Hourly Earnings…）、`pce`（PCE Price Index、Core PCE、Personal Income/Spending）、`ppi`、`gdp`、`retail_sales`
-  - tier 2：`fomc_minutes`、`ism_manufacturing`、`ism_services`、`jolts`、`consumer_sentiment`（Michigan、CB）、
-    以及其他 FMP 标为 High 的美国事件（`other`，如中期选举）
-  - 排除：`MACRO_EXCLUDE`（每周初请失业金等高频噪音）
-- **同组同一时间戳的多行合并为一个事件**（如 CPI 的 MoM/YoY/Core 四行 → 一个 `cpi` 事件，`releases` 列出原名）。
+- **分组（`config.MACRO_GROUPS`，按事件名的锚定正则匹配，不依赖 FMP 的 impact 标签）：**
+  - tier 1：`fomc`（Fed Interest Rate Decision / FOMC Statement / FOMC Economic Projections / Press Conference）、
+    `cpi`（Inflation Rate、Core Inflation Rate、CPI s.a / n.s.a）、`jobs`（Non Farm Payrolls、Nonfarm Payrolls Private、
+    Unemployment Rate、U-6、Average Hourly Earnings、Government/Manufacturing Payrolls、Participation Rate）、
+    `pce`（PCE Price Index、Core PCE、Personal Income/Spending）、`ppi`（Producer Price Index、Core PPI、PPI Ex …）、
+    `gdp`（GDP Growth Rate、GDP Price Index、GDP Sales、PCE Prices QoQ）、`retail_sales`
+  - tier 2：`fomc_minutes`、`fed_policy`（Jackson Hole Symposium、Monetary Policy Report）、`ism_manufacturing`、
+    `ism_services`、`jolts`、`consumer_sentiment`（Michigan Consumer Sentiment、CB Consumer Confidence）
+  - tier 3：其他 FMP 标为 High 的美国事件（`other`，标签用原事件名，如耐用品、房屋开工、中期选举）
+  - 排除：`MACRO_EXCLUDE`（初请/续请失业金及 4 周均值——每周都有的高频噪音）；锚定正则自然排除
+    Cleveland CPI、通胀预期、Atlanta Fed GDPNow、Fed 官员讲话等
+- **同组同一美东日期的多行合并为一个事件**（CPI 的 MoM/YoY/Core 多行 → 一个 `cpi`；FOMC 14:00 决议 + 14:30
+  记者会 → 一个 `fomc`，时间取最早一行），`releases` 列出原名。tier 3 按「事件名 + 日期」各自成事件。
+- metrics 里列出 tier 1–3 全部；合约只放 tier ≤ `MACRO_CONTRACT_MAX_TIER`(=2)；报告逐条写 tier 1、简述 tier 2、
+  tier 3 只给数量。
 - **时间：** UTC → 美东。`timing`：`pre_open`（< 09:30）/ `intraday` / `after_close`（≥ 当日收盘）/
   `non_session`（周末/假日）；`session` = 受影响的交易日（盘后与非交易日 → 下一个交易日）；
   `trading_days_to` = (as_of, session] 内的交易日数。只保留 as_of 收盘之后的事件。
@@ -217,7 +224,7 @@ def weekday_calendar() -> MarketCalendar                                # 无节
   - 顶层 `dividend`：`{available, reason, pays_dividends, next_ex_date, next_amount, next_amount_pct,
     next_trading_days_to, last_ex_date, last_amount}`
   - 顶层 `macro`：`{available, reason, window_from, window_to, events: [{id, label, tier, date, time_ny,
-    timing, session, trading_days_to}]}`
+    timing, session, trading_days_to}]}`（只含 tier ≤ `MACRO_CONTRACT_MAX_TIER`）
   - `horizons.*.ex_dividend_within_horizon`（bool|null）、`horizons.*.macro_within_horizon`
     （`[{id, label, tier, date, trading_days_to}]`）
 - 语义修正（字段名不变）：`event.trading_days_to`、`data_quality.business_days_behind` 现在按 NYSE 交易日计（排除节假日）。
@@ -282,7 +289,7 @@ def weekday_calendar() -> MarketCalendar                                # 无节
 | 3 | 行业 / 同行相对强弱 | `industry-performance-snapshot`、`stock-peers` | 个股 3/6 个月收益在同行中的百分位；只在 position 下开启以控制调用 |
 | 3 | 流通股换手率 | `shares-float` | 成交量 / 流通股，比 RVOL 更适合小盘股 |
 | 4 | 日内数据替代近似 | `historical-chart/1hour`、`/5min` | 真实锚定 VWAP、日内成交量分布、缺口回补；只在 swing 下启用 |
-| — | 宏观事件历史反应统计 | `economic-calendar`（历史，每 90 天一次调用） | 该股在过去 FOMC/CPI 日的平均绝对波动 vs 平日；调用量大，需单独评估 |
+| — | 宏观事件历史反应统计 | `economic-calendar`（历史，每 90 天一次调用） | 该股在过去 FOMC/CPI 日的平均绝对波动 vs 平日；**当前套餐不允许较早的 `from`**，需升级套餐或自建事件日期表，单独评估 |
 
 **不做：** 分析中使用 FMP 自带技术指标（继续只做交叉校验）；分析师目标价、内部人交易、13F、新闻（不是技术面）；
 当前套餐受限的接口（`sp500-constituent`、`batch-quote`、COT）。
