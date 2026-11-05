@@ -281,6 +281,62 @@ def test_payer_without_an_announced_next_date(payer):
     assert any("no upcoming ex-dividend date announced" in n for n in out["notes"])
 
 
+MONTHLY = ["2025-12-01", "2026-01-02", "2026-02-02", "2026-03-02", "2026-04-01", "2026-05-01", "2026-06-01",
+           "2026-07-01", "2026-08-03", "2026-09-01", "2026-10-01", "2026-11-02"]
+
+
+@pytest.fixture(scope="module")
+def monthly():
+    """A monthly payer as of Wednesday 2026-11-04 (HYG's ex-dates of the last 12 months), the NYSE rules."""
+    bars = synthetic_bars(len(pd.bdate_range("2025-06-02", "2026-11-04")), start="2025-06-02")
+    assert day(bars.index[-1]) == "2026-11-04"
+    return bars, [entry(d, 0.4, frequency="Monthly") for d in MONTHLY], MC.build_calendar(None, end_year=2027)
+
+
+def test_ex_dates_inside_the_horizon_are_projected_from_the_spacing_of_the_last_12_months(monthly):
+    # HYG 2026-11-04 had no next ex-date announced, and the note said only that one "may still fall inside"
+    # 60 sessions, where about three usually do (12-02, 01-02 and 02-01 at 30.4-day spacing; 02-01 is session 59)
+    bars, divs, cal = monthly
+    close = bars["close"].iloc[-1]
+    pos = D.build_dividends(make_ctx(bars, divs, horizon="position", calendar=cal))
+    assert pos["ex_dates_12m"] == 12 and pos["next_ex_dividend"] is None and pos["within_horizon"] is None
+    assert pos["projected_in_horizon"] == {"ex_dates": 3, "amount_pct": pytest.approx(1.2 / close)}
+    (note,) = pos["notes"]
+    assert note.startswith("no upcoming ex-dividend date announced in FMP's data yet (the last was 2026-11-02); "
+                           "at the spacing of the last 12 months (12 ex-dates) about 3 would fall inside the "
+                           "60-session horizon, about ")
+    assert note.endswith("% of the close in all at the last amount")
+    swing = D.build_dividends(make_ctx(bars, divs, calendar=cal))          # 10 sessions: the next is ~19 away
+    assert swing["projected_in_horizon"] == {"ex_dates": 0, "amount_pct": 0.0}
+    assert swing["notes"] == ["no upcoming ex-dividend date announced in FMP's data yet (the last was "
+                              "2026-11-02); one declared later may still fall inside the horizon"]
+    # announced inside the horizon: it counts, and the later ones at the same spacing are added
+    nxt = D.build_dividends(make_ctx(bars, divs + [entry("2026-12-01", 0.5, frequency="Monthly")],
+                                     horizon="position", calendar=cal))
+    assert nxt["within_horizon"] is True
+    assert nxt["projected_in_horizon"] == {"ex_dates": 3, "amount_pct": pytest.approx(1.5 / close)}
+    assert any("about 3 would fall inside the 60-session horizon, the announced 2026-12-01 included" in n
+               and n.endswith("in all at its amount") for n in nxt["notes"])
+    json.dumps(pos, allow_nan=False)
+
+
+def test_projection_follows_the_phase_and_needs_two_ex_dates(payer):
+    bars, past = payer                                    # quarterly, ~91 days apart, the last 11 sessions ago
+    out = D.build_dividends(make_ctx(bars, past, horizon="position"))
+    assert out["ex_dates_12m"] == 4 and out["projected_in_horizon"]["ex_dates"] == 1
+    assert "about 1 would fall inside the 60-session horizon" in out["notes"][0]
+    assert " in all " not in out["notes"][0]
+    just_paid = D.build_dividends(make_ctx(bars, past[1:] + [entry(bars.index[-1], 0.5)], horizon="position"))
+    assert just_paid["projected_in_horizon"]["ex_dates"] == 0    # the next is ~63 sessions away
+    assert "one declared later may still fall inside the horizon" in just_paid["notes"][0]
+    beyond = D.build_dividends(make_ctx(bars, past + [entry(bars.index[-1] + pd.offsets.BDay(61), 0.6)],
+                                        horizon="position"))
+    assert beyond["within_horizon"] is False and beyond["projected_in_horizon"] == {"ex_dates": 0, "amount_pct": 0.0}
+    annual = D.build_dividends(make_ctx(bars, past[-1:], horizon="position"))
+    assert annual["ex_dates_12m"] == 1 and annual["projected_in_horizon"] is None
+    assert "one declared later may still fall inside the horizon" in annual["notes"][0]
+
+
 def test_lapsed_payer_is_not_paying_now():
     bars = synthetic_bars(800, start="2022-01-03")
     idx = bars.index

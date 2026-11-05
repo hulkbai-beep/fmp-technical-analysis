@@ -301,10 +301,11 @@ def _coverage(rows, calendar, as_of, hz, window) -> tuple[dict, str | None]:
         why = (f"the economic-calendar window ends on {iso(window_to)} (FMP returns at most ~90 days per "
                f"request), so later events are missing")
     else:
-        why = (f"FMP lists {C.MACRO_COUNTRY} releases other than FOMC dates only through {iso(listed)}, so later "
-               f"ones are missing")
+        fomc = "" if window_to is None else f" and FOMC dates through {iso(window_to)}, the request window's end"
+        why = (f"FMP lists {C.MACRO_COUNTRY} releases other than FOMC dates only through {iso(listed)}{fomc}, so "
+               f"later ones are missing")
     spans = " and ".join(f"{h} sessions (to {iso(ends[h])})" for h in late)
-    return out, f"{why}; the event list and counts for {spans} cover only the part through {iso(through)}"
+    return out, f"{why}: for {spans} the event list and counts are complete only through {iso(through)}"
 
 
 def build_macro_events(ctx) -> dict:

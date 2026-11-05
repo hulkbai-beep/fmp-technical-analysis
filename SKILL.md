@@ -59,12 +59,12 @@ describes conditions and historical base rates. It is not advice.
      printed on stderr.
 3. **Read `metrics.json`.** Skip the bulky parts listed in the template (`levels.candidates`,
    `levels.volume_profile.bins`, `signals.library`, `dates_sample`, `macro_events.events[*].releases`,
-   `meta.config_snapshot`).
+   `meta.config_snapshot` apart from the few thresholds the template names).
 4. **Write `report.md`** next to `metrics.json`, following `references/report_template.md`
    exactly: 12 sections in fixed order, the exact key paths and its wording rules. Write it in the
    user's language.
 5. **Reply** with a short summary:
-   - regime, bias and confidence;
+   - regime, bias and confidence, with the dividend note from `regime.notes` when there is one;
    - the nearest support and resistance, labelled reference only (仅供参考);
    - the horizon's 1σ range and calibrated 95% range (±2.4σ, not ±2σ), and the volatility stop with
      how often a stop that far away was touched in calibration;
@@ -73,7 +73,8 @@ describes conditions and historical base rates. It is not advice.
      in the last 3 bars, each with its n (context, not part of the scorecard);
    - the earnings date if it falls inside the horizon;
    - the next ex-dividend date if it falls inside the horizon (`dividends.within_horizon`), with its
-     amount: the price opens lower by about that much for mechanical reasons;
+     amount: the price opens lower by about that much for mechanical reasons; when none is announced but
+     `dividends.projected_in_horizon` puts one or more inside, about how many and their total;
    - the tier-1 macro events inside the horizon (`macro_events.within_horizon`, `tier` 1), each with its
      date and New York time (`time_ny`), as scheduled context;
    - any data warning;
@@ -109,7 +110,8 @@ describes conditions and historical base rates. It is not advice.
   - they are context next to the scorecard and never change it; say so;
   - they are daily-bar approximations: never quote Al Brooks' own probabilities, only the statistics
     in `metrics.json`;
-  - read them with the same statistics rules as the signals; a pattern with no edge on this stock is
+  - read them with the same statistics rules as the signals, except that the `library` rows compare with
+    all days (`base_median`), not the same-regime baseline; a pattern with no edge on this stock is
     reported as such;
   - measured-move targets are zones, never price targets presented as advice.
 - **Ex-dividend dates and macro events** (`dividends`, `macro_events`) are scheduled context:
@@ -120,8 +122,10 @@ describes conditions and historical base rates. It is not advice.
   - the ex-dividend drop is mechanical: the price opens lower by about the dividend. It is not a bearish
     move, and gaps down on ex-dividend bars are already measured net of it;
   - when `macro_events.coverage.complete` is false, say that FMP lists releases other than FOMC dates
-    only through `coverage.listed_through`, so later ones inside the horizon may be missing.
+    only through `coverage.listed_through`, so later ones inside the horizon may be missing, and, when
+    `macro_events.window.to` comes before `coverage.horizon_end`, that FOMC dates reach only that date.
 - **Report every conflict** in `scorecard.conflicts`, with its typical meaning. Do not add your own.
+  Conflicts change no score, bias or confidence; earnings inside the horizon is one, and is never a signal.
 - **Data source:** if `data_source` names a third-party proxy, say so and suggest verifying key
   figures.
 - **Closing bar:** the price is the last *complete* close. Before 16:15 New York time (13:15 on an
@@ -195,7 +199,11 @@ Tools that build on this skill (a decision engine, a screener) read the **ta-2.1
   ex-dividend date and the macro events.
 - **Non-payers:** `dividends.pays_dividends` is false when FMP lists no dividends (TSLA) or none in the
   last 400 days and none is announced. Say "no dividends" in one line. When a payer has no next ex-date
-  announced yet (`next_ex_dividend` null), say so: one declared later may still fall inside the horizon.
+  announced yet (`next_ex_dividend` null), say so with the note: one declared later may still fall inside
+  the horizon, or about how many would at the spacing of the last 12 months (`projected_in_horizon`).
+- **Large dividend payers** (monthly payers, high yielders): the SMAs, MACD, trend votes, weekly direction
+  and 52-week high use prices as traded, which drop by each dividend. When `regime.notes` says the dividends
+  pull these readings down, quote it in sections 3 and 12 and next to the regime in the reply.
 - **Short history** (recent IPO, fewer than 200 bars): SMA200-based readings, percentiles and
   signal statistics become unavailable or `insufficient`. Say so and do not extrapolate.
 - **Plan restrictions:** without the dividend-adjusted endpoint, returns are price-only

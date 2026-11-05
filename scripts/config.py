@@ -182,6 +182,8 @@ DIVIDEND_MATCH_DAYS = 4           # without an exchange calendar, an ex-date wit
                                   # this many calendar days later (with one: the bar of its first NYSE session)
 DIVIDEND_ACTIVE_DAYS = 400        # pays_dividends: an ex-date this many calendar days before as_of at most (an annual
                                   # payer plus slack), or an announced one after it; else dividends look suspended
+DIVIDEND_DRIFT_NOTE = 0.03        # regime note when the 252-bar total return beats the price as traded by this much:
+                                  # the SMAs, MACD, trend votes and 52-week high use prices that drop by each dividend
 
 # ---------------------------------------------------------------------------- macro events (macro.py)
 MACRO_COUNTRY = "US"

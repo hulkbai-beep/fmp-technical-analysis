@@ -16,9 +16,9 @@ lower by about the dividend for mechanical reasons. That drop is not a gap.
   only explain a drop, so gaps up are measured from the prior bar as it traded. Without the column,
   every result is the same as before.
 - build_dividends(ctx): the `dividends` metrics block. It gives the last and the next ex-dividend
-  date, the next one's size against the close and the ATR, and whether it falls inside the
-  horizon. It is context only and never changes the scorecard. There is no dividend yield: the
-  skill carries no fundamentals.
+  date, the next one's size against the close and the ATR, whether it falls inside the horizon and,
+  from the spacing of the last 12 months' ex-dates, about how many fall inside it. It is context only
+  and never changes the scorecard. There is no dividend yield: the skill carries no fundamentals.
 """
 from __future__ import annotations
 
@@ -230,17 +230,35 @@ def _trading_days(as_of: pd.Timestamp, ex: pd.Timestamp, calendar) -> int:
     return int(np.busday_count(as_of.date(), ex.date(), holidays=holidays))
 
 
+def _projected(anchor: pd.Timestamp, spacing: float, as_of: pd.Timestamp, h: int, calendar) -> int:
+    """How many of the dates anchor + j x spacing days (j = 1, 2, ...) fall after as_of and at most h
+    trading days from it (counted as _trading_days does)."""
+    n = 0
+    for j in range(1, 1000):
+        day = anchor + pd.Timedelta(days=round(j * spacing))
+        if day <= as_of:
+            continue
+        if _trading_days(as_of, day, calendar) > h:
+            break
+        n += 1
+    return n
+
+
 def _empty(hz: dict) -> dict:
     return {"available": False, "source": SOURCE, "pays_dividends": None, "last_ex_dividend": None,
             "next_ex_dividend": None, "within_horizon": None, "within_stat_horizons": None,
-            "horizon_days": int(hz["primary"]), "ex_dates_in_history": None, "matched_to_bars": None,
-            "gap_basis": GAP_BASIS, "notes": []}
+            "horizon_days": int(hz["primary"]), "ex_dates_12m": None, "projected_in_horizon": None,
+            "ex_dates_in_history": None, "matched_to_bars": None, "gap_basis": GAP_BASIS, "notes": []}
 
 
 def build_dividends(ctx) -> dict:
     """Dividends: the last ex-dividend date on or before as_of and the next one after it (its size
     against the last close and ATR(14), and the trading days to it), whether that one falls inside
     the primary and each stat horizon, and how many ex-dates in the price history matched a bar.
+    ex_dates_12m counts the ex-dates in the 365 days up to as_of. With two or more, projected_in_horizon
+    estimates from their average spacing how many ex-dates fall inside the primary horizon (the
+    announced one included; 0 when it lies beyond the horizon) and their total share of the close at
+    the last or announced amount; a note words it when no date is announced or there are several.
 
     ctx["dividends"] is the parse_dividends list ([] for a symbol that pays none, None when the fetch
     failed, the reason in ctx["skipped"]["dividends"]). ctx["calendar"] (a MarketCalendar, optional)
@@ -287,6 +305,20 @@ def build_dividends(ctx) -> dict:
     def share(amount: float, base: float | None) -> float | None:
         return amount / base if base else None
 
+    h = int(hz["primary"])
+    year = [d for d, _ in past if (as_of - d).days < 365]
+    spacing = 365.0 / len(year) if len(year) >= 2 else None        # average days between those ex-dates
+    out["ex_dates_12m"] = len(year)
+
+    def projected(n: int, amount: float | None) -> dict:
+        return {"ex_dates": n, "amount_pct": share(n * amount, close) if amount is not None else None}
+
+    def pace(p: dict, included: str, at: str) -> str:
+        pct, many = p["amount_pct"], p["ex_dates"] > 1
+        return (f"at the spacing of the last 12 months ({len(year)} ex-dates) about {p['ex_dates']} would fall "
+                f"inside the {h}-session horizon{included}"
+                + (f", about {pct * 100:.2g}% of the close{' in all' if many else ''} {at}" if pct else ""))
+
     if past:
         d, e = past[-1]
         amount = _amount(e["amount"])
@@ -299,8 +331,14 @@ def build_dividends(ctx) -> dict:
                      f"announced (the last was {R.iso(past[-1][0])}): treated as not paying dividends now")
         return out
     if not upcoming:
-        notes.append(f"no upcoming ex-dividend date announced in FMP's data yet (the last was {R.iso(past[-1][0])}); "
-                     f"one declared later may still fall inside the horizon")
+        d, e = past[-1]
+        tail = "one declared later may still fall inside the horizon"
+        if spacing:
+            n = _projected(d, spacing, as_of, h, calendar)
+            p = out["projected_in_horizon"] = projected(n, _amount(e["amount"]))
+            if p["ex_dates"]:
+                tail = pace(p, "", "at the last amount")
+        notes.append(f"no upcoming ex-dividend date announced in FMP's data yet (the last was {R.iso(d)}); {tail}")
         return out
 
     ex, e = upcoming[0]
@@ -317,6 +355,11 @@ def build_dividends(ctx) -> dict:
         "declaration_date": e.get("declaration_date"), "payment_date": e.get("payment_date"),
         "calendar_days": int((ex - as_of).days), "trading_days_to": td,
     }
-    out["within_horizon"] = td <= int(hz["primary"])
-    out["within_stat_horizons"] = {str(h): td <= int(h) for h in hz["stat_horizons"]}
+    out["within_horizon"] = td <= h
+    out["within_stat_horizons"] = {str(s): td <= int(s) for s in hz["stat_horizons"]}
+    if spacing:
+        n = 1 + _projected(ex, spacing, as_of, h, calendar) if out["within_horizon"] else 0
+        p = out["projected_in_horizon"] = projected(n, amount)
+        if n >= 2:
+            notes.append(pace(p, f", the announced {R.iso(ex)} included", "at its amount"))
     return out

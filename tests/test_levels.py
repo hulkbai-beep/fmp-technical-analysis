@@ -10,7 +10,7 @@ import config as C
 import levels as L
 from conftest import synthetic_bars
 
-REQUIRED_LEVEL_KEYS = {"price", "zone_low", "zone_high", "sources", "touches", "holds", "breaks", "flips",
+REQUIRED_LEVEL_KEYS = {"price", "zone_low", "zone_high", "sources", "touches", "holds", "breaks", "weak", "flips",
                        "fresh", "volume_share", "score", "distance_pct", "distance_atr"}
 
 
@@ -234,7 +234,7 @@ def test_zone_tests_hold_break_and_flip():
         (2, 1, "hold", False), (5, 1, "break", False), (8, -1, "hold", True)]
     scored, = L.score_zones([{"price": 10.25, "zone_low": 10.0, "zone_high": 10.5, "weight": 2.0}],
                             df, {"available": False}, atr=1.0, half_life=1e12)
-    assert (scored["touches"], scored["holds"], scored["breaks"], scored["flips"]) == (3, 2, 1, 1)
+    assert (scored["touches"], scored["holds"], scored["breaks"], scored["weak"], scored["flips"]) == (3, 2, 1, 0, 1)
     assert scored["score"] == pytest.approx(1.0 - 0.5 + 1.5 + C.LEVEL_CONFLUENCE_WEIGHT * 2.0)
     assert scored["fresh"] is False and scored["last_test"] == df.index[8].strftime("%Y-%m-%d")
 
@@ -248,6 +248,10 @@ def test_zone_tests_leave_out_unresolved_tests_and_count_jumps_and_weak_ones():
     assert [t["result"] for t in L.zone_tests(jump, 10.0, 10.5, atr=1.0)] == ["break"]
     weak = frame([12, 11, 11.1, 10.9, 11.0], [11, 10.2, 10.7, 10.3, 10.8])   # out above, no 1-ATR rally, back in
     assert [t["result"] for t in L.zone_tests(weak, 10.0, 10.5, atr=1.0)] == ["weak"]
+    (scored,) = L.score_zones([{"price": 10.25, "zone_low": 10.0, "zone_high": 10.5, "weight": 0.0}],
+                              weak, {"available": False}, atr=1.0, half_life=1e12)
+    # touches = holds + breaks + weak, so a report can print all three without arithmetic
+    assert (scored["touches"], scored["holds"], scored["breaks"], scored["weak"]) == (1, 0, 0, 1)
 
 
 def test_score_zones_decay_and_volume_share():
@@ -427,6 +431,44 @@ def test_build_levels_at_all_time_high_has_no_resistances():
     assert any(n.startswith("price at an all-time high") and "no resistance levels" in n
                for n in out["notes"])
     assert out["supports"] and all(x["zone_high"] < df["close"].iloc[-1] for x in out["supports"])
+
+
+def test_a_record_close_well_below_its_own_high_is_at_the_high():
+    # AAPL 2026-11-04: a record close (349.51 > 348.91) and a record high (354.47) on one bar, but the close
+    # ended 0.58 ATR below that high; within-0.5-ATR-of-the-high alone said "not at a high"
+    n = 300
+    close = 100.0 + np.arange(n, dtype=float)
+    high, low = close + 0.5, close - 1.0
+    high[-1] = close[-1] + 4.0                             # a long upper wick on the last bar
+    df = frame(high, low)
+    df["close"] = close
+    out = L.build_levels(make_ctx(df))
+    assert df["close"].iloc[-1] < out["high_52w"] - C.EXTREME_NEAR_ATR * out["atr"]
+    ext = out["extremes"]
+    assert (ext["at_high_52w"], ext["at_all_time_high"], ext["at_low_52w"], ext["at_all_time_low"]) == \
+        (True, True, False, False)
+    assert "highest close of the period" in ext["rule"] and f"{C.EXTREME_NEAR_ATR:g} ATR" in ext["rule"]
+    assert any(n.startswith("price at an all-time high") for n in out["notes"])
+    # a pullback 3 below the prior close is neither the highest close nor near the high: not at a high
+    close2 = close[:-1].copy()
+    close2[-1] = close2[-2] - 3.0
+    df2 = frame(close2 + 0.5, close2 - 1.0)
+    df2["close"] = close2
+    ext2 = L.build_levels(make_ctx(df2))["extremes"]
+    assert not ext2["at_high_52w"] and not ext2["at_all_time_high"]
+
+
+def test_extremes_closing_basis_mirrors_for_lows_and_separates_52_weeks_from_history():
+    bars = frame([30.0] * 50 + [20.0] * 260, [28.0] * 50 + [18.0] * 260)
+    bars["close"] = [29.0] * 50 + [19.5] * 259 + [19.0]   # the lowest close, 1 above the lowest low (18)
+    r52 = L._range_52w(bars, [])
+    ext = L._extremes(bars, r52, 19.0, near=0.1)
+    assert ext["at_low_52w"] and ext["at_all_time_low"] and not ext["at_high_52w"]
+    old = bars.copy()
+    old.iloc[0, old.columns.get_loc("close")] = 10.0        # a lower close outside the last 252 bars
+    old.iloc[0, old.columns.get_loc("low")] = 9.0
+    ext = L._extremes(old, L._range_52w(old, []), 19.0, near=0.1)
+    assert ext["at_low_52w"] and not ext["at_all_time_low"]
 
 
 def test_build_levels_short_history_and_missing_sma200():

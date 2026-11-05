@@ -461,6 +461,11 @@ def test_real_window_position_flags_the_unlisted_tail(cal):
                              "complete_stat_horizons": {"20": True, "60": False}}
     (note,) = m["notes"]
     assert "only through 2026-12-31" in note and "60 sessions (to 2027-02-02)" in note
+    # the list holds the FOMC decision of 2027-01-27: FOMC dates reach the request window's end, other releases
+    # stop at listed_through, so the note says how far each goes and never that the list stops at 2026-12-31
+    assert "FOMC dates through 2027-01-31, the request window's end" in note
+    assert "complete only through 2026-12-31" in note and "cover only" not in note
+    assert any(e["id"] == "fomc" and e["date"] == "2027-01-27" for e in m["within_horizon"])
 
 
 def test_the_window_end_can_limit_coverage(cal):

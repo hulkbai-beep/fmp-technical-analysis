@@ -34,6 +34,8 @@ GAP_DIVIDEND_METHOD = ("on an ex-dividend bar t paying D, a gap down needs high[
                        "top is low[t-1] - D: a drop the dividend explains is not a gap (split-adjusted bars are "
                        "not dividend-adjusted); a dividend cannot explain a rise, so a gap up is measured from "
                        "high[t-1] as it traded, as on any other bar")
+EXTREMES_RULE = ("at a high: the last close is the highest close of the period (52 weeks = the last 252 bars, or "
+                 "all available history) or within {m:g} ATR of the period's highest high; lows mirror this")
 
 _SOURCE_TYPES = {
     "pivot_high": "pivot", "pivot_low": "pivot",
@@ -479,7 +481,8 @@ def score_zones(zones: list[dict], df: pd.DataFrame, profile: dict, atr: float, 
 
     score = sum over tests of recency x (C.LEVEL_HOLD_POINTS per hold, + C.LEVEL_FLIP_POINTS when
     it is a flip, - C.LEVEL_BREAK_POINTS per break) + C.LEVEL_CONFLUENCE_WEIGHT x zone weight,
-    recency = 0.5 ** (bars since the test / half_life). touches = number of tests; fresh = no test.
+    recency = 0.5 ** (bars since the test / half_life). touches = number of tests = holds + breaks
+    + weak; flips are holds; fresh = no test.
     volume_share = profile volume inside the zone / total profile volume (shown, not scored).
     """
     n = len(df)
@@ -499,6 +502,7 @@ def score_zones(zones: list[dict], df: pd.DataFrame, profile: dict, atr: float, 
         last = max((t["end"] for t in tests), default=None)
         out.append({**z, "touches": len(tests), "holds": int(holds),
                     "breaks": int(sum(t["result"] == "break" for t in tests)),
+                    "weak": int(sum(t["result"] == "weak" for t in tests)),
                     "flips": int(sum(t["flip"] for t in tests)), "fresh": not tests,
                     "last_test": _iso(df.index[last]) if last is not None else None,
                     "reaction_score": float(pts), "volume_share": float(share),
@@ -638,13 +642,16 @@ def _candidates(pivots: dict, bases: list, profile: dict, r52: dict, gaps: list,
 
 
 def _extremes(bars: pd.DataFrame, r52: dict, close: float, near: float) -> dict:
-    """Whether the close is within `near` of the 52-week high/low, and whether that extreme is
-    also the extreme of all available history."""
-    at_high = bool(close >= r52["high_52w"] - near)
-    at_low = bool(close <= r52["low_52w"] + near)
-    return {"at_high_52w": at_high, "at_low_52w": at_low,
-            "at_all_time_high": at_high and bool(r52["high_52w"] >= bars["high"].max()),
-            "at_all_time_low": at_low and bool(r52["low_52w"] <= bars["low"].min())}
+    """Whether the close is at the 52-week high/low and at the high/low of all available history:
+    the highest (lowest) close of the period, the last bar included, or within `near` of the
+    period's highest high (lowest low). A record close that ends well below its own bar's high is
+    still at the high."""
+    recent = bars.iloc[-C.HIGH_52W_BARS:]
+    return {"at_high_52w": bool(close >= recent["close"].max() or close >= r52["high_52w"] - near),
+            "at_low_52w": bool(close <= recent["close"].min() or close <= r52["low_52w"] + near),
+            "at_all_time_high": bool(close >= bars["close"].max() or close >= bars["high"].max() - near),
+            "at_all_time_low": bool(close <= bars["close"].min() or close <= bars["low"].min() + near),
+            "rule": EXTREMES_RULE.format(m=C.EXTREME_NEAR_ATR)}
 
 
 def _shortfall_note(side: str, n: int, weak: int, extremes: dict) -> str:

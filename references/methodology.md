@@ -326,6 +326,11 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   - `vol_extreme` if the vol label is extreme;
   - otherwise `trend`, `range` or `transitional`;
   - transitional also when ADX is unavailable.
+- **Dividend note:** the votes, MACD, the weekly direction and the 52-week high use prices as traded,
+  which drop by each dividend on its ex-date. When the 252-bar total return beats the price return by
+  `DIVIDEND_DRIFT_NOTE` (3 points) or more, `regime.notes` gives both returns and says the dividends pull
+  these readings down (HYG on 2026-11-04: price -3.3%, total +2.6%, every vote down). The readings
+  themselves are unchanged.
 
 ### C. Trend and momentum (`trend_momentum`)
 - **Return index:** all returns use the total-return index P (cumulative product of daily returns,
@@ -462,7 +467,8 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   - **flip** (role reversal): a hold right after a break;
   - tests still running at the last bar, holds that could still complete and a run at the window's
     first bar are left out;
-  - `touches` = tests, `holds`, `breaks`, `flips`, `fresh` = no test, `last_test`.
+  - `touches` = tests = `holds` + `breaks` + `weak`; `flips` (counted among the holds), `fresh` = no test,
+    `last_test`.
 - **Score:** recency x (`LEVEL_HOLD_POINTS` 1 per hold, plus `LEVEL_FLIP_POINTS` 0.5 per flip, minus
   `LEVEL_BREAK_POINTS` 0.5 per break) summed over the tests, recency = 0.5 ^ (bars since the test /
   half-life), + `LEVEL_CONFLUENCE_WEIGHT` (0.5) x `weight`. Scores are absolute, so they compare across
@@ -473,6 +479,10 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   - per side: the nearest qualifying zone, then the highest-scoring other qualifying zones within reach
     of the close; the nearest zones beyond reach fill any shortfall;
   - listed nearest first, each with its score, `distance_pct` and `distance_atr` (negative below the close).
+- **Extremes** (`levels.extremes`, with its `rule`): the close is at the 52-week high when it is the highest
+  close of the last 252 bars, the last bar included, or within `EXTREME_NEAR_ATR` (0.5) ATR of their highest
+  high; at the all-time high the same over all available history. Lows mirror it. A record close that ends
+  well below its own bar's high still counts (AAPL on 2026-11-04 closed 0.58 ATR below a record high).
 - **Short side:** if a side has fewer than 3 levels, a note says so, naming an all-time or 52-week
   extreme when price is at one.
 - **Reference only:** `levels.evidence` = `{note}` (`LEVELS_EVIDENCE_NOTE`). The report, the chart and the
@@ -519,6 +529,14 @@ Stocks, ETFs and SPY alike, from the parsed dividends (section 1.8) and the bars
 - **Horizon:** `within_horizon` is `trading_days_to` ≤ the primary horizon; `within_stat_horizons` gives
   the flag per stat horizon. Both are null when no ex-date is announced yet, and a note says one declared
   later may still fall inside the horizon.
+- **Pace:** `ex_dates_12m` counts the ex-dates in the 365 days up to `as_of`. With two or more,
+  `projected_in_horizon` (`ex_dates`, `amount_pct`) estimates how many fall inside the primary horizon:
+  dates spaced 365 / `ex_dates_12m` days apart, counted on from the announced ex-date when it is inside the
+  horizon (it counts too) or from the last one when none is announced, and their total at that amount as a
+  share of the close; 0 when the announced one lies beyond the horizon. A note says so when none is
+  announced and the estimate is 1 or more, or when the announced one is inside the horizon and the estimate
+  is 2 or more (HYG on 2026-11-04, monthly, 60 sessions: about 3, 1.6% of the close). It is an estimate from
+  the spacing, not a schedule.
 - **Non-payers:** `pays_dividends` is false when FMP lists no dividends (TSLA), or when no ex-date lies
   in the `DIVIDEND_ACTIVE_DAYS` = 400 calendar days up to `as_of` and none is announced (suspended).
   `next_ex_dividend` and the horizon flags are then null (a suspended payer keeps `last_ex_dividend`),
@@ -527,7 +545,8 @@ Stocks, ETFs and SPY alike, from the parsed dividends (section 1.8) and the bars
   names ex-dates that found no bar.
 - **No dividend yield:** the skill carries no fundamentals.
 - **Context only:** never part of the scorecard and never a conflict. When the next ex-date falls inside
-  the primary horizon, the risk notes say so (section 6).
+  the primary horizon, or none is announced and the pace puts one or more inside it, the risk notes say so
+  (section 6).
 - **Unavailable** (`available: false` with the reason) when the dividends request is restricted or fails.
 
 ### L. Macro events (`macro_events`)
@@ -581,7 +600,9 @@ Stocks, ETFs and SPY alike, from the parsed dividends (section 1.8) and the bars
   about 6-8 weeks ahead. `coverage.listed_through` is the date of the last other US row.
   `coverage.complete` (and `complete_stat_horizons` per stat horizon) says whether the horizon's last
   session (`horizon_end`) comes by that date and within the window. A position horizon (60 sessions) is
-  usually incomplete: its list is a lower bound, and a note says which part is missing.
+  usually incomplete: its list is a lower bound, and a note says how far each part reaches (other releases
+  through `listed_through`, FOMC dates through `window.to`, which can fall a few sessions before
+  `horizon_end`).
 - **Context only:** dates and times, never an expected outcome or direction. Macro events never change the
   scorecard and are not a conflict: a position horizon nearly always holds an FOMC decision and a CPI
   release, so a conflict would be constant noise. The contract carries tiers 1-2
@@ -714,7 +735,11 @@ exactly on a boundary takes the label nearer Neutral.
 - **Signal support:**
   - supporting: confirmed signals (section 5.2) with the bias's sign;
   - opposing: confirmed signals with another bias;
+  - unconfirmed: a normal or low sample whose edge does not pass both thresholds in the signal's own
+    direction, including an edge against its own hypothesis; counted, but neither for nor against;
   - insufficient: n < 15.
+
+  The reason line counts all four, so they add up to the active signals.
 - **Level:**
   - **low** if agreement < `CONF_AGREEMENT_LOW` (0.5) or the weekly contradicts the bias;
   - **high** if agreement ≥ `CONF_AGREEMENT_HIGH` (0.7), the weekly confirms, no opposing confirmed
@@ -733,7 +758,7 @@ Each conflict has `type`, `involved`, `description` (with the numbers) and `typi
 | `daily_vs_weekly` | weekly contradicts daily | counter-trend move inside the larger trend |
 | `rs_vs_market` | RS pillar > 0 while SPY is below its SMA200 | leadership against a risk-off tape |
 | `squeeze_no_direction` | squeeze on with direction 0 | break direction unknown |
-| `earnings_in_horizon` | next earnings inside the primary horizon | the event can override the technicals; reactions often exceed the 1σ range |
+| `earnings_in_horizon` | next earnings inside the primary horizon | the event can override the technicals; a reaction adds a jump to the ordinary range (no score, bias or confidence changes) |
 | `signals_vs_regime` | bullish signals in a downtrend, or bearish in an uptrend | counter-trend setups; judge them on same-regime statistics |
 | `signals_both_ways` | bullish and bearish signals active together | turning point or noise |
 
@@ -765,7 +790,9 @@ split-adjusted, and ATR is ATR(14).
   tails, and ±2σ held only 92-93% of closes. `range_95_low` is null when the band reaches zero.
 - It assumes zero drift and that recent volatility persists. `coverage` gives each band's calibrated share
   (below).
-- If earnings fall inside the horizon, `earnings_caveat` gives the date and the median two-day reaction.
+- If earnings fall inside the horizon, `earnings_caveat` gives the date, the median two-day reaction and how
+  many of the listed reactions moved more than the horizon's 1σ move (and the largest): an earnings jump
+  adds to the ordinary range the band describes.
 
 **Volatility-band calibration** (`VOL_CALIBRATION`; measured once on 32 US stocks and ETFs, daily bars
 2005-2026, the 2020 crash and illiquid windows excluded, a start every 5 bars, up and down moves pooled;
@@ -821,7 +848,13 @@ not change.
 - Earnings: overnight gap risk through either stop.
 - The next ex-dividend date: the price is expected to open lower by about the dividend (its amount, % of
   the close and ATRs) for mechanical reasons, so a long-side stop closer to the price than that can be
-  touched by the ex-dividend drop alone.
+  touched by the ex-dividend drop alone. When `dividends.projected_in_horizon` puts 2 or more inside the
+  horizon, the note adds their total.
+- No ex-date announced but the pace puts one or more inside the horizon: the same, with the projected
+  number and total at the last amount.
+
+Both ex-dividend notes add that the volatility bands and touch rates assume zero drift, so they leave the
+drop out.
 
 ---
 
@@ -833,11 +866,11 @@ not change.
 | Volume profile | each bar's volume spread evenly across its high-low range | no intraday volume-at-price |
 | Earnings reaction | two-day close-to-close move across the report date | FMP `earnings` has no before-open / after-close flag; the window contains the reaction either way, plus one extra day of noise |
 | Trading days to earnings | NYSE sessions from `as_of` to the report date | FMP gives no time of day: after an after-close report the price reacts one session later than counted |
-| Dividends in the bars | only gaps down, in the three gap measures, are taken net of the dividend (section 1.8); ATR and the true range, candles, price action, SMAs, RSI, MACD and the bands use the bars as they traded, so an ex-dividend bar can still read as a down bar or widen the true range | split-adjusted prices, as on charting platforms |
+| Dividends in the bars | only gaps down, in the three gap measures, are taken net of the dividend (section 1.8); ATR and the true range, candles, price action, SMAs, RSI, MACD, the bands, the trend votes, the weekly direction and the 52-week high and low use the bars as they traded, so an ex-dividend bar can still read as a down bar or widen the true range, and a large payer's trend readings lean down (the regime note, module B) | split-adjusted prices, as on charting platforms |
 | Size of the ex-dividend drop | the full split-adjusted dividend (`adjDividend`) | the actual open also reflects news and order flow |
 | Early closes | an early close only the rules know (FMP's list is incomplete before about 2013) closes at `EARLY_CLOSE_DEFAULT` = 13:00 | early closes only decide whether today's bar is complete |
 | Macro event times | FMP's published times, converted from UTC to New York; a date-only row (00:00 UTC) has no time and maps to that day's session | FMP may revise a time; the 12-hour cache picks it up |
-| Macro event list | tiers by event name (`MACRO_GROUPS`); releases other than FOMC dates are listed only about 6-8 weeks ahead (`coverage`) | FMP's impact label changes between releases of one event |
+| Macro event list | tiers by event name (`MACRO_GROUPS`); releases other than FOMC dates are listed only about 6-8 weeks ahead, FOMC dates up to the request window's end (`coverage`) | FMP's impact label changes between releases of one event |
 
 ---
 

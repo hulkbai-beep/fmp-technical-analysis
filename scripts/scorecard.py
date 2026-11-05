@@ -544,10 +544,10 @@ def _confidence(pillars: dict, weights: dict, bias_sign: int, modules, views: li
     support = [v["id"] for v in views if v["confirmed"] and bias_sign != 0 and v["bias"] == bias_sign]
     against = [v["id"] for v in views if v["confirmed"] and v["bias"] != bias_sign]
     insufficient = [v["id"] for v in views if v["confidence"] not in ("normal", "low")]
+    unconfirmed = [v["id"] for v in views if not v["confirmed"] and v["id"] not in insufficient]
     insufficient_only = bool(views) and len(insufficient) == len(views)
     signal_support = {"supporting": support, "opposing": against, "insufficient": insufficient,
-                      "unconfirmed": [v["id"] for v in views if not v["confirmed"] and v["id"] not in insufficient],
-                      "insufficient_only": insufficient_only}
+                      "unconfirmed": unconfirmed, "insufficient_only": insufficient_only}
 
     reasons = [f"pillar agreement {agreement:.2f} (weight share of pillars "
                f"{'scoring 0' if bias_sign == 0 else 'on the bias side'}: {', '.join(agree) or 'none'})",
@@ -558,10 +558,11 @@ def _confidence(pillars: dict, weights: dict, bias_sign: int, modules, views: li
                {"code": "mtf", "state": mtf_state, "weekly_sign": None if w is None else _sign(w),
                 "daily_weekly": _get(modules, "multi_timeframe", "alignment")}]
     if views:
-        reasons.append(f"active signals: {len(support)} sample-backed in favour, {len(against)} against, "
-                       f"{len(insufficient)} with an insufficient sample")
+        reasons.append(f"active signals: {len(support)} confirmed in favour, {len(against)} confirmed against, "
+                       f"{len(unconfirmed)} unconfirmed (edge not beyond both thresholds in the signal's own "
+                       f"direction: neither for nor against), {len(insufficient)} with an insufficient sample")
         factors.append({"code": "signals", "supporting": len(support), "opposing": len(against),
-                        "insufficient": len(insufficient)})
+                        "unconfirmed": len(unconfirmed), "insufficient": len(insufficient)})
     else:
         reasons.append("no active signals")
         factors.append({"code": "no_signals"})
@@ -573,8 +574,8 @@ def _confidence(pillars: dict, weights: dict, bias_sign: int, modules, views: li
                        else "low: the weekly picture contradicts the bias")
     elif agreement >= C.CONF_AGREEMENT_HIGH and mtf_state == "confirms" and not insufficient_only and not against:
         level, why = "high", []
-        reasons.append(f"high: agreement >= {C.CONF_AGREEMENT_HIGH:.2f}, weekly confirms, no opposing or "
-                       "insufficient-only signal evidence")
+        reasons.append(f"high: agreement >= {C.CONF_AGREEMENT_HIGH:.2f}, weekly confirms, no confirmed signal "
+                       "against the bias and no insufficient-only signal evidence")
     else:
         level, why, text = "medium", [], []
         if agreement < C.CONF_AGREEMENT_HIGH:
@@ -588,7 +589,7 @@ def _confidence(pillars: dict, weights: dict, bias_sign: int, modules, views: li
             text.append("active signals all have insufficient samples")
         if against:
             why.append("opposing")
-            text.append(f"sample-backed signals against the bias ({', '.join(against)})")
+            text.append(f"confirmed signals against the bias ({', '.join(against)})")
         reasons.append("medium: " + "; ".join(text))
     factors.append({"code": "level", "level": level, "why": why, "opposing": against,
                     "low": C.CONF_AGREEMENT_LOW, "high": C.CONF_AGREEMENT_HIGH})
@@ -706,8 +707,8 @@ def _conflicts(ctx, modules, pillars: dict, views: list[dict]) -> list[dict]:
         out.append(_conflict("earnings_in_horizon", ["event_risk"],
                              f"earnings on {nxt.get('date') or 'an upcoming date'}{when} fall inside the "
                              f"{_horizon(ctx)[1].get('primary')}-day horizon{move}",
-                             "The event can override the technicals: earnings reactions often exceed the "
-                             "1-sigma technical range, gap through levels and stops, and can reset the trend.",
+                             "The event can override the technicals: an earnings reaction adds a jump to the "
+                             "ordinary range, can gap through levels and stops, and can reset the trend.",
                              params={"date": nxt.get("date"), "trading_days": td, "horizon": _horizon(ctx)[1].get("primary"),
                                      "median_abs_move": med, "n": n}))
 
@@ -912,6 +913,25 @@ def _directional(d: int, mk: dict, ticker: str) -> dict:
     }
 
 
+def _earnings_caveat(ev, h: int, sd: float | None) -> str | None:
+    """The base case's caveat when earnings fall inside the horizon, worded from the numbers: the median
+    absolute two-day move and how many past reactions moved more than the h-day 1-sigma move sd."""
+    if not _get(ev, "within_horizon"):
+        return None
+    text = (f"Earnings on {_get(ev, 'next_earnings', 'date')} fall inside the {h}-day horizon and add a jump to "
+            f"the ordinary range the band describes")
+    med = _num(_get(ev, "reactions", "median_abs_move"))
+    if med is None:
+        return text + "."
+    text += (f": over the last {int(_num(_get(ev, 'reactions', 'n')) or 0)} reports the median absolute two-day "
+             f"move was {med * 100:.1f}%")
+    moves = [abs(m) for m in (_num(_get(x, "move")) for x in (_get(ev, "reactions", "items") or [])) if m is not None]
+    if sd is not None and moves:
+        text += (f", and {sum(m > sd for m in moves)} of {len(moves)} moved more than the {h}-day 1-sigma move "
+                 f"of {sd * 100:.1f}% (the largest {max(moves) * 100:.1f}%)")
+    return text + "."
+
+
 def build_scenarios(ctx, modules, scorecard) -> dict:
     """Conditional bull / bear scenarios from the key levels and a base case from realized vol."""
     modules = modules or {}
@@ -929,14 +949,7 @@ def build_scenarios(ctx, modules, scorecard) -> dict:
     else:
         notes.append(f"triggers and level targets come from the key levels, which are {C.LEVELS_EVIDENCE_NOTE}")
 
-    ev = _usable(modules, "event_risk")
-    caveat = None
-    if _get(ev, "within_horizon"):
-        med = _num(_get(ev, "reactions", "median_abs_move"))
-        caveat = (f"Earnings on {_get(ev, 'next_earnings', 'date')} fall inside the {h}-day horizon"
-                  + (f"; the median absolute two-day earnings move was {med * 100:.1f}% over the last "
-                     f"{int(_num(_get(ev, 'reactions', 'n')) or 0)} reports" if med is not None else "")
-                  + ", so the realized range can be much wider than the 1-sigma estimate.")
+    caveat = _earnings_caveat(_usable(modules, "event_risk"), h, None if rv is None else sigma_h(rv, h))
 
     if rv is None:
         base = {"available": False, "reason": "20-day realized volatility unavailable", "earnings_caveat": caveat}
@@ -1105,14 +1118,36 @@ def _risk_side(d: int, mk: dict, scen_side: dict | None, h: int) -> dict:
     }
 
 
-def _ex_dividend_note(nx: dict) -> str:
-    """The risk note for an ex-dividend date inside the horizon (dividends.next_ex_dividend)."""
+def _zero_drift(drops: str) -> str:
+    return f"The volatility bands and touch rates assume zero drift, so they leave {drops} out."
+
+
+def _ex_dividend_note(nx: dict, proj: dict | None) -> str:
+    """The risk note for an ex-dividend date inside the horizon (dividends.next_ex_dividend), with the
+    projected number and total of ex-dates inside it when there are several (dividends.projected_in_horizon)."""
     amount, share, atrs = (_num(nx.get(k)) for k in ("amount", "amount_pct", "amount_atr"))
     size = ", ".join(s for s in (None if share is None else f"{share * 100:.2f}% of the close",
                                  None if atrs is None else f"{atrs:.2f} ATR") if s)
+    n, total = int(_num(_get(proj, "ex_dates")) or 0), _num(_get(proj, "amount_pct"))
+    more = (f" At the spacing of the last 12 months about {n} ex-dates would fall inside the horizon"
+            + (f", about {total * 100:.2g}% of the close in all" if total else "") + "." if n >= 2 else "")
     return (f"Ex-dividend date {nx.get('date')} falls inside the horizon: the price is expected to open lower by "
             f"about the dividend, ${amount:.4g}" + (f" ({size})" if size else "") + ", for mechanical reasons, so "
-            "a long-side stop closer to the price than that can be touched by the ex-dividend drop alone.")
+            "a long-side stop closer to the price than that can be touched by the ex-dividend drop alone."
+            + more + " " + _zero_drift("these drops" if n >= 2 else "this drop"))
+
+
+def _projected_ex_dividend_note(proj: dict) -> str:
+    """The risk note when no ex-dividend date is announced but the spacing of the last 12 months puts
+    some inside the horizon (dividends.projected_in_horizon)."""
+    n, total = int(_num(proj.get("ex_dates")) or 0), _num(proj.get("amount_pct"))
+    one = n == 1
+    size = f", about {total * 100:.2g}% of the close{'' if one else ' in all'} at the last amount" if total else ""
+    drops = "this drop" if one else "these drops"
+    return (f"No ex-dividend date is announced yet, but at the spacing of the last 12 months about {n} would fall "
+            f"inside the horizon{size}: the price is expected to open lower by about the dividend on "
+            f"{'it' if one else 'each'} for mechanical reasons, so a long-side stop closer to the price than that "
+            f"can be touched by {drops} alone. " + _zero_drift(drops))
 
 
 def build_risk(ctx, modules, scenarios) -> dict:
@@ -1141,8 +1176,12 @@ def build_risk(ctx, modules, scenarios) -> dict:
         events.append(f"Earnings on {_get(ev, 'next_earnings', 'date')} fall inside the horizon: overnight gap "
                       "risk through either stop.")
     dv = _usable(modules, "dividends")
+    proj = _get(dv, "projected_in_horizon")
     if _get(dv, "within_horizon") and _num(_get(dv, "next_ex_dividend", "amount")) is not None:
-        events.append(_ex_dividend_note(_get(dv, "next_ex_dividend")))
+        events.append(_ex_dividend_note(_get(dv, "next_ex_dividend"), proj))
+    elif (_get(dv, "pays_dividends") and _get(dv, "next_ex_dividend") is None
+          and (_num(_get(proj, "ex_dates")) or 0) >= 1):
+        events.append(_projected_ex_dividend_note(proj))
     notes[1:1] = events
     return {
         "available": True,

@@ -163,7 +163,8 @@ def config_snapshot(horizon: str) -> dict:
                      "session_open": C.SESSION_OPEN, "session_close": C.SESSION_CLOSE,
                      "early_close_default": C.EARLY_CLOSE_DEFAULT, "close_buffer_minutes": C.CLOSE_BUFFER_MINUTES,
                      "gap_missing_sessions": C.GAP_MISSING_SESSIONS},
-        "dividends": {"match_days": C.DIVIDEND_MATCH_DAYS, "active_days": C.DIVIDEND_ACTIVE_DAYS},
+        "dividends": {"match_days": C.DIVIDEND_MATCH_DAYS, "active_days": C.DIVIDEND_ACTIVE_DAYS,
+                      "drift_note": C.DIVIDEND_DRIFT_NOTE},
         "macro": {"country": C.MACRO_COUNTRY, "window_days": C.MACRO_WINDOW_DAYS,
                   "contract_max_tier": C.MACRO_CONTRACT_MAX_TIER,
                   "groups": {gid: {"label": label, "tier": tier, "patterns": list(patterns)}
