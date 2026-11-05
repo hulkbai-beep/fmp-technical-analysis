@@ -444,3 +444,70 @@ def test_empty_history_is_unavailable():
     out = S.build_signal_stats(ctx_for(bars, ind))
     assert out["available"] is False and out["reason"]
     assert out["active"] == [] and out["inactive_ids"] == S.SIGNAL_IDS
+
+
+# ---------------------------------------------------------------------------- ex-dividend gaps
+def test_gap_rules_take_the_dividend_out_of_the_prior_close():
+    bars, ind = neutral()
+    put(ind, [100, 120, 140, 160], rvol50=2.0)
+    put(bars, 100, open=98.0)       # 2-point drop on an ex-date paying 1.5: 0.5 net of it -> no gap down
+    put(bars, 120, open=97.0)       # 3 points: 1.5 net -> gap down
+    put(bars, 140, open=100.0)      # flat open on an ex-date paying 1.5: up 1.5 net -> gap up (PLAN 3.2)
+    put(bars, 160, open=98.0)       # the same 2-point drop on an ordinary day -> gap down
+    bars["dividend"] = 0.0
+    put(bars, [100, 120, 140], dividend=1.5)
+    assert fired(bars, ind, "gap_down_atr") == [120, 160]
+    assert fired(bars, ind, "gap_up_atr") == [140]
+    plain = bars.drop(columns="dividend")
+    assert fired(plain, ind, "gap_down_atr") == [100, 120, 160]
+    assert fired(plain, ind, "gap_up_atr") == []
+
+
+def test_gap_rules_and_definitions_name_the_dividend():
+    rules = {s["id"]: s["rule"] for s in S.SIGNALS}
+    assert rules["gap_up_atr"].startswith("open - (close[t-1] - dividend[t]) > ")
+    assert rules["gap_down_atr"].startswith("(close[t-1] - dividend[t]) - open > ")
+    assert "dividend[t]" in S.DEFINITIONS["dividend"]
+
+
+def gappy_bars(n=900, seed=16):
+    """synthetic_bars with 6% opening gaps on heavy volume, so both gap rules fire."""
+    bars = synthetic_bars(n, seed=seed, vol=0.02)
+    rng = np.random.default_rng(seed + 1)
+    gap = rng.choice([-1.0, 0.0, 1.0], size=n, p=[0.04, 0.92, 0.04])
+    prev = bars["close"].shift(1).fillna(bars["close"].iloc[0]).to_numpy()
+    open_ = np.where(gap != 0, prev * (1 + 0.06 * gap), bars["open"].to_numpy())
+    close = bars["close"].to_numpy()
+    return bars.assign(open=open_, high=np.maximum(bars["high"].to_numpy(), np.maximum(open_, close)),
+                       low=np.minimum(bars["low"].to_numpy(), np.minimum(open_, close)),
+                       volume=bars["volume"].to_numpy() * np.where(gap != 0, 3.0, 1.0))
+
+
+def test_events_without_dividends_match_the_legacy_gap_rules():
+    import indicators as I
+    bars = gappy_bars()
+    ind = I.compute_all(bars)
+    ev = S.events(bars, ind)
+    pd.testing.assert_frame_equal(S.events(bars.assign(dividend=0.0), ind), ev)
+    prev, atr, rvol = bars["close"].shift(1), ind["atr14"].shift(1), ind["rvol50"]
+    legacy_up = ((bars["open"] - prev) > C.SIGNAL_PARAMS["gap_atr"] * atr) & (rvol >= C.SIGNAL_PARAMS["gap_rvol"])
+    legacy_down = ((prev - bars["open"]) > C.SIGNAL_PARAMS["gap_atr"] * atr) & (rvol >= C.SIGNAL_PARAMS["gap_rvol"])
+    assert legacy_up.sum() >= 5 and legacy_down.sum() >= 5
+    assert ev["gap_up_atr"].tolist() == legacy_up.tolist()
+    assert ev["gap_down_atr"].tolist() == legacy_down.tolist()
+
+
+def test_ex_dividend_gap_downs_explained_by_the_dividend_stop_firing():
+    import indicators as I
+    bars = gappy_bars()
+    ind = I.compute_all(bars)
+    before = S.events(bars, ind)["gap_down_atr"]
+    pos = np.flatnonzero(before.to_numpy())
+    assert len(pos) >= 5
+    div = np.zeros(len(bars))
+    # every gap-down bar goes ex with the whole drop as its dividend: none of them is a gap net of it
+    div[pos] = (bars["close"].shift(1) - bars["open"]).to_numpy()[pos]
+    after = S.events(bars.assign(dividend=div), ind)
+    assert not after["gap_down_atr"].any()
+    others = [c for c in S.SIGNAL_IDS if c not in ("gap_down_atr", "gap_up_atr")]
+    pd.testing.assert_frame_equal(after[others], S.events(bars, ind)[others])

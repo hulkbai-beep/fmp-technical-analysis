@@ -233,3 +233,13 @@ def test_multi_timeframe_partial_week_and_short_history():
     short = regime.build_multi_timeframe(make_ctx(synthetic_bars(150)))
     assert short["weekly"]["sma40w"] is None and short["alignment"] is None
     assert any("40 weekly bars" in n for n in short["notes"])
+
+
+def test_multi_timeframe_week_cut_short_by_a_holiday_is_complete_with_the_calendar():
+    import market_calendar as MC
+    bars = synthetic_bars(400, start="2023-01-02").loc[:"2024-03-28"]   # the Thursday before Good Friday 2024
+    plain = regime.build_multi_timeframe(make_ctx(bars))
+    cal = regime.build_multi_timeframe(make_ctx(bars, calendar=MC.build_calendar(None, end_year=2025)))
+    assert plain["weekly"]["partial_week"] is True and any("partial" in n for n in plain["notes"])
+    assert cal["weekly"]["partial_week"] is False and not any("partial" in n for n in cal["notes"])
+    assert cal["weekly"]["date"] == plain["weekly"]["date"] == "2024-03-28"

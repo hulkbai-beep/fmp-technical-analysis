@@ -12,12 +12,13 @@ import analyze
 import config as C
 import fetch
 import fmp_client
-from fakes import ADJ, FULL, NOW, FakeClient, earnings_history, market, profile_row, series
+from fakes import (ADJ, DIVIDENDS, ECON, FULL, HOLIDAYS, NEXT_EX_DATE, NOW, SPY_NEXT_EX_DATE, FakeClient,
+                   earnings_history, market, profile_row, series)
 
 TOP_KEYS = ["ticker", "as_of", "data_source", "horizon", "snapshot", "data_quality", "market_context",
             "regime", "trend_momentum", "relative_strength", "mean_reversion", "volume_flow", "volatility",
-            "levels", "multi_timeframe", "event_risk", "signals", "price_action", "candlesticks", "scorecard",
-            "scenarios", "risk", "meta"]
+            "levels", "multi_timeframe", "event_risk", "dividends", "macro_events", "signals", "price_action",
+            "candlesticks", "scorecard", "scenarios", "risk", "meta"]
 MODULES = TOP_KEYS[6:-1]
 META_KEYS = {"network_calls", "cache_hits", "restricted", "errors", "skipped", "notes", "connection",
              "config_snapshot"}
@@ -79,7 +80,7 @@ def test_stock_swing_run():
     fake = stock_market()
     m, chart_data = run(fake)
     meta = m["meta"]
-    assert meta["network_calls"] == 10 and meta["cache_hits"] == 0      # the pinned call budget
+    assert meta["network_calls"] == 13 and meta["cache_hits"] == 0      # the pinned call budget
     assert meta["skipped"] == {} and meta["restricted"] == [] and meta["modules_unavailable"] == {}
     assert all(m[k]["available"] for k in MODULES)
     assert m["ticker"] == "ACME" and m["horizon"] == "swing" and m["as_of"] == "2026-10-16"
@@ -112,6 +113,27 @@ def test_stock_swing_run():
     assert cfg["risk"]["vol_stop_k"] == C.VOL_STOP_K
     assert m["levels"]["evidence"] == {"note": C.LEVELS_EVIDENCE_NOTE}
     assert set(m["event_risk"]["next_earnings"]) == {"date", "calendar_days", "trading_days_est"}
+    assert "excluding NYSE holidays" in m["event_risk"]["trading_days_note"]
+    assert m["data_quality"]["calendar"] == {"source": "fmp+rules", "exchange": "NYSE", "closed_days": 355,
+                                             "early_closes": 88, "problem": None}
+    assert m["data_quality"]["stale"]["basis"] == "NYSE sessions"
+
+    # ex-dividend date and macro events: context next to the scorecard
+    dv = m["dividends"]
+    assert dv["pays_dividends"] is True and dv["horizon_days"] == 10
+    assert dv["next_ex_dividend"]["date"] == NEXT_EX_DATE and dv["next_ex_dividend"]["trading_days_to"] == 6
+    assert dv["within_horizon"] is True and dv["within_stat_horizons"] == {"5": False, "10": True, "20": True}
+    assert dv["ex_dates_in_history"] == dv["matched_to_bars"] > 60
+    assert m["levels"]["gap_adjustment"]["ex_dividend_bars"] >= 1
+    me = m["macro_events"]
+    assert me["window"] == {"from": "2026-10-17", "to": "2027-01-13"} and me["horizon_days"] == 10
+    assert [(e["id"], e["date"], e["time_ny"], e["timing"], e["trading_days_to"]) for e in me["events"]] == [
+        ("cpi", "2026-10-20", "08:30", "pre_open", 2), ("fomc", "2026-10-28", "14:00", "intraday", 8),
+        ("jobs", "2026-11-06", "08:30", "pre_open", 15)]
+    assert [e["id"] for e in me["within_horizon"]] == ["cpi", "fomc"]
+    assert me["counts"] == {"tier1": 3, "tier2": 0, "tier3": 0, "excluded": 1, "unclassified": 2}
+    assert any(n.startswith(f"Ex-dividend date {NEXT_EX_DATE} falls inside the horizon") for n in m["risk"]["notes"])
+    assert not any("dividend" in c["type"] or "macro" in c["type"] for c in sc["conflicts"])
 
     assert chart_data["default_timeframe"] == "daily"
     assert len(chart_data["candles"]) == C.HORIZONS["swing"]["chart_bars"]
@@ -127,6 +149,11 @@ def test_stock_position_run():
     assert m["scorecard"]["weight_basis"]["position_shift"] is True
     assert "weekly_direction" in m["scorecard"]["pillars"]["trend"]["votes"]
     assert chart_data["default_timeframe"] == "weekly"
+    assert m["dividends"]["horizon_days"] == 60 and m["dividends"]["within_stat_horizons"] == {"20": True, "60": True}
+    me = m["macro_events"]
+    assert [e["id"] for e in me["within_horizon"]] == ["cpi", "fomc", "jobs"]
+    assert me["coverage"]["complete"] is False and me["coverage"]["listed_through"] == "2026-11-06"
+    assert any("2026-11-06" in n and "60 sessions" in n for n in me["notes"])
 
 
 def test_metrics_floats_are_rounded_to_six_significant_digits():
@@ -149,8 +176,12 @@ def test_proxy_data_source_is_named():
 def test_spy_skips_earnings_sector_and_rs_vs_spy():
     fake = etf_market("SPY", "1993-01-29", sector="Financial Services")
     m, chart_data = run(fake, "SPY")
-    assert m["meta"]["network_calls"] == 7
+    assert m["meta"]["network_calls"] == 10
     assert set(m["meta"]["skipped"]) == {"earnings", "sector"}
+    dv = m["dividends"]
+    assert dv["available"] and dv["pays_dividends"] and dv["next_ex_dividend"]["date"] == SPY_NEXT_EX_DATE
+    assert dv["next_ex_dividend"]["trading_days_to"] == 44 and dv["within_horizon"] is False   # swing: 10 days
+    assert m["macro_events"]["available"] and m["macro_events"]["within_horizon"]
     assert not [e for e, _ in fake.requests if e == "earnings"]
     assert m["snapshot"]["is_etf"] is True and m["snapshot"]["sector"] is None
     assert m["event_risk"]["available"] is False and "ETF" in m["event_risk"]["reason"]
@@ -166,7 +197,9 @@ def test_spy_skips_earnings_sector_and_rs_vs_spy():
 def test_other_etf_keeps_rs_vs_spy_and_skips_sector():
     fake = etf_market("QQQ", "1999-03-10")
     m, _ = run(fake, "QQQ")
-    assert m["meta"]["network_calls"] == 8                 # no earnings, no sector ETF
+    assert m["meta"]["network_calls"] == 11                # no earnings, no sector ETF
+    assert m["dividends"]["available"] and m["dividends"]["pays_dividends"] is True     # ETFs pay dividends too
+    assert m["macro_events"]["available"]
     assert not fake.calls_to(ADJ, "XLK")
     rs = m["relative_strength"]
     assert rs["vs_spy"]["available"] is True and rs["vs_sector"]["available"] is False
@@ -219,6 +252,48 @@ def test_restricted_earnings_endpoint_skips_event_risk():
     assert chart_data["earnings_dates"] == []
 
 
+def test_restricted_calendar_dividends_and_macro_leave_their_modules_unavailable():
+    fake = stock_market(blocked={HOLIDAYS, DIVIDENDS, ECON})
+    m, _ = run(fake)
+    meta = m["meta"]
+    assert meta["network_calls"] == 13 and set(meta["restricted"]) == {HOLIDAYS, DIVIDENDS, ECON}
+    assert set(meta["skipped"]) == {"dividends", "macro_events"}
+    for name in ("dividends", "macro_events"):
+        assert m[name]["available"] is False and m[name]["reason"].startswith("restricted:"), name
+        assert meta["modules_unavailable"][name] == m[name]["reason"]
+    cal = m["data_quality"]["calendar"]
+    assert cal["source"] == "rules" and cal["problem"].startswith("restricted:")
+    assert m["data_quality"]["stale"]["basis"] == "NYSE sessions"         # the rules still give NYSE sessions
+    assert any("dividend data unavailable" in n for n in m["levels"]["notes"])
+    assert m["levels"]["gap_adjustment"]["ex_dividend_bars"] == 0
+    assert not any("Ex-dividend" in n for n in m["risk"]["notes"])
+    assert all(m[k]["available"] for k in MODULES if k not in ("dividends", "macro_events"))
+
+
+def test_failing_calendar_dividends_and_macro_are_errors_not_crashes():
+    fake = stock_market()
+    respond = fake.respond
+
+    def flaky(endpoint, params):
+        if endpoint in (HOLIDAYS, DIVIDENDS, ECON):
+            raise fmp_client.FMPError(f"HTTP 500 on {endpoint} (rate limit or server error)")
+        return respond(endpoint, params)
+    fake.respond = flaky
+    m, _ = analyze.run_analysis("ACME", client=fake, now=NOW)
+    assert m["meta"]["errors"] == [HOLIDAYS, DIVIDENDS, ECON] and m["meta"]["restricted"] == []
+    assert m["dividends"]["reason"].startswith("error:") and m["macro_events"]["reason"].startswith("error:")
+    assert m["data_quality"]["calendar"]["source"] == "rules"
+    assert m["scorecard"]["available"] and m["levels"]["available"] and m["signals"]["available"]
+
+
+def test_macro_events_never_change_the_scorecard():
+    with_macro, _ = run(stock_market())
+    without, _ = run(stock_market(blocked={ECON}))
+    assert with_macro["macro_events"]["available"] and not without["macro_events"]["available"]
+    for k in ("scorecard", "scenarios", "levels", "signals", "risk", "dividends"):
+        assert with_macro[k] == without[k], k
+
+
 def test_partial_bar_is_dropped_during_the_session():
     m, _ = analyze.run_analysis("ACME", client=stock_market(), now=pd.Timestamp("2026-10-16 11:00", tz=NOW.tz))
     assert m["as_of"] == "2026-10-15"
@@ -267,12 +342,14 @@ def real_client(tmp_path, monkeypatch):
 def test_same_day_rerun_with_the_real_client_makes_no_calls(real_client):
     make, cache = real_client
     first, _ = analyze.run_analysis("ACME", client=make(), now=NOW)
-    assert first["meta"]["network_calls"] == 10 and first["meta"]["errors"] == []
+    assert first["meta"]["network_calls"] == 13 and first["meta"]["errors"] == []
+    assert first["dividends"]["available"] and first["macro_events"]["available"]
+    assert first["data_quality"]["calendar"]["source"] == "fmp+rules"
     stamp = NOW.timestamp()                       # the cache was written right after the close
     for f in cache.glob("*.json"):
         os.utime(f, (stamp, stamp))
     second, _ = analyze.run_analysis("ACME", client=make(), now=NOW)
-    assert second["meta"]["network_calls"] == 0 and second["meta"]["cache_hits"] == 10
+    assert second["meta"]["network_calls"] == 0 and second["meta"]["cache_hits"] == 13
     drop = ("meta",)
     assert {k: v for k, v in first.items() if k not in drop} == {k: v for k, v in second.items() if k not in drop}
     assert not any("TEST-KEY-XYZ" in f.read_text(encoding="utf-8") or "TEST-KEY-XYZ" in f.name
@@ -296,7 +373,9 @@ def test_cli_writes_metrics_and_chart(cli, tmp_path, capsys):
     html = (out / "chart.html").read_text(encoding="utf-8")
     assert 'id="ta-data"' in html and "TAChart.boot" in html
     text = capsys.readouterr().out
-    for piece in ("ACME  swing  as of 2026-10-16", "metrics.json", "chart.html", "regime", "bias", "API calls    : 10"):
+    for piece in ("ACME  swing  as of 2026-10-16", "metrics.json", "chart.html", "regime", "bias", "API calls    : 13",
+                  f"ex-dividend  : {NEXT_EX_DATE} (6 trading days), $0.5",
+                  "macro events : CPI 2026-10-20, FOMC rate decision 2026-10-28 (tier 1, inside the 10-day horizon)"):
         assert piece in text
 
 

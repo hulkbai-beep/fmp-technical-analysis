@@ -35,8 +35,8 @@ PROFILE_NOTE = ("Volume profile is a daily-bar approximation: each bar's volume 
 LEVEL_KEYS = ("price", "zone_low", "zone_high", "sources", "touches", "holds", "breaks", "flips", "fresh",
               "volume_share", "score", "distance_pct", "distance_atr")
 MODULE_NAMES = ("market_context", "regime", "trend_momentum", "relative_strength", "mean_reversion",
-                "volume_flow", "volatility", "levels", "multi_timeframe", "event_risk", "signals",
-                "price_action", "candlesticks", "scorecard", "scenarios", "risk")
+                "volume_flow", "volatility", "levels", "multi_timeframe", "event_risk", "dividends",
+                "macro_events", "signals", "price_action", "candlesticks", "scorecard", "scenarios", "risk")
 LIBRARY_KEYS = ("id", "name", "bias", "last_fired", "fires_total", "horizon", "n", "hit_rate", "median",
                 "confidence", "base_median", "base_hit_rate", "edge_median", "edge_hit_rate")
 
@@ -134,10 +134,11 @@ def _candles(win: pd.DataFrame) -> list[list]:
             for i, d in enumerate(win.index)]
 
 
-def _weekly(bars: pd.DataFrame, start: pd.Timestamp) -> list[list]:
+def _weekly(bars: pd.DataFrame, start: pd.Timestamp, calendar=None) -> list[list]:
     """W-FRI candles [[last trading date, o, h, l, c, v, first trading date, partial]] for the
-    weeks ending on or after `start` (the first week may begin before the daily window)."""
-    wk = I.resample_weekly(bars[["open", "high", "low", "close", "volume"]])
+    weeks ending on or after `start` (the first week may begin before the daily window); `partial`
+    follows the exchange calendar when there is one (indicators.resample_weekly)."""
+    wk = I.resample_weekly(bars[["open", "high", "low", "close", "volume"]], calendar)
     first = bars.index.to_series().groupby(bars.index.to_period(C.WEEKLY_RULE)).min().to_numpy()
     out = []
     for i, (d, row) in enumerate(wk.iterrows()):
@@ -412,7 +413,7 @@ def build_chart_data(ctx, modules: dict) -> dict:
         },
         "default_timeframe": hz.get("chart_timeframe", "daily"),
         "candles": _candles(win),
-        "weekly": _weekly(bars, start),
+        "weekly": _weekly(bars, start, ctx.get("calendar")),
         "sma20": _pairs(iw["sma20"], C.CHART_PRICE_DECIMALS),
         "sma50": _pairs(iw["sma50"], C.CHART_PRICE_DECIMALS),
         "sma200": _pairs(iw["sma200"], C.CHART_PRICE_DECIMALS),

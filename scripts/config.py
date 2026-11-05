@@ -18,9 +18,10 @@ BENCHMARK_YEARS = 5               # history requested for SPY, the sector ETF an
 CACHE_SUBDIR = "fmp-technical"    # ~/.cache/<this> unless FMP_CACHE_DIR is set
 
 MARKET_TZ = "America/New_York"
-MARKET_CLOSE_BUFFER = "16:15"     # before this NY time, a bar dated today is treated as partial
-STALE_BDAYS = 2                   # warn if the last bar is more than this many business days behind
-GAP_CALENDAR_DAYS = 4             # consecutive bars further apart than this are flagged as a data gap
+MARKET_CLOSE_BUFFER = "16:15"     # cache session rule; without an exchange calendar also the partial-bar cutoff
+STALE_BDAYS = 2                   # warn if the last bar is more than this many sessions behind (NYSE sessions;
+                                  # weekdays without an exchange calendar)
+GAP_CALENDAR_DAYS = 4             # without an exchange calendar: bars further apart than this are a data gap
 
 SPAC_CHECK_BARS = 126               # first bars checked for a pre-merger SPAC shell (~6 months)
 SPAC_MIN_BARS = 63                  # fewer bars than this: no check
@@ -176,20 +177,24 @@ GAP_MISSING_SESSIONS = 1          # with a calendar: bars with at least this man
 # FMP dividends: `date` is the ex-dividend date, `adjDividend` the split-adjusted amount (the basis of /full bars).
 DIVIDEND_MATCH_DAYS = 4           # an ex-date without a bar maps to the first bar at most this many calendar days later
 DIVIDEND_TTL_SECONDS = 86400
+DIVIDEND_ACTIVE_DAYS = 400        # pays_dividends: an ex-date this many calendar days before as_of at most (an annual
+                                  # payer plus slack), or an announced one after it; else dividends look suspended
 
 # ---------------------------------------------------------------------------- macro events (macro.py)
 MACRO_COUNTRY = "US"
 MACRO_WINDOW_DAYS = 89            # FMP economic-calendar silently keeps only ~90 days counted back from `to`
 MACRO_TTL_SECONDS = 12 * 3600
 MACRO_CONTRACT_MAX_TIER = 2       # the contract lists tiers 1-2; metrics.json lists every tier
-# (id, label, tier, anchored regexes matched against the event name with its "(period)" suffix removed).
-# Rows of one group on the same New York date form one event. Unmatched US events that FMP rates "High"
-# become tier 3 ("other"), one event per name and date. Names matching MACRO_EXCLUDE are dropped first.
+# (id, label, tier, anchored regexes matched case-insensitively against the event name with its "(period)"
+# suffix removed). Rows of one group on the same New York date form one event. Unmatched US events that FMP
+# rates "High" become tier 3 ("other"), one event per name and date. Names matching MACRO_EXCLUDE are dropped
+# first. A row at exactly 00:00:00 UTC is a date-only listing (holidays, elections, symposiums): no time.
 MACRO_GROUPS = (
     ("fomc", "FOMC rate decision", 1, (r"^Fed Interest Rate Decision$", r"^FOMC Statement$",
-                                        r"^FOMC Economic Projections$", r"^Press Conference$")),
-    ("cpi", "CPI", 1, (r"^(Core )?Inflation Rate( MoM| YoY)?$", r"^CPI( s\.a| n\.s\.a)?( MoM| YoY)?$")),
-    ("jobs", "Jobs report", 1, (r"^Non ?Farm Payrolls( Private)?$", r"^Nonfarm Payrolls Private$",
+                                        r"^FOMC Economic Projections$", r"^Interest Rate Projection - .+$",
+                                        r"^Press Conference$")),
+    ("cpi", "CPI", 1, (r"^(Core )?Inflation Rate( MoM| YoY)?$", r"^(Core )?CPI( s\.a| n\.s\.a)?( MoM| YoY)?$")),
+    ("jobs", "Jobs report", 1, (r"^Non ?Farm Payrolls( Private)?$",
                                 r"^(U-6 )?Unemployment Rate$", r"^Average Hourly Earnings( MoM| YoY)?$",
                                 r"^Average Weekly Hours$", r"^(Government|Manufacturing) Payrolls$",
                                 r"^Participation Rate$")),
@@ -197,7 +202,7 @@ MACRO_GROUPS = (
     ("ppi", "PPI", 1, (r"^(Core )?PPI( MoM| YoY)?$", r"^Producer Price Index( MoM| YoY)?$",
                        r"^PPI Ex Food, Energy and Trade( MoM| YoY)?$")),
     ("gdp", "GDP", 1, (r"^GDP Growth Rate( QoQ| YoY)?( Adv| 2nd Est| 3rd Est| Final)?$", r"^GDP Price Index( QoQ)?$",
-                       r"^GDP Sales( QoQ)?$", r"^(Core )?PCE Prices QoQ$")),
+                       r"^GDP Sales( QoQ)?$", r"^(Core )?PCE Prices QoQ$", r"^Real Consumer Spending( QoQ)?$")),
     ("retail_sales", "Retail sales", 1, (r"^Retail Sales( MoM| YoY| Ex Autos MoM| Ex Gas/Autos MoM| Control Group MoM)?$",)),
     ("fomc_minutes", "FOMC minutes", 2, (r"^FOMC Minutes$",)),
     ("fed_policy", "Fed policy event", 2, (r"^Jackson Hole Symposium$", r"^Monetary Policy Report$")),
@@ -208,6 +213,8 @@ MACRO_GROUPS = (
                                                      r"^CB Consumer Confidence$")),
 )
 MACRO_EXCLUDE = (r"Jobless Claims",)   # weekly claims: high-frequency noise in every window
+MACRO_FAR_AHEAD_GROUPS = ("fomc", "fomc_minutes")   # FMP lists these months ahead and every other release only
+                                  # ~6-8 weeks ahead: the last other US row dates how far the listing is complete
 
 # ---------------------------------------------------------------------------- signal statistics
 SIGNAL_ACTIVE_BARS = 3            # "active" = fired on the last bar or within the 2 bars before it

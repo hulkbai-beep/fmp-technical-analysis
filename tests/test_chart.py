@@ -139,6 +139,26 @@ def test_summary_panels_follow_the_module_outputs():
     assert len(d["data_notes"]["approximations"]) == 2
 
 
+def test_weekly_candles_follow_the_exchange_calendar():
+    import market_calendar as MC
+    bars = synthetic_bars(n=600, seed=3).loc[:"2022-04-14"]          # the Thursday before Good Friday 2022
+    start = bars.index[-60]
+    plain, cal = chart._weekly(bars, start), chart._weekly(bars, start, MC.build_calendar(None, end_year=2023))
+    assert plain[-1][0] == cal[-1][0] == "2022-04-14"
+    assert plain[-1][7] is True and cal[-1][7] is False
+
+
+def test_unavailable_dividends_and_macro_events_reach_the_data_notes():
+    ctx = _ctx(skipped={"dividends": "restricted: dividends: not included in your plan"})
+    m = _modules(ctx)
+    m["dividends"] = {"available": False, "reason": "restricted: dividends: not included in your plan"}
+    m["macro_events"] = {"available": False, "reason": "economic calendar unavailable"}
+    skipped = chart.build_chart_data(ctx, m)["data_notes"]["skipped"]
+    assert {"module": "macro_events", "reason": "economic calendar unavailable"} in skipped
+    assert [s["module"] for s in skipped].count("dividends") == 1          # fetch's reason, not repeated
+    assert {"dividends", "macro_events"} <= set(chart.MODULE_NAMES)
+
+
 def test_avwap_series_fall_back_to_volume_flow_anchors(monkeypatch):
     monkeypatch.setitem(sys.modules, "modules", None)   # import modules -> ImportError
     ctx, d = _data()

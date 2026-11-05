@@ -365,10 +365,11 @@ def alignment(weekly_sign: int | None, daily_sign: int) -> str | None:
 
 
 def build_multi_timeframe(ctx) -> dict:
-    """I: weekly (W-FRI) close vs 10w/40w SMA and weekly RSI, and whether it confirms the daily direction."""
+    """I: weekly (W-FRI) close vs 10w/40w SMA and weekly RSI, and whether it confirms the daily direction.
+    The latest week is partial while sessions of it remain (ctx["calendar"]; weekdays without one)."""
     notes: list[str] = []
     fast, slow = C.WEEKLY_SMA_FAST, C.WEEKLY_SMA_SLOW
-    wk = I.resample_weekly(ctx["bars"])
+    wk = I.resample_weekly(ctx["bars"], ctx.get("calendar"))
     close = wk["close"]
     c, f, s = last(close), last(I.sma(close, fast)), last(I.sma(close, slow))
     rsi_w = last(I.rsi(close, C.WEEKLY_RSI_PERIOD))

@@ -574,6 +574,31 @@ def test_risk_arithmetic_exact():
     assert "ladder_ref" not in risk and not any("back-tested" in n for n in risk["notes"])
 
 
+def test_ex_dividend_inside_the_horizon_adds_a_risk_note_and_changes_nothing_else():
+    m = modules_for(1)
+    dv = {"available": True, "pays_dividends": True, "within_horizon": True,
+          "next_ex_dividend": {"date": "2026-11-09", "amount": 0.53, "amount_pct": 0.0053, "amount_atr": 0.25,
+                               "trading_days_to": 4}}
+    me = {"available": True, "within_horizon": [{"id": "cpi", "label": "CPI", "tier": 1, "date": "2026-11-10",
+                                                 "trading_days_to": 5}]}
+    events = {**m, "dividends": dv, "macro_events": me}
+    assert S.build_scorecard(ctx_for(), events) == S.build_scorecard(ctx_for(), m)    # context, never scored
+    sc = S.build_scenarios(ctx_for(), m, None)
+    assert S.build_scenarios(ctx_for(), events, None) == sc
+    plain, risk = S.build_risk(ctx_for(), m, sc), S.build_risk(ctx_for(), events, sc)
+    (extra,) = [n for n in risk["notes"] if n not in plain["notes"]]
+    assert risk["notes"].index(extra) == 1 and extra.startswith("Ex-dividend date 2026-11-09 falls inside the horizon")
+    assert "$0.53 (0.53% of the close, 0.25 ATR)" in extra and "touched by the ex-dividend drop alone" in extra
+    assert not re.search(r"\b(buy|sell|hold)\b", extra, flags=re.IGNORECASE)
+    assert {k: v for k, v in risk.items() if k != "notes"} == {k: v for k, v in plain.items() if k != "notes"}
+    for other in ({**dv, "within_horizon": False}, {**dv, "within_horizon": None, "next_ex_dividend": None},
+                  {"available": False, "reason": "restricted: dividends"}):
+        assert S.build_risk(ctx_for(), {**m, "dividends": other}, sc)["notes"] == plain["notes"]
+    m["event_risk"]["within_horizon"] = True                          # earnings first, then the ex-dividend date
+    notes = S.build_risk(ctx_for(), {**m, "dividends": dv}, sc)["notes"]
+    assert notes[1].startswith("Earnings on") and notes[2].startswith("Ex-dividend date")
+
+
 def test_touch_rate_interpolates_the_calibration():
     row = C.VOL_TOUCH[10]
     assert S.touch_rate(1.0, 10) == pytest.approx(row[1.0]) and S.touch_rate(2.4, 10) == pytest.approx(row[2.4])

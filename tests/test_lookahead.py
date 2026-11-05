@@ -110,3 +110,28 @@ def test_patterns_have_no_lookahead(full, full_patterns, t):
         known = lambda ws: [w for w in ws if w["confirm"] <= t]  # noqa: E731
         assert known(fr["wedges"]) == known(fr_full["wedges"])
         assert [f for f in fr["fails"] if f["fail"] <= t] == [f for f in fr_full["fails"] if f["fail"] <= t]
+
+
+@pytest.fixture(scope="module")
+def full_dividends(full):
+    """The fixture bars with a quarterly dividend column (as fetch attaches it): gap rules use close[t-1] - D[t]."""
+    bars, ind, _ = full
+    div = np.zeros(len(bars))
+    div[5::63] = bars["close"].to_numpy()[5::63] * 0.02
+    with_div = bars.assign(dividend=div)
+    return with_div, S.events(with_div, ind)
+
+
+@pytest.mark.parametrize("t", CUTS)
+def test_dividend_adjusted_gap_rules_have_no_lookahead(full_dividends, t):
+    bars, ev_full = full_dividends
+    for variant in (bars.iloc[:t + 1], scramble_after(bars, t, seed=t)):   # the dividend column is scrambled too
+        ev = S.events(variant, I.compute_all(variant))
+        pd.testing.assert_frame_equal(ev.iloc[:t + 1], ev_full.iloc[:t + 1])
+
+
+def test_the_dividend_fixture_changes_a_gap_event(full, full_dividends):
+    _, _, ev_plain = full
+    _, ev_div = full_dividends
+    changed = (ev_plain != ev_div).sum()
+    assert changed[changed > 0].index.isin(["gap_up_atr", "gap_down_atr"]).all() and changed.sum() >= 1

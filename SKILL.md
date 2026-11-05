@@ -1,15 +1,16 @@
 ---
 name: fmp-technical-analysis
-description: Technical analysis of one US-listed stock or ETF from Financial Modeling Prep (FMP) daily data - market regime, trend and moving averages, RSI, MACD, momentum, relative strength vs SPY and the sector ETF, volume flow, volatility, support/resistance levels, back-tested signal statistics, Al Brooks-style price action (trend vs trading range, H2/L2, wedges, failed breakouts, measured moves) and candlestick patterns with their own back-tested statistics, earnings event risk, scenarios and risk arithmetic, plus three interactive charts. Use it when the user asks for technical analysis, a chart, support/resistance, moving averages, RSI, MACD, momentum, price action, Al Brooks, candlestick patterns or the trend of a ticker, including in Chinese (技术面, 技术分析, K线, K线形态, 价格行为, 支撑阻力, 均线, 趋势, 走势).
+description: Technical analysis of one US-listed stock or ETF from Financial Modeling Prep (FMP) daily data - market regime, trend and moving averages, RSI, MACD, momentum, relative strength vs SPY and the sector ETF, volume flow, volatility, support/resistance levels, back-tested signal statistics, Al Brooks-style price action (trend vs trading range, H2/L2, wedges, failed breakouts, measured moves) and candlestick patterns with their own back-tested statistics, event risk (earnings, ex-dividend dates and scheduled US macro releases inside the horizon), scenarios and risk arithmetic, plus three interactive charts. Use it when the user asks for technical analysis, a chart, support/resistance, moving averages, RSI, MACD, momentum, price action, Al Brooks, candlestick patterns or the trend of a ticker, including in Chinese (技术面, 技术分析, K线, K线形态, 价格行为, 支撑阻力, 均线, 趋势, 走势).
 ---
 
 # Technical analysis (FMP)
 
-`scripts/analyze.py` fetches daily bars, benchmarks and earnings dates from FMP, computes every number
-and writes `metrics.json` plus a self-contained `chart.html` with three charts: indicators, price
-action after Al Brooks, and candlestick patterns. Claude then writes `report.md` from
-`metrics.json` only, following `references/report_template.md`. Python does the arithmetic; Claude
-does the explaining. The output describes conditions and historical base rates. It is not advice.
+`scripts/analyze.py` fetches daily bars, benchmarks, earnings and ex-dividend dates, the NYSE holiday
+list and the US economic calendar from FMP, computes every number and writes `metrics.json` plus a
+self-contained `chart.html` with three charts: indicators, price action after Al Brooks, and candlestick
+patterns. Claude then writes `report.md` from `metrics.json` only, following
+`references/report_template.md`. Python does the arithmetic; Claude does the explaining. The output
+describes conditions and historical base rates. It is not advice.
 
 ## Setup (once)
 
@@ -50,14 +51,15 @@ does the explaining. The output describes conditions and historical base rates. 
 2. **Run** from the skill folder:
    `python scripts/analyze.py TICKER --horizon swing|position [--out DIR] [--refresh] [--history-start YYYY-MM-DD] [--contract PATH]`.
    - Output goes to `./ta-output/<TICKER>_<as_of>/` by default.
-   - Add `--contract PATH` only when another tool needs the ta-2.0 contract: the other horizon also runs,
+   - Add `--contract PATH` only when another tool needs the ta-2.1 contract: the other horizon also runs,
      from the cache, and the contract covers both (see "Contract for other tools").
-   - An uncached run makes 10 API calls for a stock, 8 for an ETF and 7 for SPY. A same-day
+   - An uncached run makes 13 API calls for a stock, 11 for an ETF and 10 for SPY. A same-day
      re-run makes 0.
    - Exit codes: 0 means OK, 1 a data or symbol problem, 2 an API key problem. Relay the message
      printed on stderr.
 3. **Read `metrics.json`.** Skip the bulky parts listed in the template (`levels.candidates`,
-   `levels.volume_profile.bins`, `signals.library`, `dates_sample`, `meta.config_snapshot`).
+   `levels.volume_profile.bins`, `signals.library`, `dates_sample`, `macro_events.events[*].releases`,
+   `meta.config_snapshot`).
 4. **Write `report.md`** next to `metrics.json`, following `references/report_template.md`
    exactly: 12 sections in fixed order, the exact key paths and its wording rules. Write it in the
    user's language.
@@ -70,6 +72,10 @@ does the explaining. The output describes conditions and historical base rates. 
    - the price-action state and always-in direction, and any setup or candlestick pattern that fired
      in the last 3 bars, each with its n (context, not part of the scorecard);
    - the earnings date if it falls inside the horizon;
+   - the next ex-dividend date if it falls inside the horizon (`dividends.within_horizon`), with its
+     amount: the price opens lower by about that much for mechanical reasons;
+   - the tier-1 macro events inside the horizon (`macro_events.within_horizon`, `tier` 1), each with its
+     date and New York time (`macro_events.events[*].time_ny`), as scheduled context;
    - any data warning;
    - the paths to `report.md` and `chart.html`;
    - the disclaimer, last.
@@ -106,11 +112,23 @@ does the explaining. The output describes conditions and historical base rates. 
   - read them with the same statistics rules as the signals; a pattern with no edge on this stock is
     reported as such;
   - measured-move targets are zones, never price targets presented as advice.
+- **Ex-dividend dates and macro events** (`dividends`, `macro_events`) are scheduled context:
+  - they never change the scorecard and are not signals; say so;
+  - give dates and New York times only. Never predict a release's outcome, its direction or the market's
+    reaction, and never call one bullish or bearish ("CPI on 2026-11-10 at 08:30 falls inside the
+    horizon", not "CPI could lift the stock");
+  - the ex-dividend drop is mechanical: the price opens lower by about the dividend. It is not a bearish
+    move, and gaps on ex-dividend bars are already measured net of it;
+  - when `macro_events.coverage.complete` is false, say that FMP lists releases other than FOMC dates
+    only through `coverage.listed_through`, so later ones inside the horizon may be missing.
 - **Report every conflict** in `scorecard.conflicts`, with its typical meaning. Do not add your own.
 - **Data source:** if `data_source` names a third-party proxy, say so and suggest verifying key
   figures.
-- **Closing bar:** the price is the last *complete* close. Before 16:15 New York time, today's bar
-  is excluded (`data_quality.partial_bar_excluded`).
+- **Closing bar:** the price is the last *complete* close. Before 16:15 New York time (13:15 on an
+  early-close day such as the day after Thanksgiving), today's bar is excluded
+  (`data_quality.partial_bar_excluded`).
+- **Trading days** (to earnings, the ex-dividend date and macro events; the stale check) count NYSE
+  sessions, exchange holidays excluded.
 - End every report and summary with `meta.disclaimer`.
 
 ## Options
@@ -122,7 +140,7 @@ does the explaining. The output describes conditions and historical base rates. 
 | `--out` | folder | `./ta-output/<TICKER>_<as_of>/` | where `metrics.json` and `chart.html` go |
 | `--refresh` | flag | off | ignore the cache and fetch everything again |
 | `--history-start` | `YYYY-MM-DD` | IPO date | ignore the symbol's history before this date (e.g. a pre-merger SPAC shell) |
-| `--contract` | file path | off | also write the ta-2.0 contract for another tool (both horizons; see below) |
+| `--contract` | file path | off | also write the ta-2.1 contract for another tool (both horizons; see below) |
 | `FMP_BASE_URL` | URL | unset (official FMP) | only for a third-party proxy |
 | `FMP_TLS_VERIFY` | `0` / `1` | `1` | `0` only per process, only for a proxy; ignored for the official host |
 | `FMP_CACHE_DIR` | folder | `~/.cache/fmp-technical` | response cache (never contains the key) |
@@ -131,20 +149,21 @@ does the explaining. The output describes conditions and historical base rates. 
 All analysis thresholds live in `scripts/config.py`, and each run records them in
 `meta.config_snapshot`.
 
-## Contract for other tools (ta-2.0)
+## Contract for other tools (ta-2.1)
 
-Tools that build on this skill (a decision engine, a screener) read the **ta-2.0 contract**, not
+Tools that build on this skill (a decision engine, a screener) read the **ta-2.1 contract**, not
 `metrics.json`, whose layout is internal and may change.
 - `python scripts/analyze.py TICKER --contract out.json` writes it: the requested horizon runs as usual and
   the other one runs from the same-day cache, so it costs no extra API calls.
 - `python scripts/contract.py SWING/metrics.json POSITION/metrics.json [-o out.json]` builds it from two saved
   runs of the same ticker and day. Give each run its own `--out`: by default both horizons write to the same
   folder.
-- `contracts/ta-2.0.schema.json` describes every field. Horizon-independent blocks (data quality, market,
-  earnings, volatility, extension, trend, regime, RS, flow, weekly, price-action context) sit at the top;
-  the scorecard, zones (`low` / `high`), `price_location`, scenarios, reference stops, earnings inside the
-  horizon and signal and pattern statistics (with `confirmed`, the scorecard's same-regime edge test) sit
-  under `horizons.swing` and `horizons.position`.
+- `contracts/ta-2.1.schema.json` describes every field. Horizon-independent blocks (data quality, market,
+  earnings, dividend, macro, volatility, extension, trend, regime, RS, flow, weekly, price-action context)
+  sit at the top; the scorecard, zones (`low` / `high`), `price_location`, scenarios, reference stops,
+  earnings, the ex-dividend date and macro events inside the horizon, and signal and pattern statistics
+  (with `confirmed`, the scorecard's same-regime edge test) sit under `horizons.swing` and
+  `horizons.position`.
 - 1.1 adds `event.last_earnings` (the latest report on or before `as_of`, with the days since and its
   two-day move) and the `kind` of each scenario target: `level` for a support/resistance zone, `projection`
   when no level lies beyond the trigger and the target is the trigger plus or minus a multiple of ATR.
@@ -153,6 +172,18 @@ Tools that build on this skill (a decision engine, a screener) read the **ta-2.0
   that far away were touched in calibration (`touch_rate`, `target_touch_rate`) and the stop the risk example
   uses (`primary`).
 - 2.0 removes `event.eps_estimated` (the skill carries no fundamentals).
+- 2.1 adds:
+  - `data_quality.calendar_source` (`fmp+rules`, or `rules` when FMP's holiday list was unavailable);
+  - `dividend`: whether the symbol pays dividends, the last and the next ex-dividend date with their
+    amounts, the next one's share of the close and the trading days to it;
+  - `macro`: the tier 1-2 macro events after `as_of` (date, New York time, timing, session, trading days),
+    the requested window and `listed_through`, the last date FMP lists releases other than FOMC dates;
+  - per horizon: `ex_dividend_within_horizon` (false for a symbol that pays none, null when unknown),
+    `macro_within_horizon` (null when the economic calendar is unavailable) and `macro_complete` (false:
+    events late in the horizon may be missing).
+
+  `event.trading_days_to` and `data_quality.business_days_behind` keep their names but now count NYSE
+  sessions.
 - It selects facts and judges nothing; position sizing is left to the caller. Fields are only ever added
   within a major version; renaming or removing one means ta-3.0, and `tests/test_contract.py` checks the
   output against the schema.
@@ -160,12 +191,26 @@ Tools that build on this skill (a decision engine, a screener) read the **ta-2.0
 ## Edge cases
 
 - **ETFs:** no earnings or sector block, and SPY has no RS vs SPY. These show as skipped
-  (`meta.skipped`, `meta.modules_unavailable`). That is expected, not an error.
+  (`meta.skipped`, `meta.modules_unavailable`). That is expected, not an error. ETFs still get the
+  ex-dividend date and the macro events.
+- **Non-payers:** `dividends.pays_dividends` is false when FMP lists no dividends (TSLA) or none in the
+  last 400 days and none is announced. Say "no dividends" in one line. When a payer has no next ex-date
+  announced yet (`next_ex_dividend` null), say so: one declared later may still fall inside the horizon.
 - **Short history** (recent IPO, fewer than 200 bars): SMA200-based readings, percentiles and
   signal statistics become unavailable or `insufficient`. Say so and do not extrapolate.
 - **Plan restrictions:** without the dividend-adjusted endpoint, returns are price-only
-  (`data_quality.adj_coverage` is below 1). Without earnings, event risk is skipped. Both are
-  listed in `meta.restricted`.
+  (`data_quality.adj_coverage` is below 1). Without earnings, event risk is skipped. Without dividends or
+  the economic calendar, `dividends` or `macro_events` is unavailable with its `reason` (without
+  dividends, gaps on ex-dividend bars are not adjusted; `levels.notes` says so). All are listed in
+  `meta.restricted`.
+- **Calendar fallback:** if FMP's holiday list cannot be loaded, the built-in NYSE rules give the trading
+  days (`data_quality.calendar.source` is "rules", `.problem` says why). They match FMP's closed days for
+  1991-2028; only a closure announced at short notice (a national day of mourning) can be missing.
+  Mention it once.
+- **Macro window:** one request covers about 89 days from the day after `as_of` (FMP silently truncates
+  longer windows). Past releases are not used: plans can refuse an early start date. FMP lists most
+  releases only 6-8 weeks ahead, so for the position horizon `macro_events.coverage.complete` is often
+  false and the list is a lower bound.
 - **SPAC history:** FMP dates a de-SPAC listing from the shell's first trading day (IONQ starts
   2021-01-04 near $10). `data_quality.spac_like_start` flags it; mention it, and offer a re-run with
   `--history-start <merger date>` so signal statistics exclude the shell.
@@ -180,7 +225,8 @@ Tools that build on this skill (a decision engine, a screener) read the **ta-2.0
 ## Troubleshooting
 
 - `python scripts/fmp_client.py check [SYMBOL]` shows the connection route, the auth style and
-  which endpoints work on this plan. Run it first for any FMP error.
+  which endpoints work on this plan, including the NYSE holiday list (`holidays-by-exchange`),
+  `dividends` and the `economic-calendar` (next 30 days). Run it first for any FMP error.
 - Exit code 2 or HTTP 401 means the key is wrong or missing. After `setx`, open a new terminal.
 - "certificate verify failed" on the official API: something on the network (a corporate proxy or
   antivirus HTTPS scanning) is intercepting the connection. Do not turn verification off; the client
@@ -194,8 +240,8 @@ Tools that build on this skill (a decision engine, a screener) read the **ta-2.0
 
 - `references/report_template.md`: the report's section order, key paths and wording rules. Read
   it before writing `report.md`.
-- `references/methodology.md`: data, adjustments, indicators, modules, the scorecard, scenarios
-  and approximations.
+- `references/methodology.md`: data, adjustments, the exchange calendar, ex-dividend dates,
+  indicators, modules (macro events included), the scorecard, scenarios and approximations.
 - `references/signals.md`: the 14 pre-registered signal rules and how their statistics are
   computed.
 - `references/patterns.md`: the price-action readings and setups (chart 2) and the candlestick

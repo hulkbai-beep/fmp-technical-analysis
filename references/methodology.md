@@ -13,6 +13,8 @@ How every number in `metrics.json` is produced. Parameter names in `CODE` refer 
   only by the reversal after it, but levels are measured as of the last bar, so no future bar is ever used.
 - **Nothing is filled in.** A missing input gives `null` and a note. A missing module gives
   `available: false` with the reason.
+- **Scheduled events are context.** Earnings, ex-dividend dates and macro releases are reported with their
+  dates. None of them changes a pillar score; only earnings inside the horizon is listed as a conflict.
 - **Conditional output.** Scenarios have triggers and invalidation levels. Nothing is a buy, sell or hold
   recommendation.
 
@@ -29,6 +31,9 @@ How every number in `metrics.json` is produced. Parameter names in `CODE` refer 
 | SPY, sector ETF | `historical-price-eod/dividend-adjusted`, last `BENCHMARK_YEARS` = 5 years, one request each | `open..close` = adjusted prices; `adj_*` = the same | market context, relative strength |
 | ^VIX | `historical-price-eod/full`, last 5 years | volume is 0 | VIX level and percentile |
 | Profile, quote, earnings | `profile`, `quote`, `earnings` | as returned; earnings: report dates only (`date`, `reported`) | name, sector, ETF flag, IPO date; snapshot quote; earnings calendar |
+| NYSE holidays | `holidays-by-exchange`, `exchange=NYSE`, `HISTORY_START` through Dec 31 of next year, one request | `date, name, isClosed, adjCloseTime` (full closures and early closes) | the exchange calendar (section 1.7) |
+| Ex-dividend dates | `dividends`, one request | `date` (the ex-dividend date), `adjDividend` (split-adjusted amount), `dividend`, `frequency`, `declarationDate`, `recordDate`, `paymentDate`; includes ex-dates already announced | the `dividend` bar column (section 1.8), the `dividends` module |
+| US macro calendar | `economic-calendar`, `MACRO_WINDOW_DAYS` = 89 days from the day after `as_of`, one request | `date` (UTC), `country`, `event`, `impact` | the `macro_events` module |
 
 - `^VIX` (with the caret) is the VIX index on FMP; `VIX` is a different instrument.
 - FMP's daily `vwap` field is (O+H+L+C)/4. It is ignored.
@@ -39,6 +44,8 @@ How every number in `metrics.json` is produced. Parameter names in `CODE` refer 
   SPY itself skips relative strength vs SPY and reuses its own split-adjusted bars as the benchmark (no
   extra request), so its market-context and regime readings cannot disagree. FMP labels SPY's sector "Financial Services", which means nothing for an ETF, so the snapshot
   leaves `sector` empty for ETFs.
+- Every symbol, ETFs and SPY included, gets the holiday list, its own ex-dividend dates and the economic
+  calendar.
 
 ### 1.2 Which price series drives what
 
@@ -47,6 +54,7 @@ How every number in `metrics.json` is produced. Parameter names in `CODE` refer 
 | Candles, SMAs, EMAs, MACD, RSI, ATR, ADX, Bollinger, Keltner, z-score, OBV, A/D, RVOL | split-adjusted `/full` |
 | Key levels, pivots, volume profile, gaps, anchored VWAPs, 52-week high/low, scenarios, risk | split-adjusted `/full` |
 | Signal rules (evaluated on day t) | split-adjusted `/full` and the indicators above |
+| Gaps on an ex-dividend bar (unfilled-gap levels, the two gap signals, the `largest_gap_6m` VWAP anchor) | split-adjusted `/full`, with the prior bar's prices minus the dividend going ex on the bar (section 1.8) |
 | Period returns, 12-1 momentum, RS lines, beta/correlation, `rv20`, earnings reactions | dividend-adjusted closes (total return) |
 | Signal forward returns and MAE | dividend-adjusted closes and lows |
 
@@ -80,9 +88,10 @@ dividend adjustment.
   - `MAX_CHUNKS` = 3 requests have been made (reported).
 - **A failed older chunk** keeps the rows already fetched and is noted.
 - **Requests per uncached run:**
-  - stock: 10 (profile, quote, earnings, /full ×2, /dividend-adjusted ×2, SPY, sector ETF, ^VIX)
-  - ETF: 8
-  - SPY itself: 7
+  - stock: 13 (profile, quote, holidays-by-exchange, earnings, /full ×2, /dividend-adjusted ×2, dividends,
+    SPY, sector ETF, ^VIX, economic-calendar)
+  - ETF: 11 (no earnings, no sector ETF)
+  - SPY itself: 10 (no earnings, no sector ETF, no separate SPY request)
   - Histories under about 19 years need one request per price endpoint.
 
 ### 1.4 Caching
@@ -91,38 +100,53 @@ dividend adjustment.
   base URL, endpoint and sorted query parameters. The API key is never part of the key, the file name
   or the file contents. Files are written to a temporary name and then renamed.
 - **Price requests** carry `to=<today in New York>`, so each New York date is a new key.
-- **Session rule** (daily-bar endpoints, technical indicators and the quote): a cached copy is valid
-  only if it was written on the same New York date AND either it was written at or after
+- **Session rule** (daily-bar endpoints, technical indicators, the quote and earnings): a cached copy is
+  valid only if it was written on the same New York date AND either it was written at or after
   `MARKET_CLOSE_BUFFER` (16:15 New York), or it is still before 16:15. On weekends, the same date is
   enough.
   - A same-day re-run makes zero requests.
   - A run made during the session is refetched once after the close, so a partial bar is never frozen.
-- **Other endpoints** use a time-to-live: profile 1 day, earnings 12 hours.
+  - The rule keeps 16:15 on early-close days: at most one extra refetch, which is harmless.
+- **Other endpoints** use a time-to-live: profile 1 day, the NYSE holiday list 7 days
+  (`CALENDAR_TTL_SECONDS`), dividends 1 day (`DIVIDEND_TTL_SECONDS`), the economic calendar 12 hours
+  (`MACRO_TTL_SECONDS`).
+  - The holiday request's parameters change once a year, so it is nearly always a cache hit.
+  - The economic-calendar window depends on `as_of` only, not on the horizon, so the second horizon of
+    `--contract` is served from the cache. A re-run more than 12 hours after the first requests it again.
 - `--refresh` bypasses the cache.
 - **Retries and rate limit:** on HTTP 429, 5xx and network errors a request is tried up to 4 times
   with exponential backoff, under a token-bucket rate limit (`FMP_MAX_PER_MIN`, default 280 per minute).
 
 ### 1.5 Validation (stock and every benchmark)
 
+Every step that depends on the date uses the NYSE calendar (section 1.7), for the benchmarks too.
+
 1. Sort by date and drop duplicate dates, keeping the last row.
 2. Drop rows with a missing or non-positive open, high, low or close, and (except ^VIX) rows with
    missing or negative volume. The counts are recorded.
-3. **Partial bar.** If the last bar is dated today in New York and New York time is before 16:15,
-   the bar is dropped. Its values and the reason go to `data_quality.partial_bar_excluded`. `as_of` is
-   always the date of the last *complete* bar, and every module, signal and chart stops there.
+3. **Partial bar.** If the last bar is dated today in New York and New York time is before that session's
+   close plus `CLOSE_BUFFER_MINUTES` = 15 minutes (16:15; 13:15 on a 13:00 early close), the bar is
+   dropped. Its values and the reason go to `data_quality.partial_bar_excluded`. `as_of` is always the
+   date of the last *complete* bar, and every module, signal and chart stops there.
 4. **Flagged but kept:**
    - inconsistent bars (high < low, or close outside [low, high]);
    - zero-volume bars;
-   - gaps longer than `GAP_CALENDAR_DAYS` = 4 calendar days. Long histories also show real market
-     closures, such as September 2001 and October 2012.
-5. **Stale data.** The expected last session is today if it is a weekday and New York time is at or
-   after 16:15, otherwise the previous weekday. The data is stale when the last bar is more than
-   `STALE_BDAYS` = 2 business days behind it. Exchange holidays are not modelled; one holiday stays
-   under the threshold.
+   - data gaps: consecutive bars with at least `GAP_MISSING_SESSIONS` = 1 NYSE session between them.
+     Holidays and unscheduled closures (September 2001, Hurricane Sandy in October 2012) are not
+     sessions, so they are not gaps. `data_quality.gaps` gives `count`, the latest 10 `items` (`after`,
+     `before`, `calendar_days`, `missing_sessions`) and `basis`.
+5. **Stale data.** The expected last session is today when today is a session and its close plus 15
+   minutes has passed, otherwise the previous NYSE session. The data is stale when the last bar is more
+   than `STALE_BDAYS` = 2 sessions behind it. `data_quality.stale.business_days_behind` keeps its name but counts NYSE
+   sessions; `stale.basis` says so.
 6. **Adjusted coverage:** the share of bars that have `adj_close`.
 7. **Liquidity.** Mean shares and mean dollar volume (close × volume) over the last
    `LIQUIDITY_BARS` = 50 bars. The name is flagged illiquid below `ILLIQUID_MIN_AVG_SHARES` = 200,000
    shares or `ILLIQUID_MIN_AVG_DOLLARS` = $5M.
+
+A run always has a calendar (the rules at least). Called without one, as some unit tests do, validation
+keeps the weekday rules: 16:15 (`MARKET_CLOSE_BUFFER`), weekdays for the stale check, and bars more than
+`GAP_CALENDAR_DAYS` = 4 calendar days apart for gaps.
 
 ### 1.6 Restricted or missing data
 
@@ -131,10 +155,67 @@ dividend adjustment.
 - **Empty arrays** count as "no data".
 - **Where it is recorded:** `meta.skipped[<module>]`, `meta.restricted` and the notes.
   - The analysis continues without the affected input and fills nothing in.
-  - Skip keys: `profile`, `quote`, `earnings`, `sector`, `spy`, `vix`.
+  - Skip keys: `profile`, `quote`, `earnings`, `sector`, `spy`, `vix`, `dividends`, `macro_events`.
 - **Modules** whose inputs are missing report `available: false` with the reason. They are listed in
   `meta.modules_unavailable`.
+- **The NYSE holiday list** has no skip key: without it the built-in exchange rules stand in (section
+  1.7), `data_quality.calendar.problem` and a note say why, and nothing else changes.
+- **Without dividends** the `dividend` column is 0 on every bar, so gaps on ex-dividend bars are not
+  adjusted; `levels.notes` says so.
 - **No usable /full history** stops the run with "no price data for X".
+
+### 1.7 Exchange calendar (`market_calendar.py`)
+
+- **Source:** the one `holidays-by-exchange` request (section 1.1) united with built-in NYSE rules:
+  - full closures = FMP's closed days ∪ the rule holidays ∪ the special closures below;
+  - early closes = FMP's early closes ∪ the rule early closes, FMP's time winning.
+- **Rules:**
+  - holidays: New Year's Day (a Sunday moves to Monday; a Saturday is not observed), Martin Luther King
+    Jr. Day (from 1998), Washington's Birthday, Good Friday, Memorial Day, Juneteenth (from 2022),
+    Independence Day, Labor Day, Thanksgiving and Christmas; Juneteenth, Independence Day and
+    Christmas move to the nearest weekday;
+  - special closures: 1994-04-27 (Nixon), 2001-09-11 to 09-14, 2004-06-11 (Reagan), 2007-01-02 (Ford),
+    2012-10-29 and 10-30 (Hurricane Sandy), 2018-12-05 (G. H. W. Bush), 2025-01-09 (Carter);
+  - early closes at `EARLY_CLOSE_DEFAULT` = 13:00: July 3 and December 24 when they fall on Monday to
+    Thursday, and the day after Thanksgiving.
+- **Against FMP:** the rules give the same closed days as FMP's list for 1991-2028 and add 1990-01-01,
+  which FMP's list lacks. FMP's early-close list is incomplete before about 2013; the rules fill it in.
+  The union also picks up a closure FMP lists that no rule knows, such as a national day of mourning
+  announced at short notice.
+- **Fallback:** when FMP's list is restricted, fails or holds no usable row, the rules alone are used
+  (`source` "rules").
+- **Recorded:** `data_quality.calendar` = {`source` ("fmp+rules" or "rules"), `exchange`, `closed_days`,
+  `early_closes`, `problem`}.
+- **Used for:** the partial-bar rule, the stale check and data gaps (section 1.5); trading days to
+  earnings, to the next ex-dividend date and to macro events (sections 3 J-L); the weekly partial flag
+  (section 2). A session runs from `SESSION_OPEN` 09:30 to `SESSION_CLOSE` 16:00 New York time, or to
+  its early close.
+
+### 1.8 Ex-dividend dates (`dividends.py`)
+
+- **Why:** `/full` prices are split-adjusted, not dividend-adjusted. On an ex-dividend date the price
+  opens lower by about the dividend for mechanical reasons, and that drop looks like a gap down. On
+  high-dividend names and monthly payers most ex-dividend dates show one: since 2010, HYG had 102 raw gaps
+  down on ex-dividend dates, of which 7 were still gaps net of the dividend.
+- **Rows:** `date` is the ex-dividend date and `adjDividend` the amount adjusted for later splits, the
+  basis of the `/full` bars (NVDA's $0.04 of 2021 is 0.004 after the 10:1 split of 2024). Dropped and
+  counted: rows without a usable date, with `adjDividend` missing or ≤ 0, and exact repeats (FMP
+  sometimes lists one distribution twice). Different amounts on one ex-date (a regular and a special
+  dividend) become one entry with the amounts summed. `data_quality.dividends` = {`ex_dates`,
+  `rows_dropped`, `problem`}.
+- **Bar column:** `bars["dividend"]` holds the amount going ex on each bar and 0 elsewhere. An ex-date
+  without a bar (a holiday, a data gap) maps to the first bar at most `DIVIDEND_MATCH_DAYS` = 4 calendar
+  days later; several on one bar are summed. Without dividend data the column is 0 throughout.
+- **Where it applies:** only the three gap measures, on bar t with dividend D:
+  - unfilled-gap levels (section 3 H): the prior bar's high and low minus D;
+  - the `gap_up_atr` / `gap_down_atr` signals ([signals.md](signals.md)): the prior close minus D;
+  - the `largest_gap_6m` anchored-VWAP anchor (section 3 F): the prior close minus D.
+
+  A drop the dividend explains is no gap, and a larger gap counts only the part beyond the dividend.
+  The dividend is declared before t, so this is causal. Without a dividend column, or with zeros in it,
+  every result is the same as before.
+- **Deliberately unchanged:** ATR and the true range, candles, price action, SMAs, RSI, MACD and the
+  Bollinger and Keltner bands use the bars as they traded, as charting platforms do (section 7).
 
 ---
 
@@ -164,7 +245,7 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
 | A/D line | cumulative CLV × volume, CLV = ((C-L) - (H-C))/(H-L), 0 when H = L |
 | RVOL(50) | today's volume / mean volume of the previous 50 sessions (today excluded) |
 | `hh55_prev`, `hh252_prev` | highest close of the previous 55 / 252 bars, today excluded |
-| Weekly bars | `W-FRI` groups: open first, high max, low min, close last, volume sum; dated by the week's last trading day; the latest week is `partial` when it does not end on a Friday |
+| Weekly bars | `W-FRI` groups: open first, high max, low min, close last, volume sum; dated by the week's last trading day; the latest week is `partial` while it has sessions left, i.e. its last bar comes before the week's last NYSE session (a week cut short by Good Friday is complete on Thursday) |
 
 ---
 
@@ -282,7 +363,8 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
     - `high_52w` / `low_52w`: the bar with the highest high / lowest low of the last 252 bars;
     - `ytd_start`: the first bar of the year;
     - `largest_gap_6m`: the bar with the largest |open - prior close| / prior-day ATR in the last
-      `LARGEST_GAP_LOOKBACK` = 126 bars.
+      `LARGEST_GAP_LOOKBACK` = 126 bars; on an ex-dividend bar the prior close is net of the dividend
+      (section 1.8).
   - **Each anchor reports** price vs VWAP in % and in ATRs.
 
 ### G. Volatility structure (`volatility`)
@@ -320,7 +402,14 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
 - **Unfilled gaps:**
   - gap up: low[t] > high[t-1]; filled once a later low reaches high[t-1], otherwise the zone shrinks
     to what is left;
-  - gap down: the mirror case.
+  - gap down: the mirror case;
+  - on an ex-dividend bar t paying D, high[t-1] - D and low[t-1] - D replace high[t-1] and low[t-1], in
+    the test and as the zone's edge (section 1.8). Each gap carries `ex_dividend` (D, or null);
+  - `gap_adjustment` gives the `method`, the number of ex-dividend bars in the window
+    (`ex_dividend_bars`) and the raw gaps the dividend explains (`neutralized`: `date`, `amount`,
+    `raw_direction`, and `raw_unfilled`, whether it would otherwise be an unfilled-gap level). A note
+    names those that would have been levels, and another says so when dividend data is missing and gaps
+    are not adjusted.
 - **Candidates, source types and weights** (`LEVEL_SOURCE_WEIGHTS`):
   - swing pivot highs and lows (pivot, 1.0 x `swing_atr` / 1.5, between 1 and `SWING_WEIGHT_CAP` = 3);
   - supply/demand zones (supply_demand, 1.0; x `LEVEL_FRESH_FACTOR` = 1.5 when fresh);
@@ -375,12 +464,13 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   - confirms: same non-zero sign;
   - contradicts: opposite non-zero signs;
   - mixed: anything else.
-- **Partial week:** a week still in progress is flagged.
+- **Partial week:** the latest week is flagged while it has NYSE sessions left (section 2).
 
 ### J. Event risk (`event_risk`, stocks only)
 - **Next earnings:** the earliest report after `as_of`, or one dated `as_of` that is not reported yet.
   - Calendar days to the report.
-  - Estimated trading days: numpy business days, with no holiday calendar.
+  - Trading days (`trading_days_est`): NYSE sessions from `as_of` to the report date, counted with numpy
+    business days minus the calendar's closed days; `trading_days_note` names the calendar source.
   - `within_horizon`: trading days ≤ the primary horizon. `within_stat_horizons` gives the same flag
     for each stat horizon.
 - **Last earnings:** the latest report on or before `as_of` (`last_earnings`: date, calendar days ago and
@@ -390,9 +480,87 @@ default periods (`sma20`, `rsi14`, …); the periods themselves come from config
   - Up to `EARNINGS_REACTIONS_MAX` = 12 latest reports, giving n, median and mean absolute move.
   - Fewer than `EARNINGS_REACTIONS_MIN` = 8 gets a small-sample note.
 
+### K. Ex-dividend dates (`dividends`)
+Stocks, ETFs and SPY alike, from the parsed dividends (section 1.8) and the bars up to `as_of`.
+- **Last:** the latest ex-date on or before `as_of` (`last_ex_dividend`: `date`, `amount`, `amount_pct` =
+  amount / last close, `frequency`).
+- **Next:** the first announced ex-date after `as_of` (`next_ex_dividend`: `date`, `amount`, `amount_pct`,
+  `amount_atr` = amount / ATR(14), `frequency`, `declaration_date`, `payment_date`, `calendar_days`,
+  `trading_days_to`).
+  - `trading_days_to` counts NYSE sessions as for earnings; an ex-date that is not a session counts up to
+    the next session, where the drop shows.
+  - `amount_pct` and `amount_atr` size the mechanical drop against the price and against an ordinary
+    day's range.
+- **Horizon:** `within_horizon` is `trading_days_to` ≤ the primary horizon; `within_stat_horizons` gives
+  the flag per stat horizon. Both are null when no ex-date is announced yet, and a note says one declared
+  later may still fall inside the horizon.
+- **Non-payers:** `pays_dividends` is false when FMP lists no dividends (TSLA), or when no ex-date lies
+  in the `DIVIDEND_ACTIVE_DAYS` = 400 calendar days up to `as_of` and none is announced (suspended).
+  `next_ex_dividend` and the horizon flags are then null (a suspended payer keeps `last_ex_dividend`),
+  and a note says why.
+- **Coverage:** `ex_dates_in_history` (ex-dates within the price history) and `matched_to_bars`; a note
+  names ex-dates that found no bar.
+- **No dividend yield:** the skill carries no fundamentals.
+- **Context only:** never part of the scorecard and never a conflict. When the next ex-date falls inside
+  the primary horizon, the risk notes say so (section 6).
+- **Unavailable** (`available: false` with the reason) when the dividends request is restricted or fails.
+
+### L. Macro events (`macro_events`)
+- **Input:** the one `economic-calendar` request: `MACRO_WINDOW_DAYS` = 89 days from the day after
+  `as_of` (`window`). FMP returns at most about 90 days per request and silently drops the rest, and the
+  window does not depend on the horizon. Only `MACRO_COUNTRY` = US rows are used.
+- **Times:** FMP gives UTC; `time_ny` is New York time, daylight saving included. A row at exactly 00:00
+  UTC is a date-only listing (holidays, elections, the Jackson Hole symposium): it keeps its date and
+  has no time.
+- **Classification** by the event name without its "(period)" suffix, not by FMP's `impact` label, which
+  changes between releases of one event (Michigan consumer sentiment: 7 times High, 4 times Medium):
+  1. `MACRO_EXCLUDE`: weekly jobless claims are dropped;
+  2. `MACRO_GROUPS`, anchored case-insensitive regexes:
+     - tier 1: `fomc` (rate decision, statement, projections, press conference), `cpi`, `jobs`
+       (payrolls, unemployment rates, hourly earnings, weekly hours, participation rate), `pce` (PCE
+       price index, personal income and spending), `ppi`, `gdp`, `retail_sales`;
+     - tier 2: `fomc_minutes`, `fed_policy` (Jackson Hole, Monetary Policy Report),
+       `ism_manufacturing`, `ism_services`, `jolts`, `consumer_sentiment` (Michigan, Conference Board);
+  3. tier 3 (`id` "other", labelled with the event's own name): any other US event FMP rates "High";
+  4. the rest is only counted (`unclassified`).
+- **Merging:** the tier 1-2 rows of one group on one New York date form one event at the earliest row's
+  time: the CPI MoM / YoY / core rows become one `cpi`, the FOMC decision at 14:00 and the press
+  conference at 14:30 one `fomc`. `releases` lists the original names and `impact` the highest FMP label.
+  Tier 3 is one event per name and date.
+- **Timing and session** (the first session the release can move):
+
+  | `timing` | When | `session` |
+  |---|---|---|
+  | `non_session` | on a weekend or exchange holiday, with or without a time | the next session |
+  | `date_only` | on a session day, no time given | that day |
+  | `pre_open` | before 09:30 | that day |
+  | `intraday` | before that day's close (13:00 on an early close) | that day |
+  | `after_close` | at or after the close | the next session |
+
+  Events whose session is on or before `as_of` are dropped (the last bar already holds them).
+  `trading_days_to` = NYSE sessions in (`as_of`, `session`]; `calendar_days` = days from `as_of` to the
+  date.
+- **Output:** `events` (tiers 1-3, in session order); `within_horizon` (`id`, `label`, `tier`, `date`,
+  `trading_days_to` of every event with `trading_days_to` ≤ the primary horizon); `within_stat_horizons`
+  (the number of tier-1 events within each stat horizon); `next` (the first event of each tier-1 group,
+  null when the window has none); `counts` (`tier1`, `tier2`, `tier3`, and the US rows after `as_of` that
+  were `excluded` or `unclassified`).
+- **Coverage:** FMP lists FOMC dates (`MACRO_FAR_AHEAD_GROUPS`) months ahead but other releases only
+  about 6-8 weeks ahead. `coverage.listed_through` is the date of the last other US row.
+  `coverage.complete` (and `complete_stat_horizons` per stat horizon) says whether the horizon's last
+  session (`horizon_end`) comes by that date and within the window. A position horizon (60 sessions) is
+  usually incomplete: its list is a lower bound, and a note says which part is missing.
+- **Context only:** dates and times, never an expected outcome or direction. Macro events never change the
+  scorecard and are not a conflict: a position horizon nearly always holds an FOMC decision and a CPI
+  release, so a conflict would be constant noise. The contract carries tiers 1-2
+  (`MACRO_CONTRACT_MAX_TIER` = 2); `metrics.json` lists all three.
+- **No history:** the plan rejects an early `from` (2025-11-01 was refused; dates from 2026-01-29 were
+  accepted when tested on 2026-11-04), so past releases, and the stock's moves on them, are not available.
+- **Unavailable** (`available: false` with the reason) when the request is restricted or fails.
+
 ---
 
-### K. Price action (`price_action`) and candlestick patterns (`candlesticks`)
+### M. Price action (`price_action`) and candlestick patterns (`candlesticks`)
 Two further pattern libraries, both context next to the scorecard and never part of it. The rules,
 parameters (`PA_*`, `CS_*` in config.py) and what the daily-bar approximation leaves out are in
 [patterns.md](patterns.md). In short:
@@ -613,6 +781,13 @@ target first 7.6 times as often as its stop; the 64% of paths that reached neith
 up the difference). The touch rates show the trade-off between a near and a far stop. No commissions,
 slippage, financing or borrow are modelled. A gap can fill a stop well beyond its level.
 
+**Event notes.** `risk.notes` names the scheduled events inside the primary horizon; the arithmetic does
+not change.
+- Earnings: overnight gap risk through either stop.
+- The next ex-dividend date: the price is expected to open lower by about the dividend (its amount, % of
+  the close and ATRs) for mechanical reasons, so a long-side stop closer to the price than that can be
+  touched by the ex-dividend drop alone.
+
 ---
 
 ## 7. Approximations
@@ -622,9 +797,12 @@ slippage, financing or borrow are modelled. A gap can fill a stop well beyond it
 | Anchored VWAP | daily bars: typical price (H+L+C)/3 × daily volume, cumulated from the anchor bar | no intraday data; FMP's daily `vwap` is (O+H+L+C)/4 and is not a VWAP |
 | Volume profile | each bar's volume spread evenly across its high-low range | no intraday volume-at-price |
 | Earnings reaction | two-day close-to-close move across the report date | FMP `earnings` has no before-open / after-close flag; the window contains the reaction either way, plus one extra day of noise |
-| Trading days to earnings | weekdays, no exchange holidays | no holiday calendar; can overstate by about a day around holidays |
-| Weekly partial flag | the latest week is partial if its last bar is not a Friday | a Good-Friday week reads as partial until the next week starts |
-| Stale check / gaps | weekdays only; real market closures appear as gaps | no exchange calendar |
+| Trading days to earnings | NYSE sessions from `as_of` to the report date | FMP gives no time of day: after an after-close report the price reacts one session later than counted |
+| Dividends in the bars | only the three gap measures are taken net of the dividend (section 1.8); ATR and the true range, candles, price action, SMAs, RSI, MACD and the bands use the bars as they traded, so an ex-dividend bar can still read as a down bar or widen the true range | split-adjusted prices, as on charting platforms |
+| Size of the ex-dividend drop | the full split-adjusted dividend (`adjDividend`) | the actual open also reflects news and order flow |
+| Early closes | an early close only the rules know (FMP's list is incomplete before about 2013) closes at `EARLY_CLOSE_DEFAULT` = 13:00 | early closes only decide whether today's bar is complete |
+| Macro event times | FMP's published times, converted from UTC to New York; a date-only row (00:00 UTC) has no time and maps to that day's session | FMP may revise a time; the 12-hour cache picks it up |
+| Macro event list | tiers by event name (`MACRO_GROUPS`); releases other than FOMC dates are listed only about 6-8 weeks ahead (`coverage`); a release after the close on the `as_of` date that FMP still dates on that UTC day (before 19:00 New York in winter, 20:00 in summer) falls before the window | FMP's impact label changes between releases of one event; the window starts the day after `as_of` |
 
 ---
 
@@ -679,14 +857,14 @@ slippage, financing or borrow are modelled. A gap can fill a stop well beyond it
 **`metrics.json`.**
 - Top-level keys in this order: `ticker`, `as_of`, `data_source`, `horizon`, `snapshot`,
   `data_quality`, `market_context`, `regime`, `trend_momentum`, `relative_strength`, `mean_reversion`,
-  `volume_flow`, `volatility`, `levels`, `multi_timeframe`, `event_risk`, `signals`, `scorecard`,
-  `scenarios`, `risk`, `meta`.
+  `volume_flow`, `volatility`, `levels`, `multi_timeframe`, `event_risk`, `dividends`, `macro_events`,
+  `signals`, `price_action`, `candlesticks`, `scorecard`, `scenarios`, `risk`, `meta`.
 - **Values:** floats are rounded to `METRICS_SIG_DIGITS` = 6 significant digits, dates are
   `YYYY-MM-DD`, and `null` means "not computable" (the module's `notes` say why). Percent-like values
   are fractions (0.05 = 5%).
 - **`meta`** holds network calls, cache hits, restricted endpoints, errors, skipped data,
   `modules_unavailable`, notes, the connection (`route`, `base`, `tls_verify`; never the key) and a
-  `config_snapshot` of the key parameters.
+  `config_snapshot` of the key parameters (including the `calendar`, `dividends` and `macro` settings).
 - **Module failures:** a module that raises becomes `available: false` with "internal error: …" and is
   listed in `meta.errors`. The rest of the run continues.
 
@@ -694,8 +872,10 @@ slippage, financing or borrow are modelled. A gap can fill a stop well beyond it
 - Single-stock, in-sample statistics, with no transaction costs.
 - History depth is limited by the FMP plan and `HISTORY_START`. The IPO date from the profile sets the
   floor; a relisted name may have older bars that are never requested.
-- No exchange-holiday calendar: stale checks, gap flags, trading-day counts and the weekly partial flag
-  treat holidays as ordinary weekdays.
+- The exchange calendar is NYSE's (`CALENDAR_EXCHANGE`), built from FMP's list and the rules for 1990
+  through the end of the year after next.
+- Macro events are scheduled dates only: the plan gives no past releases, so there are no statistics of
+  how this stock moved on them, and FMP's listing reaches only some weeks ahead (`coverage`).
 - Daily data only. VWAP and the volume profile are approximations, and intraday structure is invisible.
 - Benchmarks cover the last 5 years, so RS lines, beta and the VIX percentile use at most that span.
 - The default route is FMP's official API with certificate verification on. A third-party proxy

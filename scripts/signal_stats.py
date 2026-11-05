@@ -7,7 +7,8 @@ Signals are evaluated at the close of day t from bars and indicators at bars <= 
 prices). Forward returns and the maximum adverse excursion (MAE: the worst move against the
 signal's bias) are, by design, the only forward-looking quantities; they use dividend-adjusted
 prices, falling back to split-adjusted ones where the adjusted series is missing. The library is documented rule by rule in references/signals.md; do
-not add or tune rules per ticker.
+not add or tune rules per ticker. The gap rules measure the open against the prior close net of the
+dividend going ex on bar t (bars["dividend"], declared before t), so an ex-dividend drop is no gap.
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 import config as C
+from dividends import prev_close_net
 
 P = C.SIGNAL_PARAMS
 SMA_LONG = C.SMA_PERIODS[2]
@@ -58,10 +60,10 @@ SIGNALS = [
      "rule": f"z20 > {P['extension_z']:g}"},
     {"id": "gap_up_atr", "family": 9, "name": "Gap up > 1 ATR on volume", "bias": +1,
      "regime": "current_side", "pillar": "volume_flow",
-     "rule": f"open - close[t-1] > {P['gap_atr']:g} x atr14[t-1] and rvol50 >= {P['gap_rvol']:g}"},
+     "rule": f"open - (close[t-1] - dividend[t]) > {P['gap_atr']:g} x atr14[t-1] and rvol50 >= {P['gap_rvol']:g}"},
     {"id": "gap_down_atr", "family": 9, "name": "Gap down > 1 ATR on volume", "bias": -1,
      "regime": "current_side", "pillar": "volume_flow",
-     "rule": f"close[t-1] - open > {P['gap_atr']:g} x atr14[t-1] and rvol50 >= {P['gap_rvol']:g}"},
+     "rule": f"(close[t-1] - dividend[t]) - open > {P['gap_atr']:g} x atr14[t-1] and rvol50 >= {P['gap_rvol']:g}"},
     {"id": "macd_bull_cross_below_zero", "family": 10, "name": "MACD bullish cross below zero", "bias": +1,
      "regime": "current_side", "pillar": "momentum",
      "rule": f"macd[t-1] <= macd_signal[t-1] and macd[t] > macd_signal[t] and macd[t] < 0 "
@@ -85,6 +87,8 @@ DEFINITIONS = {
             "signal median minus unconditional median",
     "de_clustering": "after a kept event at t, events at t+1..t+h are ignored (per horizon)",
     "baselines": "every day with a valid t+h outcome, overlapping windows, no de-clustering",
+    "dividend": "dividend[t] in the gap rules: the split-adjusted dividend going ex on bar t (0 on other bars "
+                "and without dividend data), so the price drop a dividend explains is not a gap",
 }
 
 
@@ -100,11 +104,13 @@ def _float(x) -> float | None:
 # ---------------------------------------------------------------------------- events
 def events(bars: pd.DataFrame, ind: pd.DataFrame) -> pd.DataFrame:
     """One bool column per signal id (SIGNALS order) on bars.index; True when the rule holds at the
-    close of that bar. Causal: uses bars/ind at <= t only. Comparisons with NaN are False."""
+    close of that bar. Causal: uses bars/ind at <= t only (the dividend going ex on t is declared
+    before t). Comparisons with NaN are False. The gap rules use close[t-1] - dividend[t]
+    (dividends.prev_close_net): close[t-1] itself without a "dividend" column."""
     close, open_ = bars["close"], bars["open"]
     sma20, sma50, sma200 = ind["sma20"], ind["sma50"], ind["sma200"]
     atr, rvol = ind["atr14"], ind["rvol50"]
-    prev_close = close.shift(1)
+    prev_close = prev_close_net(bars)
 
     sq_on = ind["squeeze_on"].eq(True)
     released = (sq_on.shift(1, fill_value=False) & ~sq_on

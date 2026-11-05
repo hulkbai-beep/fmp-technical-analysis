@@ -11,8 +11,10 @@ import pytest
 import config as C
 import fetch
 import fmp_client
+import market_calendar as MC
 from conftest import synthetic_bars
-from fakes import ADJ, FMP_ROW_CAP, FULL, NOW, NY, FakeClient, day, market, profile_row, series
+from fakes import (ADJ, DIVIDENDS, ECON, FMP_ROW_CAP, FULL, HOLIDAYS, NEXT_EX_DATE, NOW, NY, FakeClient, day,
+                   dividend_rows, market, nyse_holiday_rows, profile_row, series)
 
 
 # ---------------------------------------------------------------------------- chunked history
@@ -24,17 +26,18 @@ def test_thirty_years_take_two_full_calls_and_merge_cleanly():
     assert pd.Timestamp(full[1]["to"]) == pd.Timestamp(full[0]["from"]) - pd.Timedelta(days=1)
     bars, src = out["bars"], series("1996-10-01", seed=3)
     assert bars.index.is_unique and bars.index.is_monotonic_increasing
-    assert list(bars.columns) == fetch.COLUMNS
+    assert list(bars.columns) == fetch.COLUMNS + ["dividend"]
     assert list(bars.index.strftime("%Y-%m-%d")) == list(src.index.strftime("%Y-%m-%d"))
     np.testing.assert_allclose(bars["close"].to_numpy(), src["close"].to_numpy())
     assert out["data_quality"]["duplicates_dropped"] == 0
 
 
-def test_normal_stock_uses_ten_calls():
+def test_normal_stock_uses_thirteen_calls():
     fake = market()
     out = fetch.load_all(fake, "ACME", now=NOW)
-    assert out["calls"] == 10 == fake.stats["network_calls"]
-    assert [e for e, _ in fake.requests] == ["profile", "quote", "earnings", FULL, FULL, ADJ, ADJ, ADJ, ADJ, FULL]
+    assert out["calls"] == 13 == fake.stats["network_calls"]
+    assert [e for e, _ in fake.requests] == ["profile", "quote", HOLIDAYS, "earnings", FULL, FULL, ADJ, ADJ,
+                                             DIVIDENDS, ADJ, ADJ, FULL, ECON]
     assert out["sector_etf"] == "XLK" and out["sector"] is not None and out["spy"] is not None
     assert out["skipped"] == {}
     assert out["connection"] == fake.describe() and out["connection"]["route"] == "official FMP API"
@@ -130,7 +133,9 @@ def test_etf_skips_earnings_and_sector():
     assert out["earnings"] is None and out["sector"] is None and out["sector_etf"] is None
     assert set(out["skipped"]) == {"earnings", "sector"}
     assert out["spy"] is not None
-    assert out["calls"] == 2 + len(fake.calls_to(FULL, "QQQ")) + len(fake.calls_to(ADJ, "QQQ")) + 2
+    # profile, quote, holidays, QQQ's history, its dividends, SPY, ^VIX, the economic calendar
+    assert out["calls"] == 3 + len(fake.calls_to(FULL, "QQQ")) + len(fake.calls_to(ADJ, "QQQ")) + 4 == 11
+    assert fake.calls_to(DIVIDENDS, "QQQ") and not fake.calls_to(DIVIDENDS, "SPY")     # ETFs pay dividends too
 
 
 def test_spy_as_ticker_reuses_its_own_bars_as_benchmark():
@@ -139,7 +144,8 @@ def test_spy_as_ticker_reuses_its_own_bars_as_benchmark():
     out = fetch.load_all(fake, "SPY", now=NOW)
     bench_from = day(NOW.tz_localize(None).normalize() - pd.DateOffset(years=C.BENCHMARK_YEARS))
     assert not [p for p in fake.calls_to(ADJ, "SPY") if p["from"] == bench_from]
-    assert out["calls"] == 7      # profile, quote, 2 x /full, 2 x /dividend-adjusted, ^VIX
+    assert out["calls"] == 10     # profile, quote, holidays, 2 x /full, 2 x /dividend-adjusted, dividends, ^VIX, macro
+    assert len(fake.calls_to(DIVIDENDS, "SPY")) == 1
     # the very bars the regime uses (split-adjusted close; adj_close for returns)
     pd.testing.assert_frame_equal(out["spy"], out["bars"])
     assert out["data_quality"]["benchmark_basis"]["SPY"].startswith("split-adjusted")
@@ -185,7 +191,8 @@ def test_plan_without_dividend_adjusted_keeps_every_benchmark_on_full_prices():
     assert set(out["skipped"]) == set()
     assert out["data_quality"]["benchmark_basis"] == {"SPY": "split-adjusted", "XLK": "split-adjusted"}
     assert not fake.calls_to(ADJ, "SPY") and not fake.calls_to(ADJ, "XLK")   # known restricted: not retried
-    assert out["calls"] == 9         # profile, quote, earnings, 2 x /full, 1 x /dividend-adjusted, SPY, XLK, ^VIX
+    assert out["calls"] == 12        # profile, quote, holidays, earnings, 2 x /full, 1 x /dividend-adjusted,
+                                     # dividends, SPY, XLK, ^VIX, economic calendar
     assert not any("overstated" in n for n in out["notes"])                 # stock is price-only too
 
 
@@ -255,7 +262,7 @@ def test_stale_last_bar_is_flagged():
     out = fetch.load_all(fake, "ACME", now=NOW)
     stale = out["data_quality"]["stale"]
     assert stale == {"is_stale": True, "last_bar": "2026-10-09", "expected_session": "2026-10-16",
-                     "business_days_behind": 5}
+                     "business_days_behind": 5, "basis": "NYSE sessions"}
     assert any("stale" in n for n in out["notes"])
 
 
@@ -263,6 +270,187 @@ def test_expected_session_before_close_and_on_weekends():
     assert day(fetch.expected_session(pd.Timestamp("2026-10-19 10:00", tz=NY))) == "2026-10-16"  # Monday
     assert day(fetch.expected_session(pd.Timestamp("2026-10-17 20:00", tz=NY))) == "2026-10-16"  # Saturday
     assert day(fetch.expected_session(pd.Timestamp("2026-10-16 16:15", tz=NY))) == "2026-10-16"
+
+
+# ---------------------------------------------------------------------------- NYSE calendar in validate()
+CAL = MC.build_calendar(list(nyse_holiday_rows()), end_year=2028)
+
+
+def _bars_on(days):
+    """Synthetic bars on exactly these dates."""
+    idx = pd.DatetimeIndex(days, name="date")
+    df = synthetic_bars(n=len(idx), seed=11, start="2000-01-03")
+    df.index = idx
+    return df
+
+
+def test_stale_check_counts_nyse_sessions():
+    bars = _bars_on(CAL.sessions("2026-09-01", "2026-11-25"))       # through the Wednesday before Thanksgiving
+    now = pd.Timestamp("2026-12-01 10:00", tz=NY)                   # Tuesday, before the close
+    _, plain = fetch.validate(bars, now_ny=now)
+    assert plain["stale"]["business_days_behind"] == 3 and plain["stale"]["is_stale"] is True   # Thanksgiving counted
+    assert plain["stale"]["basis"] == "weekdays (no exchange calendar)"
+    _, cal = fetch.validate(bars, now_ny=now, calendar=CAL)
+    assert cal["stale"] == {"is_stale": False, "last_bar": "2026-11-25", "expected_session": "2026-11-30",
+                            "business_days_behind": 2, "basis": "NYSE sessions"}
+    assert not any("stale" in w for w in cal["warnings"])
+
+    bars = _bars_on(CAL.sessions("2026-01-02", "2026-04-02"))       # through the Thursday before Good Friday
+    monday = pd.Timestamp("2026-04-06 10:00", tz=NY)
+    _, plain = fetch.validate(bars, now_ny=monday)
+    _, cal = fetch.validate(bars, now_ny=monday, calendar=CAL)
+    assert (plain["stale"]["expected_session"], plain["stale"]["business_days_behind"]) == ("2026-04-03", 1)
+    assert (cal["stale"]["expected_session"], cal["stale"]["business_days_behind"]) == ("2026-04-02", 0)
+    assert day(fetch.expected_session(monday, CAL)) == "2026-04-02" and day(fetch.expected_session(monday)) == "2026-04-03"
+
+
+def test_one_missing_session_is_a_data_gap_with_the_calendar():
+    days = CAL.sessions("2026-06-01", "2026-07-31")                 # Juneteenth and July 3 are holidays
+    bars = _bars_on(days.drop(pd.Timestamp("2026-07-15")))          # a Wednesday without a bar
+    _, plain = fetch.validate(bars, now_ny=NOW)
+    assert plain["gaps"]["count"] == 0 and "calendar days" in plain["gaps"]["basis"]   # 2 days: below the old rule
+    _, cal = fetch.validate(bars, now_ny=NOW, calendar=CAL)
+    assert cal["gaps"]["count"] == 1 and "NYSE sessions" in cal["gaps"]["basis"]
+    assert cal["gaps"]["items"] == [{"after": "2026-07-14", "before": "2026-07-16", "calendar_days": 2,
+                                     "missing_sessions": 1}]
+    assert any("1 data gaps" in w and "2026-07-14 -> 2026-07-16" in w for w in cal["warnings"])
+
+
+def test_exchange_closures_are_not_data_gaps():
+    days = CAL.sessions("2001-08-01", "2001-10-31").append(CAL.sessions("2012-10-01", "2012-11-30"))
+    bars = _bars_on(days)                                           # 9/11 and Hurricane Sandy closures, a real hole
+    _, plain = fetch.validate(bars, now_ny=NOW)
+    assert [(g["after"], g["before"]) for g in plain["gaps"]["items"]] == \
+        [("2001-09-10", "2001-09-17"), ("2001-10-31", "2012-10-01"), ("2012-10-26", "2012-10-31")]
+    _, cal = fetch.validate(bars, now_ny=NOW, calendar=CAL)
+    (gap,) = cal["gaps"]["items"]
+    assert (gap["after"], gap["before"]) == ("2001-10-31", "2012-10-01")
+    assert gap["missing_sessions"] == len(CAL.sessions("2001-11-01", "2012-09-30"))
+
+
+def test_early_close_bar_is_complete_fifteen_minutes_after_one():
+    bars = _bars_on(CAL.sessions("2026-09-01", "2026-11-27"))       # the day after Thanksgiving closes at 13:00
+    after = pd.Timestamp("2026-11-27 13:20", tz=NY)
+    clean, cal = fetch.validate(bars, now_ny=after, calendar=CAL)
+    assert cal["partial_bar_excluded"] is None and day(clean.index[-1]) == "2026-11-27"
+    assert cal["stale"]["expected_session"] == "2026-11-27" and cal["stale"]["business_days_behind"] == 0
+    _, plain = fetch.validate(bars, now_ny=after)
+    assert plain["partial_bar_excluded"]["date"] == "2026-11-27"   # 16:15 without the calendar
+
+    clean, cal = fetch.validate(bars, now_ny=pd.Timestamp("2026-11-27 13:10", tz=NY), calendar=CAL)
+    reason = cal["partial_bar_excluded"]["reason"]
+    assert day(clean.index[-1]) == "2026-11-25" and "before 13:15" in reason and "13:00 early close" in reason
+    assert cal["stale"]["business_days_behind"] == 0                # Thanksgiving is no session
+
+
+def test_benchmarks_are_validated_with_the_calendar():
+    spy = series("1993-01-29", seed=5)
+    fake = market(prices={"SPY": spy.drop(pd.Timestamp("2026-09-16"))})
+    out = fetch.load_all(fake, "ACME", now=NOW)
+    gaps = out["data_quality"]["benchmarks"]["SPY"]["gaps"]
+    assert gaps["count"] == 1 and gaps["items"][0]["missing_sessions"] == 1 and "NYSE" in gaps["basis"]
+    assert any(n.startswith("SPY: 1 data gaps") for n in out["notes"])
+
+
+# ---------------------------------------------------------------------------- calendar, dividends, macro requests
+def test_load_calendar_is_one_request_through_next_year():
+    fake = market()
+    cal, problem = fetch.load_calendar(fake, pd.Timestamp("2026-10-16"))
+    assert fake.requests == [(HOLIDAYS, {"exchange": "NYSE", "from": "1990-01-01", "to": "2027-12-31"})]
+    assert problem is None and cal.source == "fmp+rules" and cal.problem is None
+    assert not cal.is_session("2026-11-26") and cal.close_time("2026-11-27") == "13:00"
+    assert cal.is_session("2001-09-10") and not cal.is_session("2001-09-11")
+    assert max(cal.closed).year == 2028                              # the rules run a year past the request
+
+    cal, problem = fetch.load_calendar(FakeClient({}, holidays=[]), pd.Timestamp("2026-10-16"))
+    assert cal.source == "rules" and problem == "FMP holidays-by-exchange returned no usable NYSE rows"
+
+
+def test_restricted_holiday_list_falls_back_to_the_rules():
+    fake = market(blocked={HOLIDAYS})
+    out = fetch.load_all(fake, "ACME", now=NOW)
+    cal = out["data_quality"]["calendar"]
+    assert cal["source"] == "rules" and cal["exchange"] == "NYSE" and cal["problem"].startswith("restricted:")
+    assert cal["closed_days"] > 300 and not out["calendar"].is_session("2026-11-26")
+    assert any(n.startswith("exchange calendar: restricted:") and "built-in exchange rules" in n for n in out["notes"])
+    assert HOLIDAYS in fake.restricted and out["skipped"] == {} and out["calls"] == 13
+    assert out["data_quality"]["stale"]["basis"] == "NYSE sessions"
+
+
+def _failing(fake, *endpoints):
+    """Make `endpoints` fail on `fake` with a server error (not a plan restriction)."""
+    respond = fake.respond
+
+    def flaky(endpoint, params):
+        if endpoint in endpoints:
+            raise fmp_client.FMPError(f"HTTP 500 on {endpoint} (rate limit or server error)")
+        return respond(endpoint, params)
+    fake.respond = flaky
+    return fake
+
+
+def test_failing_new_endpoints_are_recorded_and_the_run_goes_on():
+    fake = _failing(market(), HOLIDAYS, DIVIDENDS, ECON)
+    out = fetch.load_all(fake, "ACME", now=NOW)
+    cal = out["data_quality"]["calendar"]
+    assert cal["source"] == "rules" and cal["problem"].startswith("error:")
+    assert out["skipped"]["dividends"].startswith("error:") and out["skipped"]["macro_events"].startswith("error:")
+    assert out["dividends"] is None and out["macro_rows"] is None and not out["bars"]["dividend"].any()
+    assert fake.errors == [HOLIDAYS, DIVIDENDS, ECON] and fake.restricted == []
+    assert len(out["bars"]) == len(series("1996-10-01", seed=3)) and out["spy"] is not None and out["vix"] is not None
+
+
+def test_dividends_become_the_bars_dividend_column():
+    fake = market()
+    out = fetch.load_all(fake, "ACME", now=NOW)
+    div = out["bars"]["dividend"]
+    past = [r["date"] for r in dividend_rows("ACME") if r["date"] <= "2026-10-16"]
+    assert sorted(day(d) for d in div.index[div > 0]) == sorted(past) and set(div[div > 0]) == {0.5}
+    assert len(fake.calls_to(DIVIDENDS, "ACME")) == 1 and not fake.calls_to(DIVIDENDS, "SPY")
+    assert out["dividends"][-1]["ex_date"] == NEXT_EX_DATE            # declared, after the last bar
+    assert out["data_quality"]["dividends"] == {"ex_dates": len(past) + 1, "rows_dropped": 0, "problem": None}
+    assert "dividend" not in out["spy"].columns                       # benchmarks are dividend-adjusted
+
+    weekend = [{"date": "2026-09-05", "adjDividend": 0.3, "dividend": 0.3, "frequency": "Quarterly"},   # a Saturday
+               {"date": "2026-08-03", "adjDividend": 0.0, "dividend": 0.0, "frequency": "Quarterly"}]   # unusable
+    out = fetch.load_all(market(dividends={"ACME": weekend}), "ACME", now=NOW)
+    div = out["bars"]["dividend"]
+    assert [day(d) for d in div.index[div > 0]] == ["2026-09-07"] and div.sum() == pytest.approx(0.3)
+    assert out["data_quality"]["dividends"] == {"ex_dates": 1, "rows_dropped": 1, "problem": None}
+
+
+def test_restricted_dividends_leave_zeros_and_a_reason():
+    fake = market(blocked={DIVIDENDS})
+    out = fetch.load_all(fake, "ACME", now=NOW)
+    assert out["dividends"] is None and out["skipped"]["dividends"].startswith("restricted:")
+    assert not out["bars"]["dividend"].any() and DIVIDENDS in fake.restricted
+    assert out["data_quality"]["dividends"]["problem"].startswith("restricted:")
+    assert any(n.startswith("dividends: restricted:") for n in out["notes"])
+    assert out["calls"] == 13 and out["macro_rows"] is not None       # the rest of the run goes on
+
+    out = fetch.load_all(market(dividends={}), "ACME", now=NOW)        # a symbol that pays none
+    assert out["dividends"] == [] and not out["bars"]["dividend"].any() and "dividends" not in out["skipped"]
+
+
+def test_economic_calendar_window_follows_the_last_bar():
+    fake = market()
+    out = fetch.load_all(fake, "ACME", now=NOW)
+    (params,) = [p for e, p in fake.requests if e == ECON]
+    assert params == {"from": "2026-10-17", "to": "2027-01-13"} == out["macro_window"]
+    assert (pd.Timestamp(params["to"]) - pd.Timestamp(params["from"])).days == C.MACRO_WINDOW_DAYS - 1
+    assert len(out["macro_rows"]) == 11 and min(r["date"] for r in out["macro_rows"]) >= "2026-10-17"
+    assert {r["country"] for r in out["macro_rows"]} == {"US", "EU"}   # raw rows: macro.py keeps the US ones
+
+    out = fetch.load_all(market(), "ACME", now=pd.Timestamp("2026-10-16 11:00", tz=NY))   # partial bar dropped
+    assert out["macro_window"] == {"from": "2026-10-16", "to": "2027-01-12"}
+
+
+def test_restricted_economic_calendar_is_recorded():
+    fake = market(blocked={ECON})
+    out = fetch.load_all(fake, "ACME", now=NOW)
+    assert out["macro_rows"] is None and out["skipped"]["macro_events"].startswith("restricted:")
+    assert any(n.startswith("macro_events: restricted:") for n in out["notes"]) and ECON in fake.restricted
+    assert out["macro_window"] == {"from": "2026-10-17", "to": "2027-01-13"}
 
 
 # ---------------------------------------------------------------------------- validate()
@@ -387,6 +575,31 @@ def test_quote_follows_the_session_rule(client):
     client._now_ny = lambda: _ny("2026-10-16T16:30")                                       # close has passed
     client.get("quote", **params)
     assert client.stats["network_calls"] == 2
+
+
+@pytest.mark.parametrize("endpoint, params, written, now, calls", [
+    (HOLIDAYS, {"exchange": "NYSE", "from": "1990-01-01", "to": "2027-12-31"},
+     "2026-10-10T10:00", "2026-10-16T09:00", 1),                  # 6 days: within the week
+    (HOLIDAYS, {"exchange": "NYSE", "from": "1990-01-01", "to": "2027-12-31"},
+     "2026-10-08T10:00", "2026-10-16T11:00", 2),                  # 8 days
+    (DIVIDENDS, {"symbol": "ACME"}, "2026-10-15T20:00", "2026-10-16T19:00", 1),   # 23 hours
+    (DIVIDENDS, {"symbol": "ACME"}, "2026-10-15T10:00", "2026-10-16T11:00", 2),   # 25 hours
+    (ECON, {"from": "2026-10-17", "to": "2027-01-13"}, "2026-10-16T06:00", "2026-10-16T17:00", 1),   # 11 hours
+    (ECON, {"from": "2026-10-17", "to": "2027-01-13"}, "2026-10-16T06:00", "2026-10-16T19:00", 2),   # 13 hours
+])
+def test_calendar_dividends_and_macro_use_fixed_ttls(client, endpoint, params, written, now, calls):
+    assert fmp_client.TTL_BY_ENDPOINT[HOLIDAYS] == C.CALENDAR_TTL_SECONDS == 7 * 86400
+    assert fmp_client.TTL_BY_ENDPOINT[DIVIDENDS] == C.DIVIDEND_TTL_SECONDS
+    assert fmp_client.TTL_BY_ENDPOINT[ECON] == C.MACRO_TTL_SECONDS
+    assert _get_at(client, written, now, endpoint, **params) == calls
+
+
+def test_check_probes_the_new_endpoints():
+    probes = fmp_client._probes("ACME", "2026-09-16", "2026-10-16")
+    params = {ep: p for ep, p, _ in probes}
+    assert params[HOLIDAYS] == {"exchange": "NYSE", "from": "2025-01-01", "to": "2027-12-31"}
+    assert params[DIVIDENDS] == {"symbol": "ACME"}
+    assert params[ECON] == {"from": "2026-10-16", "to": "2026-11-15"}
 
 
 def test_key_never_reaches_cache_files_or_names(client, tmp_path):

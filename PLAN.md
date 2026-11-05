@@ -293,3 +293,80 @@ def weekday_calendar() -> MarketCalendar                                # 无节
 
 **不做：** 分析中使用 FMP 自带技术指标（继续只做交叉校验）；分析师目标价、内部人交易、13F、新闻（不是技术面）；
 当前套餐受限的接口（`sp500-constituent`、`batch-quote`、COT）。
+
+---
+
+## 10. 进度（第一阶段完成情况）
+
+更新：2026-11-05。第一阶段（A 日历、B 除息、C 宏观、合约 ta-2.1、调用预算、文档）已全部实现，**尚未提交**
+（schema 改名已用 `git mv` 暂存，其余改动未暂存）。离线测试 **759 个全部通过**（基线 465）。
+
+### 10.1 已实现
+
+| 项目 | 文件 | 内容 |
+|---|---|---|
+| A. NYSE 交易日历 | `scripts/market_calendar.py`；`fetch.py`、`modules.py`、`indicators.py`、`regime.py`、`chart.py` | `MarketCalendar`（2.1 节全部方法，另有向量化的 `missing_sessions_between` 和 `summary()`）；`fetch.load_calendar` 一次请求；`validate` 的部分 K 线（半日市为 13:15）、过期判断（`stale.basis`）、数据缺口（条目加 `missing_sessions`，加 `gaps.basis`），基准也用同一日历校验；到财报的交易日、周线 `partial`；`data_quality.calendar` |
+| B. 除息日 | `scripts/dividends.py`；`fetch.py`、`levels.py`、`signal_stats.py`、`modules.py`、`scorecard.py` | `fetch.fetch_dividends` 与 `bars["dividend"]` 列；三处跳空（未回补缺口、`gap_up_atr` / `gap_down_atr`、`largest_gap_6m` 锚点）按 `prev - D` 计算；`levels.gap_adjustment`；`dividends` 模块；除息日落在持有期内时 `risk.notes` 加一句提示；`data_quality.dividends` |
+| C. 宏观事件 | `scripts/macro.py`；`fetch.py`、`config.py` | `fetch.macro_window` / `fetch_macro`（89 天窗口）；按事件名分 3 级、同组同一美东日期合并、UTC→美东、`timing` / `session`、`trading_days_to`；`macro_events` 模块 |
+| 合约 ta-2.1 | `contract.py`、`contracts/ta-2.1.schema.json` | 第 5 节全部字段（补充见 10.2） |
+| 调用预算与缓存 | `fmp_client.py`、`analyze.py` | TTL：日历 7 天、股息 1 天、宏观 12 小时；`check` 增加三个接口的探测；未缓存 13 / 11 / 10 次（e2e 测试与实盘一致）；`config_snapshot` 加 `calendar` / `dividends` / `macro`；终端摘要加两行（持有期内的除息日、tier 1 宏观事件） |
+| 文档 | `SKILL.md`、`README.md`、`references/methodology.md`、`report_template.md`、`signals.md` | 按第 7 节：调用次数、回复摘要、解读规则、边缘情况、合约 2.1、`check`；methodology 新增 1.7 日历、1.8 除息、模块 K（除息）与 L（宏观），原 K（价格行为）改为 M；report_template 第 9 节改为财报 + 除息 + 宏观（ETF 只跳过财报部分）；signals.md 的跳空规则扣股息 |
+| 测试 | `tests/` | 新增 `test_market_calendar.py`（64 个）、`test_dividends.py`（22 个）、`test_macro.py`（150 个）；扩充 fetch、levels、signals、modules、indicators、regime、chart、scorecard、contract、lookahead、e2e；`fakes.py` 默认提供三个接口的数据 |
+
+### 10.2 与计划的差异
+
+- **日历（2.1–2.3）**
+  - `MarketCalendar.source` 另有 `"weekdays"`（`weekday_calendar()`，供单测和旧调用方用）；`week_last_session`
+    在该周没有交易日时返回 `None`。
+  - `load_calendar` 返回 `(calendar, problem)`；规则覆盖到「明年 + 1」，比 FMP 请求多一年。
+  - 实测 FMP `holidays-by-exchange` 的 `from` **不含当天**（`from=2026-11-26` 不返回感恩节），这就是 FMP 清单缺
+    1990-01-01 的原因，由规则补上。
+  - 无日历时 `validate` 的数值和告警不变，只多了说明口径的 `stale.basis` / `gaps.basis`。
+- **除息（3.1–3.3）**
+  - 解析规则补充：完全重复的行只算一次（FMP 偶尔把同一笔列两次）；同一除息日金额不同的多笔（常规 + 特别股息）
+    合并为一条、金额相加。
+  - 计划外新增：`data_quality.dividends = {ex_dates, rows_dropped, problem}`；`gap_adjustment.neutralized[*]`
+    加 `raw_unfilled`（不扣股息时是否会是未回补缺口）。
+  - 计划外新增 `DIVIDEND_ACTIVE_DAYS`（=400）：400 个日历日内没有除息日、也没有已宣布的 → `pays_dividends: false`
+    （视为停发）；派息但还没宣布下一次 → `next_ex_dividend` 和持有期标志为 `null`，并写说明。
+- **宏观（4.1–4.2）**
+  - `fetch_macro` 返回所有国家的行，`US` 过滤放在 `macro.py`（计划写在 fetch 里）。
+  - `timing` 多一个 `date_only`：00:00:00 UTC 的行是只有日期的条目（假日、选举、Jackson Hole），不做时区换算、
+    没有时间。
+  - `counts` 多 `tier3`、`unclassified`；新增 `coverage`（`listed_through`、`horizon_end`、`complete`、
+    `complete_stat_horizons`）：实测 FMP 只提前约 6–8 周列出 FOMC 以外的发布（FOMC 提前数月，
+    `MACRO_FAR_AHEAD_GROUPS`），所以 position 持有期的列表通常只是下限。
+  - 分组正则扩充并改为不区分大小写（`Interest Rate Projection - …` 归入 `fomc`，`Core CPI`，
+    `Real Consumer Spending` 归入 `gdp`）。
+- **合约（第 5 节）**：另加 `macro.listed_through` 和 `horizons.*.macro_complete`；`calendar_source` 的枚举另含
+  `"weekdays"` 与 `null`；`ex_dividend_within_horizon` 对不派息的标的为 `false`、未知时为 `null`；经济日历不可用时
+  `macro.events` 和 `macro_within_horizon` 为 `null`（不是 `[]`）。
+- **文档**：顺带修正 methodology 原有的两处不准确：`earnings` 的缓存走「同一交易时段」规则（原文写的是 12 小时
+  TTL）；`metrics.json` 顶层键列表补上原先漏掉的 `price_action`、`candlesticks`。
+
+### 10.3 验收进度（第 7 节）
+
+1. 离线测试：**759 passed**（基线 465）。
+2. 真实 API（2026-11-04 收盘后运行，as_of 2026-11-04）：已跑 AAPL、T、HYG、SPY 的 swing + `--contract`。
+   - 全部退出码 0、无错误，合约通过 ta-2.1 schema；空缓存调用次数 AAPL 13、HYG 11、SPY 10。
+   - 日历 `fmp+rules`：355 个休市日、88 个半日市；四个标的均无数据缺口。
+   - HYG：窗口内 5 个除息「假跳空」被消除（2026-06-01、07-01、09-01、10-01、11-02），其中 06-01、09-01
+     原本会是未回补缺口价位 ✅。
+   - T：2026-10-09 扣除 0.2775 的股息后**仍是真跳空**，所以保留为缺口（带 `ex_dividend` 标注，仍在 R3 的来源里）。
+     验收标准「T 的 2026-10-09 不再是价位」的前提不成立，不是实现问题。
+   - 感恩节前后的交易日数：AAPL 下次财报 2027-02-04 为 62 个交易日（按工作日算是 66）✅。
+   - 宏观列表包含下一次非农（11-06 08:30）、CPI（11-10 08:30）和 FOMC（12-09 14:00）✅。
+   - **未做**：VZ、COST、KO、JEPI、TSLA、NVDA、BRK.B，以及 position 持有期的实盘运行。
+
+### 10.4 未决事项
+
+- 宏观窗口按计划从 as_of 次日开始：as_of 当天收盘后、但 UTC 日期仍是 as_of 的发布（美东夏令时 16:00–19:59，
+  冬令时 16:00–18:59）取不到；FMP 里这类多是 Low / Medium 的美国条目。可改为从 as_of 当天开始（模块本来就会
+  丢掉 as_of 收盘前的事件），需同步改测试和文档（methodology 1.1、1.4、模块 L、第 7 节，SKILL.md 边缘情况）。
+- 经济日历 TTL 12 小时：同一天相隔 12 小时以上、as_of 相同的重跑会再请求一次经济日历（「同日重跑 0 次」的例外）。
+- `GAP_MISSING_SESSIONS` = 1：任何一个缺失的交易日都会告警。实盘四个标的（及 SPY / XLK / ^VIX 基准）均为 0，
+  其他标的需在实盘验证中观察。`validate` 不标记落在非交易日的 K 线，可作为以后的数据质量检查。
+- T 的 1990 年拆股调整后收盘价（中位数 10.52）触发 SPAC 空壳启发式，是原有的误报，与本次改动无关。
+- e2e 的合成股息很小（$0.50 对约 $4,475 的价格），e2e 里没有被消除的跳空；消除逻辑由 `test_levels.py` 单测和
+  HYG 实盘覆盖。
+- `fmp_client.py check` 的假日探测用 `from=<去年>-01-01`，因 `from` 不含当天会漏掉那年的 1 月 1 日（只影响显示）。

@@ -15,8 +15,9 @@ report.
 - Every rule is evaluated **at the close of day t, using bars and indicators at dates <= t only**.
   `tests/test_lookahead.py` checks this: indicators and signals at dates <= t are identical when the
   data after t is removed or replaced with random values.
-- Rules run on **split-adjusted** OHLCV (FMP `/full`) and the indicators computed from it
-  (`indicators.compute_all`). Forward returns are measured on **dividend-adjusted** prices (see below).
+- Rules run on **split-adjusted** OHLCV (FMP `/full`), the indicators computed from it
+  (`indicators.compute_all`) and, in the two gap rules, the bars' `dividend` column. Forward returns are
+  measured on **dividend-adjusted** prices (see below).
 - A missing input (NaN, for example the SMA200 during its first 199 bars) makes the rule False.
 - Today's partial bar, if the run happens during market hours, has already been dropped by the data
   layer, so a signal never fires on an incomplete bar.
@@ -35,8 +36,8 @@ report.
 | 6 | `death_cross` | Death cross (50/200 SMA) | `sma50[t-1] >= sma200[t-1] and sma50[t] < sma200[t]` | current_side | -1 | trend |
 | 7 | `pullback_rising_50` | Pullback to a rising 50 SMA | `sma50 > sma200 and sma50 > sma50[t-20] and abs(close - sma50) <= 1 x atr14` | current_side | +1 | trend |
 | 8 | `extension_2sigma` | Extension > 2 sigma above the 20-day mean | `z20 > 2` | current_side | -1 | mean_reversion |
-| 9 | `gap_up_atr` | Gap up > 1 ATR on volume | `open - close[t-1] > 1 x atr14[t-1] and rvol50 >= 2` | current_side | +1 | volume_flow |
-| 9 | `gap_down_atr` | Gap down > 1 ATR on volume | `close[t-1] - open > 1 x atr14[t-1] and rvol50 >= 2` | current_side | -1 | volume_flow |
+| 9 | `gap_up_atr` | Gap up > 1 ATR on volume | `open - (close[t-1] - dividend[t]) > 1 x atr14[t-1] and rvol50 >= 2` | current_side | +1 | volume_flow |
+| 9 | `gap_down_atr` | Gap down > 1 ATR on volume | `(close[t-1] - dividend[t]) - open > 1 x atr14[t-1] and rvol50 >= 2` | current_side | -1 | volume_flow |
 | 10 | `macd_bull_cross_below_zero` | MACD bullish cross below zero | `macd[t-1] <= macd_signal[t-1] and macd[t] > macd_signal[t] and macd[t] < 0 (bar index >= 35)` | current_side | +1 | momentum |
 | 10 | `macd_bear_cross_above_zero` | MACD bearish cross above zero | `macd[t-1] >= macd_signal[t-1] and macd[t] < macd_signal[t] and macd[t] > 0 (bar index >= 35)` | current_side | -1 | momentum |
 
@@ -59,6 +60,10 @@ not a conclusion: the statistics decide. `downtrend_oversold` is +1 because the 
 | `squeeze_bars` | length of the current run of consecutive squeeze bars (0 when off) |
 | `macd`, `macd_signal` | EMA(12) - EMA(26) of the close; signal = EMA(9) of the MACD line |
 
+`dividend` is a column of the bars, not an indicator: the split-adjusted dividend going ex on bar t (FMP
+`dividends`, matched to bars as in methodology.md section 1.8), 0 on every other bar and on every bar when
+the dividend data could not be loaded.
+
 ### Notes on individual rules
 
 - **new_52w_high**: a new 52-week closing high always sits above the 200 SMA once the SMA exists,
@@ -75,6 +80,12 @@ not a conclusion: the statistics decide. `downtrend_oversold` is +1 because the 
   The rule stays true for several consecutive bars during a pullback; de-clustering keeps one event.
 - **gaps**: the gap is measured against the prior bar's ATR, so the gap bar's own range does not widen
   the threshold. RVOL uses the gap bar's full-day volume, which is known at the close of t.
+  - The prior close is taken net of the dividend going ex on t: `close[t-1] - dividend[t]`. The
+    split-adjusted bars are not dividend-adjusted, so on an ex-dividend date the price opens lower by about
+    the dividend for mechanical reasons. A drop the dividend explains is no gap down, a gap down counts only
+    the part beyond the dividend, and a gap up is measured from the lower, ex-dividend footing.
+  - The dividend is declared before t, so the rule stays causal. On every other bar, and without dividend
+    data, `dividend[t]` is 0 and the gap is measured from `close[t-1]` itself, as before.
 - **MACD crosses**: the EMAs are seeded at the first bar, so crosses before bar index 35
   (`MACD_SLOW + MACD_SIGNAL`) are ignored as warm-up noise. The zero condition is on the MACD line at t.
 
@@ -148,8 +159,8 @@ its total number of (raw, not de-clustered) fire days, for transparency.
   horizons, confidence, scorable}`; `horizons[h]` holds the signal statistics above plus
   `unconditional`, `same_regime` and `edge`.
 - `inactive_ids`, `library` (`{id, name, last_fired, fires_total}`), `primary_horizon`,
-  `stat_horizons`, `history {first_date, last_date, bars, adj_coverage}`, `definitions`, `caveats`,
-  `notes`.
+  `stat_horizons`, `history {first_date, last_date, bars, adj_coverage}`, `definitions` (including
+  `dividend`, the gap rules' input), `caveats`, `notes`.
 
 ## Caveats (always stated in the report)
 

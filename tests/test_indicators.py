@@ -307,6 +307,20 @@ def test_resample_weekly_holiday_and_partial_week():
     assert ind.resample_weekly(full)["partial"].tolist() == [False, False, False]
 
 
+def test_resample_weekly_partial_flag_follows_the_exchange_calendar():
+    import market_calendar as MC
+    cal = MC.build_calendar(None, end_year=2025)                     # rules only: Good Friday 2024-03-29 closed
+    days = pd.to_datetime(["2024-03-25", "2024-03-26", "2024-03-27", "2024-03-28"])
+    k = np.arange(len(days), dtype=float)
+    df = pd.DataFrame({"open": 100 + k, "high": 102 + k, "low": 99 + k, "close": 101 + k,
+                       "volume": 10 + k}, index=pd.DatetimeIndex(days, name="date"))
+    assert ind.resample_weekly(df)["partial"].tolist() == [True]            # weekdays: Thursday is not Friday
+    assert ind.resample_weekly(df, cal)["partial"].tolist() == [False]      # NYSE: Thursday is the week's last session
+    assert ind.resample_weekly(df.iloc[:3], cal)["partial"].tolist() == [True]   # Wednesday: Thursday still to come
+    two = pd.concat([df.set_axis(df.index - pd.Timedelta(days=7)), df])
+    assert ind.resample_weekly(two, cal)["partial"].tolist() == [False, False]   # only the latest week can be partial
+
+
 # ---------------------------------------------------------------------------- compute_all
 def test_compute_all_columns_and_types(bars):
     out = ind.compute_all(bars)

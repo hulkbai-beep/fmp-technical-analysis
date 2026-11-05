@@ -9,8 +9,12 @@ metrics.json (every computed number) and a self-contained chart.html.
               position (weekly emphasis, 20/60-day stats, ~2-year levels)
   --out       output folder (default ./ta-output/<TICKER>_<as_of>/)
   --refresh   ignore the local cache and fetch everything again
-  --contract  also write the ta-2.0 contract (both horizons; the other one runs from the cache;
+  --contract  also write the ta-2.1 contract (both horizons; the other one runs from the cache;
               see contract.py)
+
+The NYSE calendar from fetch.py runs through every module that counts trading days. The
+dividends and macro_events modules (ex-dividend dates, scheduled US macro releases) are context
+like event_risk: they never change the scorecard.
 
 Exit codes: 0 done; 1 the analysis could not run (unknown ticker, no data, FMP or network
 error); 2 configuration or usage problem (missing or rejected API key, bad arguments).
@@ -37,11 +41,13 @@ import pandas as pd
 import chart
 import config as C
 import contract
+import dividends as D
 import fetch
 import candlesticks as CS
 import fmp_client
 import indicators as I
 import levels
+import macro
 import modules as M
 import price_action as PA
 import regime as R
@@ -61,6 +67,8 @@ BUILDERS = (
     ("levels", levels.build_levels),
     ("multi_timeframe", R.build_multi_timeframe),
     ("event_risk", M.build_event_risk),
+    ("dividends", D.build_dividends),
+    ("macro_events", macro.build_macro_events),
     ("signals", SS.build_signal_stats),
     ("price_action", PA.build_price_action),
     ("candlesticks", CS.build_candlesticks),
@@ -151,6 +159,16 @@ def config_snapshot(horizon: str) -> dict:
         "data": {"history_start": C.HISTORY_START, "eod_row_cap": C.EOD_ROW_CAP, "chunk_years": C.CHUNK_YEARS,
                  "benchmark_years": C.BENCHMARK_YEARS, "market_close_buffer": C.MARKET_CLOSE_BUFFER,
                  "stale_bdays": C.STALE_BDAYS},
+        "calendar": {"exchange": C.CALENDAR_EXCHANGE, "future_years": C.CALENDAR_FUTURE_YEARS,
+                     "session_open": C.SESSION_OPEN, "session_close": C.SESSION_CLOSE,
+                     "early_close_default": C.EARLY_CLOSE_DEFAULT, "close_buffer_minutes": C.CLOSE_BUFFER_MINUTES,
+                     "gap_missing_sessions": C.GAP_MISSING_SESSIONS},
+        "dividends": {"match_days": C.DIVIDEND_MATCH_DAYS, "active_days": C.DIVIDEND_ACTIVE_DAYS},
+        "macro": {"country": C.MACRO_COUNTRY, "window_days": C.MACRO_WINDOW_DAYS,
+                  "contract_max_tier": C.MACRO_CONTRACT_MAX_TIER,
+                  "groups": {gid: {"label": label, "tier": tier, "patterns": list(patterns)}
+                             for gid, label, tier, patterns in C.MACRO_GROUPS},
+                  "exclude": list(C.MACRO_EXCLUDE), "far_ahead_groups": list(C.MACRO_FAR_AHEAD_GROUPS)},
         "indicators": {"sma": list(C.SMA_PERIODS), "slope_bars": C.SLOPE_BARS, "rsi": [C.RSI_PERIOD, C.RSI_SHORT_PERIOD],
                        "atr": C.ATR_PERIOD, "adx": C.ADX_PERIOD, "macd": [C.MACD_FAST, C.MACD_SLOW, C.MACD_SIGNAL],
                        "bollinger": [C.BB_PERIOD, C.BB_STD], "keltner": [C.KC_PERIOD, C.KC_ATR_PERIOD, C.KC_MULT],
@@ -238,6 +256,7 @@ def run_analysis(ticker: str, horizon: str = C.DEFAULT_HORIZON, client=None, now
         "ticker": symbol, "as_of": as_of, "horizon": horizon, "hz": C.HORIZONS[horizon],
         "bars": bars, "ind": I.compute_all(bars),
         **{k: data[k] for k in ("spy", "sector", "sector_etf", "vix", "profile", "quote", "earnings", "is_etf",
+                                "calendar", "dividends", "macro_rows", "macro_window",
                                 "data_quality", "notes", "skipped", "connection")},
         "data_source": source,
     }
@@ -296,6 +315,30 @@ def _pct(x) -> str:
     return "n/a" if x is None else f"{x * 100:+.1f}%"
 
 
+def _event_lines(m: dict) -> list[str]:
+    """Summary lines for the next ex-dividend date when it falls inside the horizon and for the tier-1
+    macro events inside it (context, not part of the scorecard)."""
+    lines = []
+    dv = m.get("dividends") or {}
+    nx = dv.get("next_ex_dividend") or {}
+    if dv.get("within_horizon") and nx.get("date"):
+        size = [f"{nx['amount_pct'] * 100:.2f}% of close" if nx.get("amount_pct") is not None else None,
+                f"{nx['amount_atr']:.2f} ATR" if nx.get("amount_atr") is not None else None]
+        size = ", ".join(s for s in size if s)
+        amount = "n/a" if nx.get("amount") is None else f"${nx['amount']:.4g}"
+        lines.append(f"  ex-dividend  : {nx['date']} ({nx.get('trading_days_to')} trading days), {amount}"
+                     + (f" ({size})" if size else "") + f", inside the {dv.get('horizon_days')}-day horizon")
+    me = m.get("macro_events") or {}
+    tier1 = [e for e in me.get("within_horizon") or [] if e.get("tier") == 1]
+    if tier1:
+        listed = ", ".join(f"{e['label']} {e['date']}" for e in tier1)
+        partial = (me.get("coverage") or {}).get("complete") is False
+        lines.append(f"  macro events : {listed} (tier 1, inside the {me.get('horizon_days')}-day horizon"
+                     + (f"; FMP lists events only through {me['coverage']['listed_through']}" if partial else "")
+                     + ")")
+    return lines
+
+
 def summary(metrics: dict, paths: dict) -> str:
     """Short plain-text summary of a run for the terminal."""
     m, meta = metrics, metrics["meta"]
@@ -316,6 +359,7 @@ def summary(metrics: dict, paths: dict) -> str:
     active = [f"{a['id']} (n={(a['horizons'].get(primary) or {}).get('n')}, {a['confidence']})"
               for a in sg.get("active") or []]
     lines.append(f"  signals      : {', '.join(active) if active else 'none active'}")
+    lines.extend(_event_lines(m))
     lines.append(f"  API calls    : {meta['network_calls']} network, {meta['cache_hits']} from cache")
     skipped = {**meta["skipped"], **{k: v for k, v in meta["modules_unavailable"].items() if "." not in k}}
     if skipped:
@@ -325,8 +369,9 @@ def summary(metrics: dict, paths: dict) -> str:
         lines.append(f"  WARNING      : {dq['partial_bar_excluded']['reason']}")
     if (dq.get("stale") or {}).get("is_stale"):
         st = dq["stale"]
+        unit = "NYSE sessions" if str(st.get("basis") or "").startswith(C.CALENDAR_EXCHANGE) else "business days"
         lines.append(f"  WARNING      : stale data, last bar {st['last_bar']} is {st['business_days_behind']} "
-                     f"business days behind {st['expected_session']}")
+                     f"{unit} behind {st['expected_session']}")
     if (dq.get("liquidity") or {}).get("illiquid"):
         lines.append(f"  WARNING      : illiquid ({dq['liquidity']['reason']})")
     if dq.get("spac_like_start"):

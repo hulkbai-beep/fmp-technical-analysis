@@ -11,8 +11,10 @@ The zones are reference only: a map of where price traded or turned before, not 
 it will turn next. The stops and targets in scorecard.py come from volatility bands.
 
 Everything uses split-adjusted OHLC (the prices that actually traded, continuous across splits)
-over the last ctx["hz"]["levels_lookback"] bars, as of the last complete bar. Definitions are
-documented in references/methodology.md.
+over the last ctx["hz"]["levels_lookback"] bars, as of the last complete bar. Those prices are not
+dividend-adjusted, so on an ex-dividend bar (bars["dividend"] > 0) gaps compare with the prior bar
+net of the dividend: the mechanical ex-dividend drop is no gap. Definitions are documented in
+references/methodology.md.
 """
 from __future__ import annotations
 
@@ -22,10 +24,14 @@ import numpy as np
 import pandas as pd
 
 import config as C
+from dividends import NOTE_DATES_MAX, bar_dividends
 
 PROFILE_NOTE = "approximation: each bar's volume spread evenly across its high-low range"
 PIVOT_NOTE = ("a swing pivot is confirmed once price reverses {m:g} ATR from it, so the latest swing "
               "is not a pivot yet (the only right-side dependence; levels are measured as of the last bar)")
+GAP_DIVIDEND_METHOD = ("on an ex-dividend bar t paying D, a gap compares bar t with the prior bar's high and "
+                       "low minus D, and the gap zone's edge on the prior bar's side is that price minus D: a "
+                       "drop the dividend explains is not a gap (split-adjusted bars are not dividend-adjusted)")
 
 _SOURCE_TYPES = {
     "pivot_high": "pivot", "pivot_low": "pivot",
@@ -267,38 +273,81 @@ def _zone_volume(profile: dict, lo: float, hi: float) -> float:
 
 
 # ---------------------------------------------------------------------------- gaps
+def _gap_inputs(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """(high, low, high[t-1], low[t-1], D[t]) as arrays on df's bars: the prior bar's high and low
+    (NaN at bar 0) and the dividend going ex on each bar (0 without a "dividend" column)."""
+    high = df["high"].to_numpy(dtype=float, na_value=np.nan)
+    low = df["low"].to_numpy(dtype=float, na_value=np.nan)
+    return high, low, np.r_[np.nan, high[:-1]], np.r_[np.nan, low[:-1]], bar_dividends(df).to_numpy(dtype=float)
+
+
+def _later_extremes(high: np.ndarray, low: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Lowest low / highest high strictly after each bar (+inf / -inf after the last bar)."""
+    later_low = np.r_[np.fmin.accumulate(low[::-1])[::-1][1:], np.inf]
+    later_high = np.r_[np.fmax.accumulate(high[::-1])[::-1][1:], -np.inf]
+    return np.where(np.isnan(later_low), np.inf, later_low), np.where(np.isnan(later_high), -np.inf, later_high)
+
+
 def unfilled_gaps(df: pd.DataFrame) -> list[dict]:
     """Price gaps between consecutive bars of df that later bars have not fully filled.
 
     Gap up at t: low[t] > high[t-1], zone high[t-1]..low[t]; filled once a later bar's low is
     <= high[t-1], otherwise its top shrinks to the lowest later low (partially filled). Gap down
     mirrors it: high[t] < low[t-1], zone high[t]..low[t-1], bottom rises to the highest later high.
-    Returns unfilled gaps chronologically with the remaining zone (top/bottom) and the original one.
+    On an ex-dividend bar t (df["dividend"] = D > 0) the prior bar's high and low are taken net of
+    the dividend, high[t-1] - D and low[t-1] - D, in the test and as the zone edge: a drop the
+    dividend explains is no gap. Returns unfilled gaps chronologically with the remaining zone
+    (top/bottom), the original one and ex_dividend (D on an ex-dividend bar, else None). Without a
+    "dividend" column, or with zeros in it, nothing changes.
     """
-    high = df["high"].to_numpy(dtype=float, na_value=np.nan)
-    low = df["low"].to_numpy(dtype=float, na_value=np.nan)
     if len(df) < 2:
         return []
-    # lowest low / highest high strictly after each bar (+-inf after the last bar)
-    later_low = np.r_[np.fmin.accumulate(low[::-1])[::-1][1:], np.inf]
-    later_high = np.r_[np.fmax.accumulate(high[::-1])[::-1][1:], -np.inf]
-    later_low = np.where(np.isnan(later_low), np.inf, later_low)
-    later_high = np.where(np.isnan(later_high), -np.inf, later_high)
+    high, low, prev_high, prev_low, div = _gap_inputs(df)
+    later_low, later_high = _later_extremes(high, low)
 
     out = []
     for t in range(1, len(df)):
-        if low[t] > high[t - 1] and later_low[t] > high[t - 1]:
+        ph, pl = prev_high[t] - div[t], prev_low[t] - div[t]       # x - 0.0 == x: no dividend, no change
+        ex_div = float(div[t]) if div[t] > 0 else None
+        if low[t] > ph and later_low[t] > ph:
             top = min(low[t], later_low[t])
             out.append({"date": _iso(df.index[t]), "direction": "up",
-                        "top": float(top), "bottom": float(high[t - 1]), "filled": False,
+                        "top": float(top), "bottom": float(ph), "filled": False,
                         "partially_filled": bool(top < low[t]),
-                        "gap_top": float(low[t]), "gap_bottom": float(high[t - 1])})
-        elif high[t] < low[t - 1] and later_high[t] < low[t - 1]:
+                        "gap_top": float(low[t]), "gap_bottom": float(ph), "ex_dividend": ex_div})
+        elif high[t] < pl and later_high[t] < pl:
             bottom = max(high[t], later_high[t])
             out.append({"date": _iso(df.index[t]), "direction": "down",
-                        "top": float(low[t - 1]), "bottom": float(bottom), "filled": False,
+                        "top": float(pl), "bottom": float(bottom), "filled": False,
                         "partially_filled": bool(bottom > high[t]),
-                        "gap_top": float(low[t - 1]), "gap_bottom": float(high[t])})
+                        "gap_top": float(pl), "gap_bottom": float(high[t]), "ex_dividend": ex_div})
+    return out
+
+
+def ex_dividend_gaps(df: pd.DataFrame) -> list[dict]:
+    """Ex-dividend bars whose raw prices gap from the prior bar (low[t] > high[t-1] or high[t] <
+    low[t-1]) but that are no gap in that direction net of the dividend (unfilled_gaps): the drop
+    is the dividend. Filled or not: raw_unfilled says whether later bars of df left the raw gap
+    open, i.e. whether it would be an unfilled-gap level without the dividend adjustment.
+    Chronological [{date, amount, raw_direction, raw_unfilled}]. A dividend only lowers the prior
+    bar, so in practice these are raw gaps down."""
+    if len(df) < 2:
+        return []
+    high, low, prev_high, prev_low, div = _gap_inputs(df)
+    later_low, later_high = _later_extremes(high, low)
+    out = []
+    for t in np.flatnonzero(div > 0):
+        if t == 0:
+            continue
+        d = div[t]
+        if low[t] > prev_high[t] and not low[t] > prev_high[t] - d:
+            direction, unfilled = "up", later_low[t] > prev_high[t]
+        elif high[t] < prev_low[t] and not high[t] < prev_low[t] - d:
+            direction, unfilled = "down", later_high[t] < prev_low[t]
+        else:
+            continue
+        out.append({"date": _iso(df.index[t]), "amount": float(d), "raw_direction": direction,
+                    "raw_unfilled": bool(unfilled)})
     return out
 
 
@@ -538,6 +587,24 @@ def _gap_candidates(g: dict, atr: float) -> list[dict]:
             {"price": g["bottom"], "source": f"gap_{g['direction']}_bottom", "date": g["date"]}]
 
 
+def _gap_adjustment(gap_bars: pd.DataFrame, window: pd.DataFrame, ctx, notes: list) -> dict:
+    """levels.gap_adjustment: the method, the ex-dividend bars in the window and the raw gaps on them
+    that the dividend explains (ex_dividend_gaps), with a note when there are any, and a note when
+    the dividend data could not be loaded (gaps then stay unadjusted)."""
+    neutralized = ex_dividend_gaps(gap_bars)
+    if neutralized:
+        gone = [g["date"] for g in neutralized if g["raw_unfilled"]]
+        what = (f"{len(gone)} of them would otherwise be unfilled-gap levels ({', '.join(gone[-NOTE_DATES_MAX:])})"
+                if gone else "all were filled later, so no gap level changes")
+        notes.append(f"{len(neutralized)} raw gap(s) on ex-dividend bars are no larger than the dividend and are "
+                     f"not treated as gaps: {what}; see gap_adjustment.neutralized")
+    why = (ctx.get("skipped") or {}).get("dividends")
+    if why:
+        notes.append(f"dividend data unavailable ({why}): gaps on ex-dividend bars are not adjusted for the dividend")
+    return {"method": GAP_DIVIDEND_METHOD, "ex_dividend_bars": int((bar_dividends(window) > 0).sum()),
+            "neutralized": neutralized}
+
+
 def _candidates(pivots: dict, bases: list, profile: dict, r52: dict, gaps: list, ind_row: pd.Series,
                 avwaps: list, atr: float, age, notes: list) -> list[dict]:
     """Weighted candidates: C.LEVEL_SOURCE_WEIGHTS by source type, x swing size for pivots, x
@@ -636,7 +703,9 @@ def build_levels(ctx) -> dict:
     profile = volume_profile(window, C.PROFILE_BINS)
     if not profile["available"]:
         notes.append(f"volume profile skipped: {profile['reason']}")
-    gaps = unfilled_gaps(bars.iloc[-(lookback + 1):])     # one extra bar: the gap into the window's first bar
+    gap_bars = bars.iloc[-(lookback + 1):]                # one extra bar: the gap into the window's first bar
+    gaps = unfilled_gaps(gap_bars)
+    gap_adjustment = _gap_adjustment(gap_bars, window, ctx, notes)
     r52 = _range_52w(bars, notes)
 
     avwaps = _avwap_candidates({**ctx, "bars": bars, "ind": ind}, last_date, notes)
@@ -672,6 +741,7 @@ def build_levels(ctx) -> dict:
         **r52,
         "extremes": extremes,
         "gaps": gaps,
+        "gap_adjustment": gap_adjustment,
         "candidates": candidates,
         "n_zones": len(zones),
         "selection": {"min_score": C.LEVEL_MIN_SCORE, "reach_atr": reach, "weak_zones": weak,

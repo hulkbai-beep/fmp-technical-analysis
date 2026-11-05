@@ -62,7 +62,12 @@ PREFIX_CANDIDATES = ("stable", "")
 USER_AGENT = "fmp-technical-analysis-skill/1.0"
 
 DAY = 86400
-TTL_BY_ENDPOINT = {"profile": DAY}
+TTL_BY_ENDPOINT = {
+    "profile": DAY,
+    "holidays-by-exchange": C.CALENDAR_TTL_SECONDS,   # the exchange holiday list changes rarely
+    "dividends": C.DIVIDEND_TTL_SECONDS,              # ex-dates are declared weeks ahead
+    "economic-calendar": C.MACRO_TTL_SECONDS,         # scheduled releases; times can be revised
+}
 DEFAULT_TTL = DAY
 # Daily-bar endpoints, the quote and earnings: cached until the New York session they belong to
 # is over (see _same_session). The quote carries its own timestamp, which the snapshot reports;
@@ -485,13 +490,20 @@ def get_with_reason(client, endpoint, **params):
 # ---------------------------------------------------------------------- CLI
 def _probes(symbol, start, end):
     window = {"from": start, "to": end}
+    ahead = {"from": end, "to": (datetime.fromisoformat(end) + timedelta(days=30)).date().isoformat()}
+    year = int(end[:4])
     return [
         ("profile", {"symbol": symbol}, ""),
         ("quote", {"symbol": symbol}, ""),
+        ("holidays-by-exchange", {"exchange": C.CALENDAR_EXCHANGE, "from": f"{year - 1}-01-01",
+                                  "to": f"{year + C.CALENDAR_FUTURE_YEARS}-12-31"},
+         f"{C.CALENDAR_EXCHANGE}, {year - 1}-{year + C.CALENDAR_FUTURE_YEARS}"),
         ("earnings", {"symbol": symbol}, ""),
         ("historical-price-eod/full", {"symbol": symbol, **window}, "last 30 days"),
         ("historical-price-eod/dividend-adjusted", {"symbol": symbol, **window}, "last 30 days"),
+        ("dividends", {"symbol": symbol}, ""),
         ("historical-price-eod/full", {"symbol": C.VIX, **window}, f"{C.VIX}, last 30 days"),
+        ("economic-calendar", ahead, "next 30 days"),
         ("technical-indicators/sma", {"symbol": symbol, "periodLength": 50, "timeframe": "1day"},
          "periodLength=50 1day"),
         ("technical-indicators/rsi", {"symbol": symbol, "periodLength": 14, "timeframe": "1day"},

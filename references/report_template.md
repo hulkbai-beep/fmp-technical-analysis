@@ -10,7 +10,8 @@ layouts and the wording rules.
 - Every number comes from `metrics.json`. Copy it; do not estimate, recompute or "adjust" anything.
 - **Allowed changes:**
   - unit display: a fraction as a percent (0.0502 → 5.0%), and hit-rate differences in percentage points;
-  - rounding: prices 2 decimals, ATR multiples 1 decimal, percents 1 decimal (2 below 1%);
+  - rounding: prices 2 decimals (dividend amounts up to 4 significant digits), ATR multiples 1 decimal
+    (2 below 0.1), percents 1 decimal (2 below 1%);
   - copying a sign.
 - **Fractions vs percentiles:**
   - fractions: `*_pct`, `returns.*`, `rel_return_*`, `mom_12_1`, `hit_rate`, `median`, `mean`, `p25`,
@@ -35,7 +36,10 @@ layouts and the wording rules.
   `meta.connection.tls_verify` is false, also say HTTPS certificate verification was off.
 - **Data warnings** go in the Snapshot section (`data_quality.warnings` lists them as text):
   - partial bar (`data_quality.partial_bar_excluded`): the reason, and that today's bar was excluded;
-  - stale data (`data_quality.stale.is_stale`);
+  - stale data (`data_quality.stale.is_stale`; `data_quality.stale.business_days_behind` counts NYSE
+    sessions);
+  - data gaps (`data_quality.gaps.count`): NYSE sessions without a bar, the latest in
+    `data_quality.gaps.items[*]` (`after`, `before`, `missing_sessions`);
   - illiquid (`data_quality.liquidity.illiquid` with `reason`);
   - adjusted coverage below 1 (`data_quality.adj_coverage`): returns are price-only where dividend data
     is missing.
@@ -56,9 +60,10 @@ layouts and the wording rules.
   faithfully, keeping every number exactly.
 
 **Reading metrics.json**
-- The file is 60-100 KB. The large, rarely needed parts are `levels.candidates`,
+- The file is 80-120 KB. The large, rarely needed parts are `levels.candidates`,
   `levels.volume_profile.bins`, `signals.library`, the `dates_sample` lists inside every
-  `active[*].horizons` (signals, price_action, candlesticks) and `meta.config_snapshot`.
+  `active[*].horizons` (signals, price_action, candlesticks), `macro_events.events[*].releases` and
+  `meta.config_snapshot`.
 - Horizon keys inside `signals.active[*].horizons` are strings (`"10"`). The primary horizon is
   `signals.primary_horizon`.
 
@@ -82,10 +87,13 @@ the bracketed headings.
 - `data_source`;
 - `horizon` with `meta.config_snapshot.horizon.primary` (days) and `stat_horizons`;
 - `snapshot.history.first_date` and `snapshot.history.bars`;
-- `meta.network_calls` and `meta.cache_hits`.
+- `meta.network_calls` and `meta.cache_hits`;
+- `data_quality.calendar.source`: when it is "rules", FMP's holiday list was unavailable
+  (`data_quality.calendar.problem`) and the built-in NYSE rules gave the trading days.
 
 **Layout:** a two-column table (Item | Value), then the warnings from the rules above as a short
-bullet list, or "No data-quality warnings."
+bullet list, or "No data-quality warnings." Add the calendar line to that list only when the source is
+"rules".
 
 ### 2. Market context (市场环境)
 **Fields:**
@@ -243,18 +251,64 @@ so once.
 H2, 楔形, 假突破, 等距目标位.
 
 ### 9. Event risk (事件风险)
+Scheduled events: earnings (stocks only), the next ex-dividend date and US macro releases. They are
+context next to the scorecard and never change it; say so once.
+
 **Fields:**
-- `event_risk.next_earnings.date`, `.calendar_days`, `.trading_days_est`;
-- `event_risk.within_horizon`, `event_risk.horizon_days`;
-- `event_risk.reactions.n`, `.median_abs_move`, `.mean_abs_move`;
-- `event_risk.method`, `event_risk.notes`.
+- Earnings:
+  - `event_risk.next_earnings.date`, `.calendar_days`, `.trading_days_est`;
+  - `event_risk.within_horizon`, `event_risk.horizon_days`;
+  - `event_risk.reactions.n`, `.median_abs_move`, `.mean_abs_move`;
+  - `event_risk.method`, `event_risk.notes`.
+- Ex-dividend date:
+  - `dividends.pays_dividends`;
+  - `dividends.next_ex_dividend.date`, `.amount`, `.amount_pct`, `.amount_atr`, `.trading_days_to`;
+  - `dividends.within_horizon`, `dividends.horizon_days`;
+  - `dividends.last_ex_dividend.date`, `.amount`;
+  - `dividends.notes`.
+- Macro events:
+  - `macro_events.within_horizon[*]`: `id`, `label`, `tier`, `date`, `trading_days_to`;
+  - the time of day from the matching entry of `macro_events.events[*]` (same `id`, `label` and `date`):
+    `time_ny` (New York time, null when FMP gives a date only), `timing`, `session`;
+  - `macro_events.horizon_days`, `macro_events.window.from` and `.to`;
+  - `macro_events.coverage.complete`, `.listed_through`;
+  - `macro_events.next.fomc` (the next FOMC decision, even beyond the horizon);
+  - `macro_events.notes`.
 
-**Layout:** 2-4 sentences. Say whether earnings fall inside the horizon. Give the median absolute
-two-day reaction over n reports, and label it a two-day close-to-close move (FMP has no before/after
-market flag). If n < 8 (`config.EARNINGS_REACTIONS_MIN`), say the sample is small.
+**Layout:** three short parts, in this order.
+1. **Earnings** (stocks): 2-4 sentences. Say whether earnings fall inside the horizon. Give the median
+   absolute two-day reaction over n reports, and label it a two-day close-to-close move (FMP has no
+   before/after market flag). If n < 8 (`config.EARNINGS_REACTIONS_MIN`), say the sample is small.
+2. **Ex-dividend date:** one sentence.
+   - Inside the horizon (`dividends.within_horizon` true): the date, the trading days to it, and that the
+     price is expected to open lower by about the dividend (`amount`, `amount_pct` of the close,
+     `amount_atr` ATR) for mechanical reasons.
+   - Outside the horizon: the date only.
+   - None announced (`next_ex_dividend` null): say so and that one declared later may still fall inside
+     the horizon (`dividends.notes`).
+   - Not a payer (`pays_dividends` false): "No dividends (FMP lists none, or none in the last 400 days)."
+3. **Macro events:**
+   - tier 1 inside the horizon: one line each, with the date, the New York time and the trading days, e.g.
+     "CPI: 2026-10-20, 08:30 New York (before the open), 2 trading days". `timing` reads: `pre_open`
+     before the open, `intraday` during the session, `after_close` after the close and `non_session` on a
+     non-trading day (both first reach prices in the next session, `session`), `date_only` no time given;
+   - tier 2 inside the horizon: one line naming them with their dates;
+   - tier 3 (other events FMP rates "High"): only how many fall inside the horizon (entries of
+     `within_horizon` with `tier` 3), no names;
+   - none inside the horizon: say so, and optionally give the next FOMC decision's date;
+   - `macro_events.coverage.complete` false: add "FMP lists releases other than FOMC dates only through
+     {listed_through}; later ones inside the horizon may be missing."
 
-**Skipped:** ETFs: "Skipped: ETF (no earnings)." A restricted or missing earnings endpoint: give its
-`reason`.
+**Wording:** dates and times only.
+- Never predict a release's outcome, its direction or the market's reaction ("CPI could push the stock
+  lower", "a cut is expected"), never call an event bullish or bearish, and never suggest acting before or
+  after it.
+- The ex-dividend drop is mechanical, not a bearish signal. Gaps on ex-dividend bars are already measured
+  net of the dividend (`levels.gap_adjustment`).
+
+**Skipped:** ETFs skip only the earnings part ("No earnings: ETF."); the ex-dividend and macro parts still
+apply. A restricted or missing endpoint: give that part's reason (`event_risk.reason`,
+`dividends.reason`, `macro_events.reason`).
 
 ### 10. Scenarios (情景)
 **Fields:**
@@ -295,11 +349,14 @@ targets are built from the key levels, so add one line that they are reference o
 - `reward_risk.vol/structural/atr`;
 - `position_size_example.risk_dollars`, `.stop_basis`, `.shares`, `.notional`, `.notional_pct_account`,
   `.flag`;
-- `risk.label` and `risk.notes`.
+- `risk.label` and `risk.notes` (with a note for earnings and one for the next ex-dividend date when
+  they fall inside the horizon).
 
 **Layout:** a table with columns Item | Long side | Short side, rows: volatility stop (primary), ATR stop,
 structural stop (reference), target (1σ), level target (reference), touch rates, target first / stop first
-/ neither, reward/risk, position size. Head it with "{risk.label}". Then the notes as bullets.
+/ neither, reward/risk, position size. Head it with "{risk.label}". Then the notes as bullets, the
+ex-dividend note included: a long-side stop closer to the price than the dividend can be touched by the
+ex-dividend drop alone.
 
 **Framing:** say this shows what a 1% risk on a hypothetical $100,000 account would mean. It is not
 a suggestion to trade. Say what the touch rates mean: how often ordinary moves reached that price within
@@ -313,8 +370,11 @@ about a third of the time, the 95% band stop about 4%).
 - **Data:** `data_source`; split-adjusted `/full` prices drive levels, indicators and signals;
   dividend-adjusted closes drive returns, volatility, beta and the forward-return statistics.
   `data_quality.adj_coverage`.
-- **Approximations:** daily-bar VWAP, the volume profile, the two-day earnings move, and trading days
-  estimated without holidays.
+- **Calendar:** trading days count NYSE sessions, exchange holidays excluded
+  (`data_quality.calendar.source`: FMP's holiday list with the exchange rules, or the rules alone).
+- **Approximations:** daily-bar VWAP, the volume profile and the two-day earnings move. Gaps on
+  ex-dividend bars are measured net of the dividend, but ATR, candles and price action use prices that are
+  not dividend-adjusted. Macro event times are FMP's, converted to New York time.
 - **Signal caveats:** one line, pointing to section 7.
 - **Notes:** any `meta.notes`, and `meta.errors` if non-empty (say which module failed; its numbers
   are absent).
@@ -338,7 +398,7 @@ technical analysis for information only, not investment advice.* Chinese: *仅�
 | Last close (2026-10-16) | 4475.34 (-1.4% on the day) |
 | Data source | FMP stable API (official) |
 | Horizon | swing: 10-day primary horizon; signal stats at 5/10/20 days |
-| History used | 7,839 bars since 1996-10-01 · 10 API calls |
+| History used | 7,839 bars since 1996-10-01 · 13 API calls |
 
 - No data-quality warnings.
 
@@ -407,8 +467,16 @@ Across this stock's history, most candlestick patterns sit within ±0.5% of the 
 days; H2 pullbacks near the rising EMA (n = 74) had a median edge of +0.6%.
 
 ## 9. Event risk
-Earnings on 2026-10-29 (13 calendar days, ~9 trading days) fall inside the 10-day horizon. The median
-absolute two-day reaction over the last 12 reports was 1.6%.
+Scheduled events are context only, not part of the scorecard.
+- Earnings on 2026-10-29 (13 calendar days, 9 trading days) fall inside the 10-day horizon. The median
+  absolute two-day reaction over the last 12 reports was 1.6%.
+- Ex-dividend on 2026-10-26 (6 trading days, inside the horizon): the price is expected to open lower by
+  about the $0.50 dividend (0.01% of the close, 0.01 ATR) for mechanical reasons.
+- Macro events inside the horizon (tier 1):
+  - CPI: 2026-10-20, 08:30 New York (before the open), 2 trading days;
+  - FOMC rate decision: 2026-10-28, 14:00 New York (during the session), 8 trading days.
+
+  No tier-2 or tier-3 events inside the horizon.
 
 ## 10. Scenarios
 | Scenario | Trigger | Target zones | Invalidation |
@@ -430,10 +498,18 @@ Illustrative arithmetic, not a recommendation.
 | Target first / stop first / neither | 31.4% / 4.1% / 64.4% | 31.4% / 4.1% / 64.4% |
 | … | | |
 
+- Earnings on 2026-10-29 fall inside the horizon: overnight gap risk through either stop.
+- Ex-dividend date 2026-10-26 falls inside the horizon: the price is expected to open lower by about the
+  dividend, $0.50 (0.01% of the close, 0.01 ATR), for mechanical reasons, so a long-side stop closer to
+  the price than that can be touched by the ex-dividend drop alone.
+
 ## 12. Methodology & caveats
 - Prices: split-adjusted FMP /full for levels, indicators and signals; dividend-adjusted closes for
   returns, volatility and forward-return statistics.
-- Approximations: daily-bar anchored VWAP and volume profile; two-day earnings move.
+- Calendar: trading days count NYSE sessions (FMP's holiday list with the exchange rules).
+- Approximations: daily-bar anchored VWAP and volume profile; two-day earnings move; gaps on ex-dividend
+  bars net of the dividend, while ATR, candles and price action are not dividend-adjusted; macro event
+  times as FMP publishes them, in New York time.
 - Definitions: references/methodology.md, references/signals.md and references/patterns.md. Interactive
   charts: chart.html (indicators, price action, candlestick patterns).
 

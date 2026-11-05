@@ -454,3 +454,158 @@ def test_build_levels_ignores_bars_after_as_of():
     ref = L.build_levels(make_ctx(bars.loc[:cut]))
     assert out["window_end"] == ref["window_end"] == ctx["as_of"]
     assert out["supports"] == ref["supports"] and out["resistances"] == ref["resistances"]
+
+
+# ---------------------------------------------------------------------------- ex-dividend gaps
+def legacy_unfilled_gaps(df):
+    """levels.unfilled_gaps before the dividend handling (verbatim), the reference for "no change"."""
+    high = df["high"].to_numpy(dtype=float, na_value=np.nan)
+    low = df["low"].to_numpy(dtype=float, na_value=np.nan)
+    if len(df) < 2:
+        return []
+    later_low = np.r_[np.fmin.accumulate(low[::-1])[::-1][1:], np.inf]
+    later_high = np.r_[np.fmax.accumulate(high[::-1])[::-1][1:], -np.inf]
+    later_low = np.where(np.isnan(later_low), np.inf, later_low)
+    later_high = np.where(np.isnan(later_high), -np.inf, later_high)
+    out = []
+    for t in range(1, len(df)):
+        if low[t] > high[t - 1] and later_low[t] > high[t - 1]:
+            top = min(low[t], later_low[t])
+            out.append({"date": L._iso(df.index[t]), "direction": "up",
+                        "top": float(top), "bottom": float(high[t - 1]), "filled": False,
+                        "partially_filled": bool(top < low[t]),
+                        "gap_top": float(low[t]), "gap_bottom": float(high[t - 1])})
+        elif high[t] < low[t - 1] and later_high[t] < low[t - 1]:
+            bottom = max(high[t], later_high[t])
+            out.append({"date": L._iso(df.index[t]), "direction": "down",
+                        "top": float(low[t - 1]), "bottom": float(bottom), "filled": False,
+                        "partially_filled": bool(bottom > high[t]),
+                        "gap_top": float(low[t - 1]), "gap_bottom": float(high[t])})
+    return out
+
+
+def with_dividend(df, at, amount):
+    """df with a "dividend" column: `amount` on the bar positions in `at`, 0 elsewhere."""
+    div = np.zeros(len(df))
+    div[np.atleast_1d(at)] = amount
+    return df.assign(dividend=div)
+
+
+def test_ex_dividend_drop_within_the_dividend_is_not_a_gap():
+    # bar 1 drops below bar 0's low by 0.2 on its ex-date, paying 0.3; later bars stay below
+    df = frame([11.0, 9.8, 9.7, 9.75], [10.0, 9.5, 9.4, 9.45])
+    raw = L.unfilled_gaps(df)
+    assert [(g["direction"], g["top"], g["bottom"], g["ex_dividend"]) for g in raw] == [("down", 10.0, 9.8, None)]
+    ex = with_dividend(df, 1, 0.3)
+    assert L.unfilled_gaps(ex) == []
+    assert L.ex_dividend_gaps(ex) == [{"date": L._iso(df.index[1]), "amount": 0.3, "raw_direction": "down",
+                                       "raw_unfilled": True}]
+    assert L.ex_dividend_gaps(df) == [] and L.ex_dividend_gaps(df.iloc[:1]) == []
+    # filled later in raw terms (a high back at bar 0's low): still listed, flagged as no level change
+    refilled = with_dividend(frame([11.0, 9.8, 10.0], [10.0, 9.5, 9.4]), 1, 0.3)
+    assert L.ex_dividend_gaps(refilled)[0]["raw_unfilled"] is False
+
+
+def test_ex_dividend_gap_beyond_the_dividend_stays_with_its_zone_net_of_it():
+    # bar 1's high is 0.5 under bar 0's low: 0.2 more than the 0.3 dividend; bar 2 trades into it
+    df = with_dividend(frame([11.0, 9.5, 9.6, 9.4], [10.0, 9.0, 9.1, 9.0]), 1, 0.3)
+    (g,) = L.unfilled_gaps(df)
+    assert g["direction"] == "down" and g["ex_dividend"] == 0.3
+    assert (g["gap_bottom"], g["gap_top"]) == pytest.approx((9.5, 9.7))     # zone edge 10.0 - 0.3
+    assert (g["bottom"], g["top"], g["partially_filled"]) == pytest.approx((9.6, 9.7, True))
+    assert L.ex_dividend_gaps(df) == []
+    # a later high reaching the net edge fills it, although the raw edge (10.0) is not reached
+    filled = with_dividend(frame([11.0, 9.5, 9.7], [10.0, 9.0, 9.1]), 1, 0.3)
+    assert L.unfilled_gaps(filled) == []
+
+
+def test_ex_dividend_up_gap_compares_with_the_prior_high_net_of_the_dividend():
+    # PLAN 3.2: low[t] > high[t-1] - D, zone high[t-1] - D .. low[t]
+    up = with_dividend(frame([11.0, 12.0, 12.2], [10.0, 11.2, 11.5]), 1, 0.3)
+    (g,) = L.unfilled_gaps(up)
+    assert (g["direction"], g["ex_dividend"]) == ("up", 0.3)
+    assert (g["bottom"], g["top"], g["gap_top"]) == pytest.approx((10.7, 11.2, 11.2))
+    assert L.ex_dividend_gaps(up) == []
+    # no raw gap, but the ex-dividend bar holds above the prior high net of the dividend: a gap up
+    held = with_dividend(frame([11.0, 10.9, 11.0], [10.0, 10.6, 10.65]), 1, 0.5)
+    assert L.unfilled_gaps(frame([11.0, 10.9, 11.0], [10.0, 10.6, 10.65])) == []
+    (g,) = L.unfilled_gaps(held)
+    assert (g["direction"], g["bottom"], g["top"]) == pytest.approx(("up", 10.5, 10.6))
+
+
+def test_a_dividend_on_a_bar_after_the_gap_changes_nothing():
+    df = frame([11.0, 9.5, 9.6, 9.4], [10.0, 9.0, 9.1, 9.0])
+    later = with_dividend(df, 2, 0.4)                 # the gap is on bar 1; bar 2 goes ex
+    assert L.unfilled_gaps(later) == [{**g, "ex_dividend": None} for g in legacy_unfilled_gaps(df)]
+
+
+@pytest.mark.parametrize("seed", [1, 7, 11, 23])
+def test_gaps_without_dividends_match_the_legacy_function(seed):
+    bars = synthetic_bars(n=600, seed=seed, vol=0.03)
+    expected = [{**g, "ex_dividend": None} for g in legacy_unfilled_gaps(bars)]
+    assert expected                                                   # the series has gaps to compare
+    assert L.unfilled_gaps(bars) == expected
+    assert L.unfilled_gaps(bars.assign(dividend=0.0)) == expected
+    assert L.unfilled_gaps(bars.assign(dividend=np.nan)) == expected
+    assert L.ex_dividend_gaps(bars.assign(dividend=0.0)) == []
+
+
+def test_ex_dividend_gaps_list_raw_gaps_the_dividend_explains_filled_or_not():
+    bars = synthetic_bars(n=400, seed=3, vol=0.03)
+    raw = legacy_unfilled_gaps(bars)
+    downs = [i for i in range(1, len(bars)) if bars["high"].iloc[i] < bars["low"].iloc[i - 1]]
+    assert len(downs) >= 3
+    # each raw gap down goes ex with a dividend 1 cent larger than the gap: all of them neutralized
+    div = np.zeros(len(bars))
+    for i in downs:
+        div[i] = bars["low"].iloc[i - 1] - bars["high"].iloc[i] + 0.01
+    ex = bars.assign(dividend=div)
+    got = L.ex_dividend_gaps(ex)
+    assert [g["date"] for g in got] == [L._iso(bars.index[i]) for i in downs]
+    assert all(g["raw_direction"] == "down" and g["amount"] > 0 for g in got)
+    # raw_unfilled marks exactly the raw gaps the legacy function still listed as levels
+    assert [g["date"] for g in got if g["raw_unfilled"]] == [g["date"] for g in raw if g["direction"] == "down"]
+    assert any(not g["raw_unfilled"] for g in got)
+    assert [g for g in L.unfilled_gaps(ex) if g["direction"] == "down"] == []
+    assert [g["date"] for g in L.unfilled_gaps(ex) if g["direction"] == "up"] == \
+        [g["date"] for g in raw if g["direction"] == "up"]
+
+
+def test_build_levels_gap_adjustment_and_unchanged_without_dividends():
+    bars = synthetic_bars(n=400, vol=0.03)
+    ctx = make_ctx(bars)
+    base = L.build_levels(ctx)
+    lookback = C.HORIZONS["swing"]["levels_lookback"]
+    assert base["gap_adjustment"] == {"method": L.GAP_DIVIDEND_METHOD, "ex_dividend_bars": 0, "neutralized": []}
+    assert [{k: v for k, v in g.items() if k != "ex_dividend"} for g in base["gaps"]] == \
+        legacy_unfilled_gaps(bars.iloc[-(lookback + 1):])
+    assert L.build_levels({**ctx, "bars": bars.assign(dividend=0.0)}) == base
+
+    # ex-dividend drops on raw gap-down bars of the window, each 1 cent larger than its gap
+    gap_bars = bars.iloc[-(lookback + 1):]
+    downs = [i for i in range(1, len(gap_bars)) if gap_bars["high"].iloc[i] < gap_bars["low"].iloc[i - 1]]
+    assert downs
+    div = pd.Series(0.0, index=bars.index)
+    for i in downs:
+        div[gap_bars.index[i]] = gap_bars["low"].iloc[i - 1] - gap_bars["high"].iloc[i] + 0.01
+    div[bars.index[-lookback - 5]] = 0.2                             # before the window: not counted
+    out = L.build_levels({**ctx, "bars": bars.assign(dividend=div)})
+    adj = out["gap_adjustment"]
+    assert adj["ex_dividend_bars"] == len(downs)
+    assert [g["date"] for g in adj["neutralized"]] == [L._iso(gap_bars.index[i]) for i in downs]
+    assert not any(g["direction"] == "down" for g in out["gaps"])
+    assert not any(c["source"].startswith("gap_down") for c in out["candidates"])
+    open_raw = [g["date"] for g in legacy_unfilled_gaps(gap_bars) if g["direction"] == "down"]
+    assert [g["date"] for g in adj["neutralized"] if g["raw_unfilled"]] == open_raw
+    note = next(n for n in out["notes"] if "raw gap(s) on ex-dividend bars" in n)
+    assert note.startswith(f"{len(downs)} raw gap(s) on ex-dividend bars are no larger than the dividend")
+    assert (f"{len(open_raw)} of them would otherwise be unfilled-gap levels" in note if open_raw
+            else "no gap level changes" in note)
+    assert not any("raw gap(s) on ex-dividend bars" in n for n in base["notes"])
+
+
+def test_build_levels_notes_when_dividend_data_is_missing():
+    bars = synthetic_bars(n=400)
+    out = L.build_levels({**make_ctx(bars), "skipped": {"dividends": "restricted: Premium endpoint"}})
+    assert any("dividend data unavailable (restricted: Premium endpoint)" in n for n in out["notes"])
+    assert out["gap_adjustment"]["ex_dividend_bars"] == 0

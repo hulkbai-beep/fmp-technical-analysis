@@ -244,12 +244,14 @@ def daily_returns(bars: pd.DataFrame) -> pd.Series:
 
 
 # ---------------------------------------------------------------------------- resampling
-def resample_weekly(df: pd.DataFrame) -> pd.DataFrame:
+def resample_weekly(df: pd.DataFrame, calendar=None) -> pd.DataFrame:
     """Weekly bars (C.WEEKLY_RULE, W-FRI) indexed by the last actual trading date of each week.
 
-    OHLCV and adj_* use first/max/min/last/sum. `partial` is True only for the latest week when
-    its last bar is not on the rule's anchor day (no exchange calendar: a latest week cut short by
-    a Friday holiday is flagged too).
+    OHLCV and adj_* use first/max/min/last/sum. `partial` is True only for the latest week: with an
+    exchange calendar (market_calendar.MarketCalendar) when its last bar comes before the week's last
+    session (calendar.week_last_session), so a week that ends on Thursday before Good Friday is
+    complete; without one when its last bar is not on the rule's anchor day (a latest week cut short
+    by a Friday holiday is flagged too).
     """
     spec = {c: f for c, f in _WEEKLY_AGG.items() if c in df.columns}
     week = df.index.to_period(C.WEEKLY_RULE)
@@ -258,7 +260,12 @@ def resample_weekly(df: pd.DataFrame) -> pd.DataFrame:
     out.index = pd.DatetimeIndex(last_day.to_numpy(), name="date")
     partial = np.zeros(len(out), dtype=bool)
     if len(out):
-        partial[-1] = out.index[-1].dayofweek != to_offset(C.WEEKLY_RULE).weekday
+        last = out.index[-1]
+        if calendar is None:
+            partial[-1] = last.dayofweek != to_offset(C.WEEKLY_RULE).weekday
+        else:
+            end = calendar.week_last_session(last)
+            partial[-1] = end is not None and last.normalize() < end
     out["partial"] = partial
     return out
 

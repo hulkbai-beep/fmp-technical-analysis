@@ -1105,8 +1105,19 @@ def _risk_side(d: int, mk: dict, scen_side: dict | None, h: int) -> dict:
     }
 
 
+def _ex_dividend_note(nx: dict) -> str:
+    """The risk note for an ex-dividend date inside the horizon (dividends.next_ex_dividend)."""
+    amount, share, atrs = (_num(nx.get(k)) for k in ("amount", "amount_pct", "amount_atr"))
+    size = ", ".join(s for s in (None if share is None else f"{share * 100:.2f}% of the close",
+                                 None if atrs is None else f"{atrs:.2f} ATR") if s)
+    return (f"Ex-dividend date {nx.get('date')} falls inside the horizon: the price is expected to open lower by "
+            f"about the dividend, ${amount:.4g}" + (f" ({size})" if size else "") + ", for mechanical reasons, so "
+            "a long-side stop closer to the price than that can be touched by the ex-dividend drop alone.")
+
+
 def build_risk(ctx, modules, scenarios) -> dict:
-    """Illustrative long- and short-side stop, reward/risk and position-size arithmetic."""
+    """Illustrative long- and short-side stop, reward/risk and position-size arithmetic. The notes name
+    earnings and an ex-dividend date inside the horizon (context; the arithmetic does not change)."""
     modules = modules or {}
     mk = _market(ctx, modules)
     if mk["close"] is None or mk["atr"] is None or mk["atr"] <= 0:
@@ -1125,9 +1136,14 @@ def build_risk(ctx, modules, scenarios) -> dict:
              "Short side ignores borrow availability and cost.",
              C.DISCLAIMER]
     ev = _usable(modules, "event_risk")
+    events = []
     if _get(ev, "within_horizon"):
-        notes.insert(1, f"Earnings on {_get(ev, 'next_earnings', 'date')} fall inside the horizon: overnight gap "
-                        "risk through either stop.")
+        events.append(f"Earnings on {_get(ev, 'next_earnings', 'date')} fall inside the horizon: overnight gap "
+                      "risk through either stop.")
+    dv = _usable(modules, "dividends")
+    if _get(dv, "within_horizon") and _num(_get(dv, "next_ex_dividend", "amount")) is not None:
+        events.append(_ex_dividend_note(_get(dv, "next_ex_dividend")))
+    notes[1:1] = events
     return {
         "available": True,
         "label": ILLUSTRATIVE,
