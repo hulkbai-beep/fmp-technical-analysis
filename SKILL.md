@@ -52,7 +52,7 @@ is not advice.
 2. **Run** from the skill folder:
    `python scripts/analyze.py TICKER --horizon swing|position [--out DIR] [--refresh] [--history-start YYYY-MM-DD] [--contract PATH]`.
    - Output goes to `./ta-output/<TICKER>_<as_of>/` by default.
-   - Add `--contract PATH` only when another tool needs the ta-2.1 contract: the other horizon also runs,
+   - Add `--contract PATH` only when another tool needs the ta-3.1 contract: the other horizon also runs,
      from the cache, and the contract covers both (see "Contract for other tools").
    - An uncached run makes 13 API calls for a stock, 11 for an ETF and 10 for SPY. A same-day
      re-run makes 0.
@@ -150,7 +150,7 @@ is not advice.
 | `--out` | folder | `./ta-output/<TICKER>_<as_of>/` | where `metrics.json` and `chart.html` go |
 | `--refresh` | flag | off | ignore the cache and fetch everything again |
 | `--history-start` | `YYYY-MM-DD` | IPO date | ignore the symbol's history before this date (e.g. a pre-merger SPAC shell) |
-| `--contract` | file path | off | also write the ta-3.0 contract for another tool (both horizons; see below) |
+| `--contract` | file path | off | also write the ta-3.1 contract for another tool (both horizons; see below) |
 | `FMP_BASE_URL` | URL | unset (official FMP) | only for a third-party proxy |
 | `FMP_TLS_VERIFY` | `0` / `1` | `1` | `0` only per process, only for a proxy; ignored for the official host |
 | `FMP_CACHE_DIR` | folder | `~/.cache/fmp-technical` | response cache (never contains the key) |
@@ -159,16 +159,16 @@ is not advice.
 All analysis thresholds live in `scripts/config.py`, and each run records them in
 `meta.config_snapshot`.
 
-## Contract for other tools (ta-3.0)
+## Contract for other tools (ta-3.1)
 
-Tools that build on this skill (a decision engine, a screener) read the **ta-3.0 contract**, not
+Tools that build on this skill (a decision engine, a screener) read the **ta-3.1 contract**, not
 `metrics.json`, whose layout is internal and may change.
 - `python scripts/analyze.py TICKER --contract out.json` writes it: the requested horizon runs as usual and
   the other one runs from the same-day cache, so it costs no extra API calls.
 - `python scripts/contract.py SWING/metrics.json POSITION/metrics.json [-o out.json]` builds it from two saved
   runs of the same ticker and day. Give each run its own `--out`: by default both horizons write to the same
   folder.
-- `contracts/ta-3.0.schema.json` describes every field. Horizon-independent blocks (data quality, market,
+- `contracts/ta-3.1.schema.json` describes every field. Horizon-independent blocks (data quality, market,
   earnings, dividend, macro, volatility, extension, trend, regime, RS, flow, weekly, price-action context)
   sit at the top; the conflicts, zones (`low` / `high`), `price_location`, scenarios, reference stops,
   earnings, the ex-dividend date and macro events inside the horizon, and signal and pattern statistics
@@ -199,6 +199,9 @@ Tools that build on this skill (a decision engine, a screener) read the **ta-3.0
 - 3.0 removes every score: the per-horizon `bias` (weighted score, label, confidence), `pillars` and
   `weights_used`, the `pillar` of each signal and pattern, and `context_only.scored`. The contract carries
   no scores, ratings or bias; `conflicts` stays.
+- 3.1 adds `volatility.squeeze_last_release`: the last bar the squeeze switched off, of any length, with its
+  `date`, `bars_ago`, `direction` (close vs SMA20 on that bar) and `squeeze_bars_before`; null when the
+  squeeze never switched off in the history. The `squeeze_release_up` / `_down` signals need 5 bars or more.
 - It selects facts and judges nothing; position sizing is left to the caller. Fields are only ever added
   within a major version; renaming or removing one means a new major version, and `tests/test_contract.py` checks the
   output against the schema.

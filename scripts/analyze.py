@@ -9,7 +9,7 @@ metrics.json (every computed number) and a self-contained chart.html.
               position (weekly emphasis, 20/60-day stats, ~2-year levels)
   --out       output folder (default ./ta-output/<TICKER>_<as_of>/)
   --refresh   ignore the local cache and fetch everything again
-  --contract  also write the ta-3.0 contract (both horizons; the other one runs from the cache;
+  --contract  also write the ta-3.1 contract (both horizons; the other one runs from the cache;
               see contract.py)
 
 The NYSE calendar from fetch.py runs through every module that counts trading days. The

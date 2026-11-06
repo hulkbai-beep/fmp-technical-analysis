@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-The ta-3.0 contract: a small, versioned summary of one stock's swing and position runs for other tools.
+The ta-3.1 contract: a small, versioned summary of one stock's swing and position runs for other tools.
 
 metrics.json is internal and may change between versions. The contract is the public interface: within a major
-version fields are only ever added, and renaming or removing one means a new major version (ta-3.0). It selects and
-normalises facts and judges nothing (no "buy", no target of its own). contracts/ta-3.0.schema.json describes every
+version fields are only ever added, and renaming or removing one means a new major version (ta-4.0). It selects and
+normalises facts and judges nothing (no "buy", no target of its own). contracts/ta-3.1.schema.json describes every
 field; tests/test_contract.py checks both.
 
 Blocks that do not depend on the horizon (data quality, market, event, dividend, macro, volatility, extension,
@@ -29,13 +29,14 @@ from pathlib import Path
 import config as C
 import scenarios as SC
 
-CONTRACT = "ta-3.0"   # 1.1 adds event.last_earnings*, targets' kind; 1.2 levels_note, range_95, vol stops;
+CONTRACT = "ta-3.1"   # 1.1 adds event.last_earnings*, targets' kind; 1.2 levels_note, range_95, vol stops;
 #                       2.0 removes event.eps_estimated (no fundamentals); 2.x only add fields:
 #                       2.1 data_quality.calendar_source, dividend, macro, horizons.*.ex_dividend_within_horizon /
 #                       macro_within_horizon / macro_complete (session counts exclude NYSE holidays),
 #                       trend.sma100 (a context line, not part of the stack; slopes / close_vs carry it too);
 #                       3.0 removes every score: horizons.*.bias, .pillars, .weights_used, the signals' / patterns'
-#                       pillar and context_only.scored (the scorecard is gone; conflicts stay)
+#                       pillar and context_only.scored (the scorecard is gone; conflicts stay);
+#                       3.x only add fields: 3.1 volatility.squeeze_last_release
 HORIZONS = ("swing", "position")
 MACRO_EVENT_KEYS = ("id", "label", "tier", "date", "time_ny", "timing", "session", "trading_days_to")
 MACRO_BRIEF_KEYS = ("id", "label", "tier", "date", "time_ny", "timing", "trading_days_to")
@@ -195,7 +196,9 @@ def _volatility(v):
     sq = v.get("squeeze") or {}
     return {"atr14": _num(v.get("atr14")), "atr_pct": _num(v.get("atr_pct")), "atr_pct_pctl": _num(v.get("atr_pct_pctl")),
             "rv20": _num(v.get("rv20")), "rv20_pctl": _num(v.get("rv20_pctl")),
-            "bb_width_pctl": _num(v.get("bb_width_pctl")), "squeeze_on": sq.get("on"), "squeeze_bars": sq.get("bars")}
+            "bb_width_pctl": _num(v.get("bb_width_pctl")), "squeeze_on": sq.get("on"), "squeeze_bars": sq.get("bars"),
+            # 3.1: the last bar the squeeze switched off (any length; the squeeze_release_* signals need 5 bars or more)
+            "squeeze_last_release": _pick(sq.get("last_release"), ("date", "bars_ago", "direction", "squeeze_bars_before"))}
 
 
 def _extension(mr):

@@ -1,4 +1,4 @@
-"""The ta-3.0 contract (scripts/contract.py, contracts/ta-3.0.schema.json) on a fake FMP (no network).
+"""The ta-3.1 contract (scripts/contract.py, contracts/ta-3.1.schema.json) on a fake FMP (no network).
 
 Every contract must match the schema, and its numbers must be the metrics' numbers. A small JSON Schema checker
 lives here so the tests need nothing beyond pandas, numpy and pytest.
@@ -145,6 +145,28 @@ def test_trend_sma100_is_the_metrics_context_sma(stock):
         del m["trend_momentum"]["sma"]["sma100"]
     c_old = contract.build(*old)
     assert c_old["trend"]["sma100"] is None and validate(c_old, SCHEMA) == []
+
+
+def test_squeeze_last_release_is_the_metrics_release(stock):
+    swing, position, c = stock
+    rel, out = swing["volatility"]["squeeze"]["last_release"], c["volatility"]["squeeze_last_release"]
+    assert rel is not None, "the fake history should switch a squeeze off at least once"
+    assert out == {k: rel[k] for k in ("date", "bars_ago", "direction", "squeeze_bars_before")}
+    assert out["bars_ago"] >= 0 and out["squeeze_bars_before"] >= 1 and out["direction"] in ("up", "down", "flat")
+    assert "volatility.squeeze_last_release" in SCHEMA["description"]
+    # no release in the history (or an older metrics file without the field) gives null, still valid
+    for drop in (False, True):
+        old = [copy.deepcopy(m) for m in (swing, position)]
+        for m in old:
+            if drop:
+                del m["volatility"]["squeeze"]["last_release"]
+            else:
+                m["volatility"]["squeeze"]["last_release"] = None
+        c_old = contract.build(*old)
+        assert c_old["volatility"]["squeeze_last_release"] is None and validate(c_old, SCHEMA) == []
+    bad = copy.deepcopy(c)
+    bad["volatility"]["squeeze_last_release"]["direction"] = "sideways"
+    assert validate(bad, SCHEMA)
 
 
 def test_shared_blocks_are_the_same_in_both_runs(stock):
