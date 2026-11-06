@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "ta-3.0",
-  "title": "Technical analysis contract ta-3.0",
-  "description": "The stable summary of one stock's swing and position runs that other tools read, built by scripts/contract.py. Within a major version fields are only ever added; renaming or removing one means a new major version. 1.1 adds event.last_earnings, event.days_since_last_earnings, event.last_earnings_move and the kind of each scenario target. 1.2 adds levels_note, range_95 and the volatility-band stop and target with calibrated touch rates in stops_ref; the support/resistance zones are reference only. 2.0 removes event.eps_estimated: the contract carries no fundamentals. 2.1 adds data_quality.calendar_source, the dividend and macro blocks, trend.sma100 (a context line, not part of the SMA stack) and, per horizon, ex_dividend_within_horizon, macro_within_horizon and macro_complete; trading-day counts (event.trading_days_to, data_quality.business_days_behind) now count NYSE sessions, exchange holidays excluded. 3.0 removes every score: the per-horizon bias (weighted score, label, confidence), pillars and weights_used, the pillar of each signal or pattern and context_only.scored; the contract carries no scores, ratings or bias. Ex-dividend dates and macro events are context. Horizon-independent blocks sit at the top, the rest under horizons.swing / horizons.position. Prices are split-adjusted closes; fractions are decimals (0.05 = 5%); null means missing, never estimated.",
+  "$id": "ta-3.1",
+  "title": "Technical analysis contract ta-3.1",
+  "description": "The stable summary of one stock's swing and position runs that other tools read, built by scripts/contract.py. Within a major version fields are only ever added; renaming or removing one means a new major version. 1.1 adds event.last_earnings, event.days_since_last_earnings, event.last_earnings_move and the kind of each scenario target. 1.2 adds levels_note, range_95 and the volatility-band stop and target with calibrated touch rates in stops_ref; the support/resistance zones are reference only. 2.0 removes event.eps_estimated: the contract carries no fundamentals. 2.1 adds data_quality.calendar_source, the dividend and macro blocks, trend.sma100 (a context line, not part of the SMA stack) and, per horizon, ex_dividend_within_horizon, macro_within_horizon and macro_complete; trading-day counts (event.trading_days_to, data_quality.business_days_behind) now count NYSE sessions, exchange holidays excluded. 3.0 removes every score: the per-horizon bias (weighted score, label, confidence), pillars and weights_used, the pillar of each signal or pattern and context_only.scored; the contract carries no scores, ratings or bias. 3.1 adds volatility.squeeze_last_release, the last bar the squeeze switched off (its date, bars ago, direction and how many bars the squeeze had lasted). Ex-dividend dates and macro events are context. Horizon-independent blocks sit at the top, the rest under horizons.swing / horizons.position. Prices are split-adjusted closes; fractions are decimals (0.05 = 5%); null means missing, never estimated.",
   "type": "object",
   "additionalProperties": false,
   "required": ["contract", "config_hash", "ticker", "generated_at", "as_of", "as_of_basis", "data_source", "last_close",
@@ -10,7 +10,7 @@
                "extension", "trend", "regime", "rs", "flow", "weekly", "context_only", "horizons", "skipped",
                "modules_unavailable", "restricted", "warnings", "errors", "disclaimer"],
   "properties": {
-    "contract": {"const": "ta-3.0"},
+    "contract": {"const": "ta-3.1"},
     "config_hash": {"type": "string", "description": "hash of both runs' meta.config_snapshot"},
     "ticker": {"type": "string"},
     "generated_at": {"type": "string"},
@@ -123,11 +123,22 @@
     },
     "volatility": {
       "type": ["object", "null"], "additionalProperties": false,
-      "required": ["atr14", "atr_pct", "atr_pct_pctl", "rv20", "rv20_pctl", "bb_width_pctl", "squeeze_on", "squeeze_bars"],
+      "required": ["atr14", "atr_pct", "atr_pct_pctl", "rv20", "rv20_pctl", "bb_width_pctl", "squeeze_on", "squeeze_bars",
+                   "squeeze_last_release"],
       "properties": {
         "atr14": {"$ref": "#/$defs/num"}, "atr_pct": {"$ref": "#/$defs/num"}, "atr_pct_pctl": {"$ref": "#/$defs/num"},
         "rv20": {"$ref": "#/$defs/num"}, "rv20_pctl": {"$ref": "#/$defs/num"}, "bb_width_pctl": {"$ref": "#/$defs/num"},
-        "squeeze_on": {"type": ["boolean", "null"]}, "squeeze_bars": {"type": ["integer", "null"]}
+        "squeeze_on": {"type": ["boolean", "null"]}, "squeeze_bars": {"type": ["integer", "null"]},
+        "squeeze_last_release": {
+          "type": ["object", "null"], "additionalProperties": false, "required": ["date", "bars_ago", "direction", "squeeze_bars_before"],
+          "description": "3.1: the last bar the squeeze switched off, of any length (the squeeze_release_up / _down signals need 5 bars or more); null when it never did in the history",
+          "properties": {
+            "date": {"type": "string"},
+            "bars_ago": {"type": "integer", "minimum": 0, "description": "0 = the last bar"},
+            "direction": {"enum": ["up", "down", "flat", null], "description": "the close vs the 20-day SMA on that bar"},
+            "squeeze_bars_before": {"type": "integer", "minimum": 1, "description": "how many bars the squeeze had lasted when it switched off"}
+          }
+        }
       }
     },
     "extension": {
