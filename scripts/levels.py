@@ -8,7 +8,7 @@ weight of candidates in it. A support zone lies wholly below the close and a res
 wholly above it.
 
 The zones are reference only: a map of where price traded or turned before, not a forecast of where
-it will turn next. The stops and targets in scorecard.py come from volatility bands.
+it will turn next. The stops and targets in scenarios.py come from volatility bands.
 
 Everything uses split-adjusted OHLC (the prices that actually traded, continuous across splits)
 over the last ctx["hz"]["levels_lookback"] bars, as of the last complete bar. Those prices are not

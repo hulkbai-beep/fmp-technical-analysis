@@ -4,7 +4,7 @@ Chart data and the self-contained chart.html.
 build_chart_data(ctx, modules) turns the analysis context and the module outputs into one
 JSON-safe dict: the last ctx["hz"]["chart_bars"] daily bars (split-adjusted OHLCV), weekly
 candles over the same span, indicator series, levels, the volume profile,
-earnings markers and the summary panels (regime, scorecard, signal statistics, key numbers, data notes).
+earnings markers and the summary panels (regime, conflicts, signal statistics, key numbers, data notes).
 Every number is computed here or in the modules; ui/chart.js only draws.
 
 write_chart_html(chart_data, path) writes one HTML file with ui/chart.css, ui/i18n.js and
@@ -36,7 +36,7 @@ LEVEL_KEYS = ("price", "zone_low", "zone_high", "sources", "touches", "holds", "
               "volume_share", "score", "distance_pct", "distance_atr")
 MODULE_NAMES = ("market_context", "regime", "trend_momentum", "relative_strength", "mean_reversion",
                 "volume_flow", "volatility", "levels", "multi_timeframe", "event_risk", "dividends",
-                "macro_events", "signals", "price_action", "candlesticks", "scorecard", "scenarios", "risk")
+                "macro_events", "signals", "price_action", "candlesticks", "conflicts", "scenarios", "risk")
 LIBRARY_KEYS = ("id", "name", "bias", "last_fired", "fires_total", "horizon", "n", "hit_rate", "median",
                 "confidence", "base_median", "base_hit_rate", "edge_median", "edge_hit_rate")
 
@@ -259,30 +259,17 @@ def _regime(modules: dict) -> dict:
             "mtf_note": mtf.get("note")}
 
 
-def _scorecard(modules: dict) -> dict:
-    sc = modules.get("scorecard") or {}
-    pillars = sc.get("pillars") or {}
-    if not pillars:
-        return {"available": False, "reason": sc.get("reason") or "scorecard unavailable"}
-    weights = sc.get("weights") or {}
-    order = [p for p in C.PILLARS if p in pillars] + [p for p in pillars if p not in C.PILLARS]
-    conf = sc.get("confidence") or {}
-    # reasons stay in English; the structured fields (votes, inputs, factors, key/params) let
-    # ui/i18n.js write them in Chinese
-    pillar_keys = ("score", "raw_score", "reason", "available", "mode", "votes", "inputs", "missing",
-                   "not_applicable", "nudges")
+def _conflicts(modules: dict) -> dict:
+    cf = modules.get("conflicts") or {}
+    if cf.get("available") is False:
+        return {"available": False, "reason": cf.get("reason") or "conflicts unavailable"}
+    # descriptions stay in English; key/params let ui/i18n.js write them in Chinese
     return {
         "available": True,
-        "pillars": [{"name": p, **{k: _get(pillars, p, k) for k in pillar_keys}, "weight": weights.get(p)}
-                    for p in order],
-        "weighted_score": sc.get("weighted_score"), "bias": sc.get("bias"),
-        "confidence": {"level": conf.get("level"), "reasons": conf.get("reasons") or [],
-                       "factors": conf.get("factors") or []},
-        "conflicts": [{k: c.get(k) for k in ("type", "key", "params", "description", "typical_meaning")}
-                      if isinstance(c, dict) else {"description": str(c), "typical_meaning": None}
-                      for c in sc.get("conflicts") or []],
-        "consts": {"slope_bars": C.SLOPE_BARS, "percentile_window": C.PERCENTILE_WINDOW,
-                   "divergence_lookback": C.DIVERGENCE_LOOKBACK},
+        "items": [{k: c.get(k) for k in ("type", "key", "params", "description", "typical_meaning")}
+                  if isinstance(c, dict) else {"description": str(c), "typical_meaning": None}
+                  for c in cf.get("items") or []],
+        "consts": {"divergence_lookback": C.DIVERGENCE_LOOKBACK},
     }
 
 
@@ -294,7 +281,7 @@ def _active_table(sg: dict, primary: int) -> list[dict]:
         hs = a.get("horizons") or {}
         h = hs.get(ph) or hs.get(str(ph)) or {}
         rows.append({
-            "id": a.get("id"), "name": a.get("name"), "bias": a.get("bias"), "pillar": a.get("pillar"),
+            "id": a.get("id"), "name": a.get("name"), "bias": a.get("bias"),
             "fired_date": a.get("fired_date"), "bars_ago": a.get("bars_ago"), "regime_used": a.get("regime_used"),
             "n": h.get("n"), "hit_rate": h.get("hit_rate"), "median": h.get("median"),
             "p25": h.get("p25"), "p75": h.get("p75"), "median_mae": h.get("median_mae"),
@@ -428,7 +415,7 @@ def build_chart_data(ctx, modules: dict) -> dict:
         "rs_spy_note": rs_note,
         "earnings_dates": earnings,
         "regime": _regime(modules),
-        "scorecard": _scorecard(modules),
+        "conflicts": _conflicts(modules),
         "signals": _signals(modules, primary),
         "price_action": _pattern_block("price_action", PA.chart_payload, ctx, modules, win, primary, notes),
         "candlesticks": _pattern_block("candlesticks", CS.chart_payload, ctx, modules, win, primary, notes),

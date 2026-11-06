@@ -1,6 +1,6 @@
 // Chinese (default) / English text for the fmp-technical-analysis chart (ui/chart.js), chart.html and
 // the local app (ui/index.html). Indicator names (SMA, RSI, MACD, ATR, ADX, RVOL, VWAP, POC ...)
-// stay in English in both languages. Labels that come from metrics.json (regime label, bias,
+// stay in English in both languages. Labels that come from metrics.json (regime label,
 // signal ids, level sources) are translated here; free-text reasons and notes stay as written.
 (function (global) {
   "use strict";
@@ -29,7 +29,7 @@
       partial_week: "（本周未结束）",
       o: "开", h: "高", l: "低", c: "收", v: "量",
       lg_sma20: "SMA20", lg_sma50: "SMA50", lg_sma100: "SMA100", lg_sma200: "SMA200", lg_supports: "支撑区间", lg_resistances: "压力区间",
-      sma100_title: "SMA100（100 日均线）：仅作参考线，不参与均线排列、趋势投票、评分卡和信号",
+      sma100_title: "SMA100（100 日均线）：仅作参考线，不参与均线排列、趋势投票和信号",
       lg_vp: "成交量分布", lg_earnings: "财报",
       anchor_last_earnings: "财报", anchor_high_52w: "52周高点", anchor_low_52w: "52周低点",
       anchor_ytd_start: "年初", anchor_largest_gap_6m: "6个月最大缺口",
@@ -42,7 +42,7 @@
       vp_window: (n, d) => `成交量分布：最近 ${n} 根 K 线（自 ${d}）`,
       kb_hint: "用鼠标或手指左右拖动可平移，Ctrl+滚轮、触控板或双指捏合可缩放，双击恢复全部；图表获得焦点后 ← → 移动十字线，+ − 缩放",
       // side panels
-      t_regime: "市场状态", t_score: "评分卡", t_signals: "信号统计", t_levels: "关键价位", t_notes: "数据说明",
+      t_regime: "市场状态", t_conflicts: "冲突项", t_signals: "信号统计", t_levels: "关键价位", t_notes: "数据说明",
       rg_type: "类型", rg_dir: "方向", rg_strength: "趋势强度", rg_vol: "波动率", rg_weekly: "周线",
       type_trend: "趋势", type_range: "区间", type_transitional: "过渡", type_vol_extreme: "波动极端",
       st_trending: "趋势中", st_transitional: "过渡", st_range: "无趋势",
@@ -50,17 +50,13 @@
       vol_pctl: p => `一年分位 ${p}`, compression: "压缩",
       al_confirms: "周线确认日线", al_contradicts: "周线与日线相反", al_mixed: "周线不明确",
       dir_1: "上升", "dir_-1": "下降", dir_0: "不明",
-      bias: "整体倾向", wscore: "加权分", confidence: "置信度", weight: "权重",
-      conf_high: "高", conf_medium: "中", conf_low: "低",
-      conflicts: "冲突项",
-      pl_trend: "趋势", pl_momentum: "动量", pl_relative_strength: "相对强度", pl_volume_flow: "量能/资金流",
-      pl_volatility_setup: "波动结构", pl_mean_reversion: "均值回归",
+      cf_none: "没有发现冲突项。",
       sig_h: h => `历史前瞻 ${h} 日收益（本股自身历史）`,
       sig_none: "当前没有活跃信号（最近 3 根 K 线内未触发）。",
       th_signal: "信号", th_fired: "触发", th_n: "n", th_hit: "胜率", th_med: "中位数", th_edge: "超额", sample: "样本",
       bars_ago: n => n === 0 ? "今日" : `${n} 根前`,
       sc_normal: "正常", sc_low: "偏少", sc_insufficient: "不足",
-      edge_note: "超额 = 信号中位数 − 同状态基准中位数（括号内为胜率差）；样本不足（n < 15）的信号不计入评分。",
+      edge_note: "超额 = 信号中位数 − 同状态基准中位数（括号内为胜率差）；样本不足（n < 15）的信号不足以作为依据。",
       th_level: "价位", th_dist: "距离", th_src: "来源", touches: (n, h, b) => `测试 ${n} 次 · 守住 ${h ?? 0} · 击穿 ${b ?? 0}`,
       lv_none: "没有可用的关键价位。",
       lv_ref: "仅供参考：这些是价格过去成交或转折过的区间，不预示价格下次会在哪里转折。止损和目标用的是波动率区间。",
@@ -90,7 +86,7 @@
       pa_fb: "最近区间假突破", pa_mm: "测量目标位",
       last_doji: (d, n) => `最近一根十字星：${d}（${n === 0 ? "今日" : n + " 根前"}）`,
       cs_recent: "最近出现的形态", cs_none_recent: "近期没有识别到形态。",
-      setups_active: "近 3 根 K 线触发的形态", not_scored: "这些形态只作为辅助参考，不计入评分卡。",
+      setups_active: "近 3 根 K 线触发的形态", not_scored: "这些形态只作为辅助参考。",
       pa_note: "K 线颜色：实心 = 趋势棒（实体 ≥ 一半振幅），浅色 = 弱棒，灰色 = 十字/小实体。下方色条：市场状态与 Always-in 方向。全部为日线规则近似，统计来自本股自身历史。时间范围与上方主图同步。",
       cs_note: "实心 K 线为形态所在的 K 线；“前期下跌/上涨”按形态前一根收盘与 5 根前比较。统计来自本股自身历史，时间范围与上方主图同步。",
       tr_title: (a, b, s, e) => `交易区间 ${a}–${b}（${s} ~ ${e}）`,
@@ -124,7 +120,7 @@
       partial_week: " (week in progress)",
       o: "O", h: "H", l: "L", c: "C", v: "Vol",
       lg_sma20: "SMA20", lg_sma50: "SMA50", lg_sma100: "SMA100", lg_sma200: "SMA200", lg_supports: "Support zones", lg_resistances: "Resistance zones",
-      sma100_title: "SMA100 (100-day average): a reference line only, not part of the SMA stack, the trend votes, the scorecard or the signals",
+      sma100_title: "SMA100 (100-day average): a reference line only, not part of the SMA stack, the trend votes or the signals",
       lg_vp: "Volume profile", lg_earnings: "Earnings",
       anchor_last_earnings: "earnings", anchor_high_52w: "52w high", anchor_low_52w: "52w low",
       anchor_ytd_start: "YTD", anchor_largest_gap_6m: "6m largest gap",
@@ -136,7 +132,7 @@
       approx: "Anchored VWAPs and the volume profile are daily-bar approximations: VWAP = typical price (H+L+C)/3 × daily volume, cumulated from the anchor bar; the profile spreads each bar's volume evenly across its high-low range. Neither uses intraday data.",
       vp_window: (n, d) => `Volume profile: last ${n} bars (from ${d})`,
       kb_hint: "Drag sideways to pan, Ctrl+wheel or pinch to zoom, double-click to show everything; with the chart focused, ← → move the crosshair and + − zoom",
-      t_regime: "Regime", t_score: "Scorecard", t_signals: "Signal statistics", t_levels: "Key levels", t_notes: "Data notes",
+      t_regime: "Regime", t_conflicts: "Conflicts", t_signals: "Signal statistics", t_levels: "Key levels", t_notes: "Data notes",
       rg_type: "Type", rg_dir: "Direction", rg_strength: "Trend strength", rg_vol: "Volatility", rg_weekly: "Weekly",
       type_trend: "Trend", type_range: "Range", type_transitional: "Transitional", type_vol_extreme: "Vol extreme",
       st_trending: "trending", st_transitional: "transitional", st_range: "range",
@@ -144,17 +140,13 @@
       vol_pctl: p => `1y percentile ${p}`, compression: "compression",
       al_confirms: "weekly confirms daily", al_contradicts: "weekly contradicts daily", al_mixed: "weekly unclear",
       dir_1: "up", "dir_-1": "down", dir_0: "mixed",
-      bias: "Bias", wscore: "Weighted score", confidence: "Confidence", weight: "Weight",
-      conf_high: "high", conf_medium: "medium", conf_low: "low",
-      conflicts: "Conflicts",
-      pl_trend: "Trend", pl_momentum: "Momentum", pl_relative_strength: "Relative strength", pl_volume_flow: "Volume / flow",
-      pl_volatility_setup: "Volatility setup", pl_mean_reversion: "Mean reversion",
+      cf_none: "No conflicts were flagged.",
       sig_h: h => `Forward ${h}-day returns (this stock's own history)`,
       sig_none: "No active signals (none fired in the last 3 bars).",
       th_signal: "Signal", th_fired: "Fired", th_n: "n", th_hit: "Hit", th_med: "Median", th_edge: "Edge", sample: "sample",
       bars_ago: n => n === 0 ? "today" : n === 1 ? "1 bar ago" : `${n} bars ago`,
       sc_normal: "normal", sc_low: "low", sc_insufficient: "insufficient",
-      edge_note: "Edge = signal median − same-regime baseline median (hit-rate difference in brackets); signals with n < 15 are not scored.",
+      edge_note: "Edge = signal median − same-regime baseline median (hit-rate difference in brackets); signals with n < 15 are too few to be evidence.",
       th_level: "Level", th_dist: "Distance", th_src: "Sources", touches: (n, h, b) => `${n} test${n === 1 ? "" : "s"} · ${h ?? 0} held · ${b ?? 0} broken`,
       lv_none: "No key levels available.",
       lv_ref: "Reference only: zones where price traded or turned before, not a forecast of where it will turn next. Stops and targets use volatility bands.",
@@ -183,7 +175,7 @@
       pa_fb: "Last failed breakout", pa_mm: "Measured moves",
       last_doji: (d, n) => `Last doji: ${d} (${n === 0 ? "today" : n + " bars ago"})`,
       cs_recent: "Recent patterns", cs_none_recent: "No recent patterns.",
-      setups_active: "Fired in the last 3 bars", not_scored: "Context only: these patterns do not change the scorecard.",
+      setups_active: "Fired in the last 3 bars", not_scored: "Context only.",
       pa_note: "Candle colours: solid = trend bar (body at least half the range), pale = weak bar, grey = doji / small body. Strips below: market state and always-in direction. All rules are daily-bar approximations, measured on this stock's own history. The date range follows the main chart.",
       cs_note: "Solid candles belong to a pattern; the prior decline / advance compares the close before the pattern with the close 5 bars earlier. Statistics come from this stock's own history; the date range follows the main chart.",
       tr_title: (a, b, s, e) => `Trading range ${a}–${b} (${s} to ${e})`,
@@ -242,9 +234,6 @@
       cs_morning_star: "MS", cs_evening_star: "ES", cs_piercing_line: "PL", cs_dark_cloud_cover: "DC",
       cs_bullish_harami: "Har", cs_bearish_harami: "Har", cs_three_white_soldiers: "3WS", cs_three_black_crows: "3BC", doji: "Doji" },
   };
-
-  const BIAS_ZH = { "Bearish": "看空", "Moderately bearish": "偏空", "Neutral": "中性",
-    "Moderately bullish": "偏多", "Bullish": "看多" };
 
   const HEAD_ZH = {
     "Strong uptrend": "强势上升趋势", "Strong downtrend": "强势下降趋势", "Uptrend": "上升趋势",
@@ -320,7 +309,6 @@
 
   const signalName = (id, fallback) => lang === "zh" ? (SIGNALS_ZH[id] ?? fallback ?? id) : (SIGNALS_EN[id] ?? fallback ?? id);
   const patternShort = id => PATTERN_SHORT[lang][id] ?? id;
-  const biasLabel = s => lang === "zh" ? (BIAS_ZH[s] ?? s) : s;
 
   function sourceLabel(src) {
     if (src.startsWith("avwap_")) return "AVWAP·" + tv("anchor_", src.slice(6));
@@ -328,7 +316,7 @@
   }
 
   global.TA_I18N = {
-    t, tv, setLang, applyStatic, bindToggle, regimeLabel, signalName, patternShort, biasLabel, sourceLabel,
+    t, tv, setLang, applyStatic, bindToggle, regimeLabel, signalName, patternShort, sourceLabel,
     lang: () => lang,
     onChange: fn => listeners.push(fn),
   };

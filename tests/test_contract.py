@@ -1,4 +1,4 @@
-"""The ta-2.1 contract (scripts/contract.py, contracts/ta-2.1.schema.json) on a fake FMP (no network).
+"""The ta-3.0 contract (scripts/contract.py, contracts/ta-3.0.schema.json) on a fake FMP (no network).
 
 Every contract must match the schema, and its numbers must be the metrics' numbers. A small JSON Schema checker
 lives here so the tests need nothing beyond pandas, numpy and pytest.
@@ -14,7 +14,7 @@ import analyze
 import config as C
 import contract
 import fetch
-import scorecard as SC
+import scenarios as SC
 from fakes import (DIVIDENDS, ECON, HOLIDAYS, MACRO_EVENTS, NEXT_EX_DATE, NOW, SPY_NEXT_EX_DATE, earnings_history,
                    macro_rows, market, profile_row)
 
@@ -106,10 +106,12 @@ def test_numbers_are_the_metrics(stock):
     assert c["event"]["next_earnings"] == swing["event_risk"]["next_earnings"]["date"]
     assert "eps_estimated" not in c["event"]                       # 2.0: the contract carries no fundamentals
     for name, m in (("swing", swing), ("position", position)):
-        h, sc = c["horizons"][name], m["scorecard"]
+        h = c["horizons"][name]
         assert h["horizon_days"] == m["signals"]["primary_horizon"]
-        assert (h["bias"]["score"], h["bias"]["label"], h["bias"]["bias_confidence"]) == \
-            (sc["weighted_score"], sc["bias"], sc["confidence"]["level"])
+        # 3.0: no scores of any kind (no bias, pillars or weights); the conflicts are listed as they are
+        assert not {"bias", "pillars", "weights_used"} & set(h)
+        assert [x["type"] for x in h["conflicts"]] == [x["type"] for x in m["conflicts"]["items"]]
+        assert all("pillar" not in s for s in h["signals"] + h["patterns"])
         assert [(z["low"], z["high"]) for z in h["supports"]] == \
             [(z["zone_low"], z["zone_high"]) for z in m["levels"]["supports"]]
         assert h["levels_window"]["lookback_bars"] == m["levels"]["lookback_bars"]

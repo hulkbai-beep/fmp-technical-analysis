@@ -93,11 +93,11 @@ button { font: inherit; }
 .ta-lib summary { cursor: pointer; color: var(--muted); font-weight: 600; }
 .ta-list li.dim { color: var(--muted); }
 .ta-list.plain { list-style: none; padding-left: 0; }
-/* tablets and up: the tall scorecard on the right, regime and signal statistics stacked on its left */
+/* tablets and up: the conflicts on the right, regime and signal statistics stacked on its left */
 @media (min-width: 720px) {
   .ta-side { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto 1fr;
-    grid-template-areas: "regime score" "signals score"; }
-  .ta-a-regime { grid-area: regime; } .ta-a-score { grid-area: score; } .ta-a-signals { grid-area: signals; }
+    grid-template-areas: "regime conflicts" "signals conflicts"; }
+  .ta-a-regime { grid-area: regime; } .ta-a-conflicts { grid-area: conflicts; } .ta-a-signals { grid-area: signals; }
 }
 .ta-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px; min-width: 0; }
 .ta-card h3 { margin: 0 0 8px; font-size: 15px; }
@@ -158,16 +158,6 @@ button { font: inherit; }
 .ta-regime { font-size: 17px; font-weight: 650; margin: 0 0 6px; }
 .ta-kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-size: 13px; margin: 0; }
 .ta-kv dt { color: var(--muted); } .ta-kv dd { margin: 0; }
-.ta-bias { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin-bottom: 10px; }
-.ta-bias .b { font-size: 18px; font-weight: 700; }
-.ta-pillar { padding: 6px 0; border-top: 1px solid var(--border); }
-.ta-pillar:first-of-type { border-top: 0; }
-.ta-prow { display: grid; grid-template-columns: minmax(84px, 1.1fr) minmax(90px, 1.4fr) 28px 40px; gap: 8px; align-items: center; font-size: 13px; }
-.ta-prow .w { color: var(--muted); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
-.ta-prow .sc { text-align: right; font-weight: 650; font-variant-numeric: tabular-nums; }
-.ta-pbar { position: relative; height: 10px; background: var(--row); border-radius: 3px; }
-.ta-pbar::after { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--faint); }
-.ta-pbar i { position: absolute; top: 1px; bottom: 1px; border-radius: 2px; }
 .ta-reason { font-size: 12px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
 .ta-tablewrap { overflow-x: auto; margin: 0 -2px; }
 .ta-table { border-collapse: collapse; width: 100%; font-size: 12.5px; font-variant-numeric: tabular-nums; }

@@ -25,52 +25,52 @@ _SLOPE = P["pullback50_slope_bars"]
 
 SIGNALS = [
     {"id": "uptrend_pullback", "family": 1, "name": "Uptrend pullback", "bias": +1,
-     "regime": "above_200", "pillar": "mean_reversion",
+     "regime": "above_200",
      "rule": f"close > sma200 and rsi2 < {P['uptrend_pullback_rsi2']:g}"},
     {"id": "downtrend_oversold", "family": 2, "name": "Downtrend oversold", "bias": +1,
-     "regime": "below_200", "pillar": "mean_reversion",
+     "regime": "below_200",
      "rule": f"close < sma200 and rsi14 < {P['downtrend_oversold_rsi14']:g}"},
     {"id": "breakout_55d", "family": 3, "name": "55-day closing-high breakout on volume", "bias": +1,
-     "regime": "current_side", "pillar": "momentum",
+     "regime": "current_side",
      "rule": f"close > hh55_prev (highest close of the previous {P['breakout_lookback']} bars) "
              f"and rvol50 >= {P['breakout_rvol']:g}"},
     {"id": "new_52w_high", "family": 4, "name": "New 52-week closing high", "bias": +1,
-     "regime": "above_200", "pillar": "momentum",
+     "regime": "above_200",
      "rule": f"close > hh252_prev (highest close of the previous {C.HIGH_52W_BARS} bars) "
              f"and sma200 is defined"},
     {"id": "squeeze_release_up", "family": 5, "name": "Squeeze release up", "bias": +1,
-     "regime": "current_side", "pillar": "volatility_setup",
+     "regime": "current_side",
      "rule": f"squeeze_on[t-1] and not squeeze_on[t] and squeeze_bars[t-1] >= {P['squeeze_min_bars']} "
              f"and close > sma20"},
     {"id": "squeeze_release_down", "family": 5, "name": "Squeeze release down", "bias": -1,
-     "regime": "current_side", "pillar": "volatility_setup",
+     "regime": "current_side",
      "rule": f"squeeze_on[t-1] and not squeeze_on[t] and squeeze_bars[t-1] >= {P['squeeze_min_bars']} "
              f"and close <= sma20"},
     {"id": "golden_cross", "family": 6, "name": "Golden cross (50/200 SMA)", "bias": +1,
-     "regime": "current_side", "pillar": "trend",
+     "regime": "current_side",
      "rule": "sma50[t-1] <= sma200[t-1] and sma50[t] > sma200[t]"},
     {"id": "death_cross", "family": 6, "name": "Death cross (50/200 SMA)", "bias": -1,
-     "regime": "current_side", "pillar": "trend",
+     "regime": "current_side",
      "rule": "sma50[t-1] >= sma200[t-1] and sma50[t] < sma200[t]"},
     {"id": "pullback_rising_50", "family": 7, "name": "Pullback to a rising 50 SMA", "bias": +1,
-     "regime": "current_side", "pillar": "trend",
+     "regime": "current_side",
      "rule": f"sma50 > sma200 and sma50 > sma50[t-{_SLOPE}] and "
              f"abs(close - sma50) <= {P['pullback50_atr']:g} x atr14"},
     {"id": "extension_2sigma", "family": 8, "name": "Extension > 2 sigma above the 20-day mean", "bias": -1,
-     "regime": "current_side", "pillar": "mean_reversion",
+     "regime": "current_side",
      "rule": f"z20 > {P['extension_z']:g}"},
     {"id": "gap_up_atr", "family": 9, "name": "Gap up > 1 ATR on volume", "bias": +1,
-     "regime": "current_side", "pillar": "volume_flow",
+     "regime": "current_side",
      "rule": f"open - close[t-1] > {P['gap_atr']:g} x atr14[t-1] and rvol50 >= {P['gap_rvol']:g}"},
     {"id": "gap_down_atr", "family": 9, "name": "Gap down > 1 ATR on volume", "bias": -1,
-     "regime": "current_side", "pillar": "volume_flow",
+     "regime": "current_side",
      "rule": f"(close[t-1] - dividend[t]) - open > {P['gap_atr']:g} x atr14[t-1] and rvol50 >= {P['gap_rvol']:g}"},
     {"id": "macd_bull_cross_below_zero", "family": 10, "name": "MACD bullish cross below zero", "bias": +1,
-     "regime": "current_side", "pillar": "momentum",
+     "regime": "current_side",
      "rule": f"macd[t-1] <= macd_signal[t-1] and macd[t] > macd_signal[t] and macd[t] < 0 "
              f"(bar index >= {C.SIGNAL_MACD_WARMUP_BARS})"},
     {"id": "macd_bear_cross_above_zero", "family": 10, "name": "MACD bearish cross above zero", "bias": -1,
-     "regime": "current_side", "pillar": "momentum",
+     "regime": "current_side",
      "rule": f"macd[t-1] >= macd_signal[t-1] and macd[t] < macd_signal[t] and macd[t] > 0 "
              f"(bar index >= {C.SIGNAL_MACD_WARMUP_BARS})"},
 ]
@@ -200,7 +200,7 @@ def decluster(pos: np.ndarray, h: int) -> np.ndarray:
 
 
 def confidence(n: int) -> str:
-    """Sample-size label: normal / low / insufficient (insufficient is excluded from scoring)."""
+    """Sample-size label: normal / low / insufficient (insufficient: too few cases to be evidence)."""
     if n >= C.CONFIDENCE_N_NORMAL:
         return "normal"
     if n >= C.CONFIDENCE_N_LOW:
@@ -317,7 +317,7 @@ class OutcomeCache:
 def active_rows(bars: pd.DataFrame, ind: pd.DataFrame, ev: pd.DataFrame, specs: dict, horizons: list[int],
                 primary: int, notes: list, cache: OutcomeCache | None = None) -> list[dict]:
     """Per-horizon statistics with baselines for every event column of `ev` that fired on the last
-    C.SIGNAL_ACTIVE_BARS bars. `specs` maps each id to {name, bias, regime, pillar, rule, family};
+    C.SIGNAL_ACTIVE_BARS bars. `specs` maps each id to {name, bias, regime, rule, family};
     a "current_side" regime takes the SMA200 side on the fire date."""
     cache = cache or OutcomeCache(bars, ind)
     fires, n_bars, out = last_fires(ev), len(bars), []
@@ -336,11 +336,11 @@ def active_rows(bars: pd.DataFrame, ind: pd.DataFrame, ev: pd.DataFrame, specs: 
         conf = per_h[primary]["confidence"]
         out.append({
             "id": sid, "family": spec.get("family"), "name": spec["name"], "bias": spec["bias"],
-            "pillar": spec.get("pillar"), "rule": spec["rule"],
+            "rule": spec["rule"],
             "fired_date": _iso(bars.index[pos]), "bars_ago": n_bars - 1 - pos,
             "regime_used": regime or "all_days", "horizons": per_h,
             "mae_basis": "highest high after entry" if side < 0 else "lowest low after entry",
-            "confidence": conf, "scorable": conf != "insufficient",
+            "confidence": conf,
         })
     return out
 

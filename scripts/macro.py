@@ -26,7 +26,7 @@ newest first, with times in UTC ("2026-11-25 13:30:00" is 08:30 New York). The m
 - keeps the events whose session comes after as_of (anything before the as_of close is already in
   the last bar) and counts NYSE sessions to them: trading_days_to = sessions in (as_of, session].
 
-Events are context: they never change the scorecard, and the module gives dates and times only,
+Events are context: the module gives dates and times only,
 never an expected outcome. See references/methodology.md.
 """
 from __future__ import annotations
@@ -322,7 +322,7 @@ def build_macro_events(ctx) -> dict:
     within_stat_horizons counts the tier-1 events within each stat horizon; next holds the first
     event of each tier-1 group (null when the window has none); counts = events per tier plus the
     US rows after as_of that were excluded (C.MACRO_EXCLUDE) or unclassified; coverage says whether
-    FMP's listing reaches the end of each horizon. Context only: nothing here enters the scorecard."""
+    FMP's listing reaches the end of each horizon. Context only."""
     hz = ctx.get("hz") or C.HORIZONS[ctx.get("horizon", C.DEFAULT_HORIZON)]
     window = _window(ctx.get("macro_window"))
     out = {"available": True, "source": SOURCE, "window": window, "horizon_days": hz["primary"]}

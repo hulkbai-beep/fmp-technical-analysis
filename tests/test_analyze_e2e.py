@@ -19,12 +19,18 @@ from fakes import (ADJ, DIVIDENDS, ECON, FULL, HOLIDAYS, MACRO_EVENTS, NEXT_EX_D
 TOP_KEYS = ["ticker", "as_of", "data_source", "horizon", "snapshot", "data_quality", "market_context",
             "regime", "trend_momentum", "relative_strength", "mean_reversion", "volume_flow", "volatility",
             "levels", "multi_timeframe", "event_risk", "dividends", "macro_events", "signals", "price_action",
-            "candlesticks", "scorecard", "scenarios", "risk", "meta"]
+            "candlesticks", "conflicts", "scenarios", "risk", "meta"]
 MODULES = TOP_KEYS[6:-1]
 META_KEYS = {"network_calls", "cache_hits", "restricted", "errors", "skipped", "notes", "connection",
              "config_snapshot"}
 # technical analysis only: no fundamentals (EPS, revenue) and none of the removed research blocks
 OFF_TOPIC_KEY = re.compile(r"(^|_)eps(_|$)|revenue|ladder|node_zone|backtest", re.IGNORECASE)
+# no scoring output: no pillar scores, weights, weighted score, bias label or bias confidence anywhere. The only
+# "score" keys allowed are the support/resistance zones' test record (levels.*.score / reaction_score / min_score),
+# which ranks price zones and says nothing about direction.
+SCORE_KEY = re.compile(r"score|pillar|weighted|rating|grade|bias_sign|bias_confidence|leaning|scorecard|agreement",
+                       re.IGNORECASE)
+ZONE_SCORE_KEYS = {"score", "reaction_score", "min_score"}
 
 
 def all_keys(obj):
@@ -70,6 +76,12 @@ def check_shape(metrics, chart_data):
     assert chart_data["meta"]["as_of"] == metrics["as_of"]
     off_topic = sorted({k for k in [*all_keys(metrics), *all_keys(chart_data)] if OFF_TOPIC_KEY.search(k)})
     assert off_topic == [], off_topic
+    scoring = sorted({k for name, block in [*metrics.items(), *chart_data.items()] if name != "levels"
+                      for k in all_keys(block) if SCORE_KEY.search(k)})
+    assert scoring == [], scoring
+    zone_keys = {k for k in [*all_keys(metrics["levels"]), *all_keys(chart_data.get("levels") or {})]
+                 if SCORE_KEY.search(k)}
+    assert zone_keys <= ZONE_SCORE_KEYS, zone_keys
 
 
 def note_text(metrics, *modules):
@@ -93,7 +105,7 @@ def test_stock_swing_run():
     assert snap["sector"] == "Technology" and snap["sector_etf"] == "XLK" and snap["is_etf"] is False
     assert snap["quote_time"].startswith("2026-10-16T16:00:00")
 
-    assert m["regime"]["type"] in C.REGIME_WEIGHTS and m["regime"]["label"]
+    assert m["regime"]["type"] in ("trend", "range", "transitional", "vol_extreme") and m["regime"]["label"]
     assert m["relative_strength"]["vs_sector"]["benchmark"] == "XLK"
     assert m["event_risk"]["next_earnings"]["date"] == "2026-10-29"
     assert m["event_risk"]["reactions"]["n"] == C.EARNINGS_REACTIONS_MAX
@@ -102,10 +114,7 @@ def test_stock_swing_run():
     for a in m["signals"]["active"]:
         assert set(a["horizons"]) == {"5", "10", "20"}     # int keys become strings in JSON
 
-    sc = m["scorecard"]
-    assert list(sc["pillars"]) == list(C.PILLARS)
-    assert sc["bias"] in [label for _, label in C.BIAS_STEPS]
-    assert sum(sc["weights"].values()) == pytest.approx(1.0)
+    assert m["conflicts"]["available"] and isinstance(m["conflicts"]["items"], list)
     assert m["scenarios"]["horizon_days"] == 10 and m["scenarios"]["bull"]["text"].startswith("If ACME")
     assert m["risk"]["long_side"]["position_size_example"]["risk_dollars"] == pytest.approx(1000.0)
 
@@ -119,7 +128,7 @@ def test_stock_swing_run():
                                              "early_closes": 88, "problem": None}
     assert m["data_quality"]["stale"]["basis"] == "NYSE sessions"
 
-    # ex-dividend date and macro events: context next to the scorecard
+    # ex-dividend date and macro events: context
     dv = m["dividends"]
     assert dv["pays_dividends"] is True and dv["horizon_days"] == 10
     assert dv["next_ex_dividend"]["date"] == NEXT_EX_DATE and dv["next_ex_dividend"]["trading_days_to"] == 6
@@ -136,7 +145,7 @@ def test_stock_swing_run():
                                        "timing": "pre_open", "session": "2026-10-20", "trading_days_to": 2}
     assert me["counts"] == {"tier1": 3, "tier2": 0, "tier3": 0, "excluded": 1, "unclassified": 2}
     assert any(n.startswith(f"Ex-dividend date {NEXT_EX_DATE} falls inside the horizon") for n in m["risk"]["notes"])
-    assert not any("dividend" in c["type"] or "macro" in c["type"] for c in sc["conflicts"])
+    assert not any("dividend" in c["type"] or "macro" in c["type"] for c in m["conflicts"]["items"])
 
     assert chart_data["default_timeframe"] == "daily"
     assert len(chart_data["candles"]) == C.HORIZONS["swing"]["chart_bars"]
@@ -149,8 +158,6 @@ def test_stock_position_run():
     assert m["signals"]["stat_horizons"] == [20, 60] and m["signals"]["primary_horizon"] == 60
     assert m["levels"]["lookback_bars"] == C.HORIZONS["position"]["levels_lookback"]
     assert m["scenarios"]["horizon_days"] == 60
-    assert m["scorecard"]["weight_basis"]["position_shift"] is True
-    assert "weekly_direction" in m["scorecard"]["pillars"]["trend"]["votes"]
     assert chart_data["default_timeframe"] == "weekly"
     assert m["dividends"]["horizon_days"] == 60 and m["dividends"]["within_stat_horizons"] == {"20": True, "60": True}
     me = m["macro_events"]
@@ -192,7 +199,6 @@ def test_spy_skips_earnings_sector_and_rs_vs_spy():
     assert rs["available"] is False and rs["vs_spy"]["available"] is False and rs["beta_1y"] is None
     assert "benchmark" in rs["vs_spy"]["reason"]
     assert m["market_context"]["sector"]["available"] is False
-    assert m["scorecard"]["pillars"]["relative_strength"]["reason"].startswith("not applicable")
     assert not any(a["anchor"] == "last_earnings" for a in m["volume_flow"]["anchored_vwaps"])
     assert chart_data["rs_spy"] is None and chart_data["earnings_dates"] == []
 
@@ -227,7 +233,6 @@ def test_short_history_skips_what_cannot_be_computed():
     assert m["relative_strength"]["beta_1y"] is None and "beta" in note_text(m, "relative_strength")
     assert any("fewer than" in n or "only" in n for n in m["levels"]["notes"])
     assert m["event_risk"]["available"] is False and m["meta"]["skipped"]["earnings"] == "no data returned"
-    assert m["scorecard"]["pillars"]["trend"]["votes"]["close_vs_sma200"] is None
     assert len(chart_data["candles"]) == 150 and chart_data["sma200"] == []
 
 
@@ -251,7 +256,7 @@ def test_restricted_earnings_endpoint_skips_event_risk():
     assert "earnings" in m["meta"]["restricted"]
     assert not any(a["anchor"] == "last_earnings" for a in m["volume_flow"]["anchored_vwaps"])
     assert "last_earnings anchor unavailable" in note_text(m, "volume_flow")
-    assert not any(c["type"] == "earnings_in_horizon" for c in m["scorecard"]["conflicts"])
+    assert not any(c["type"] == "earnings_in_horizon" for c in m["conflicts"]["items"])
     assert chart_data["earnings_dates"] == []
 
 
@@ -286,14 +291,14 @@ def test_failing_calendar_dividends_and_macro_are_errors_not_crashes():
     assert m["meta"]["errors"] == [HOLIDAYS, DIVIDENDS, ECON] and m["meta"]["restricted"] == []
     assert m["dividends"]["reason"].startswith("error:") and m["macro_events"]["reason"].startswith("error:")
     assert m["data_quality"]["calendar"]["source"] == "rules"
-    assert m["scorecard"]["available"] and m["levels"]["available"] and m["signals"]["available"]
+    assert m["conflicts"]["available"] and m["levels"]["available"] and m["signals"]["available"]
 
 
-def test_macro_events_never_change_the_scorecard():
+def test_macro_events_never_change_the_analysis():
     with_macro, _ = run(stock_market())
     without, _ = run(stock_market(blocked={ECON}))
     assert with_macro["macro_events"]["available"] and not without["macro_events"]["available"]
-    for k in ("scorecard", "scenarios", "levels", "signals", "risk", "dividends"):
+    for k in ("conflicts", "scenarios", "levels", "signals", "risk", "dividends"):
         assert with_macro[k] == without[k], k
 
 
@@ -305,8 +310,8 @@ def short_market():
 
 @pytest.mark.parametrize("horizon, make", [("swing", stock_market), ("position", stock_market),
                                            ("swing", short_market)])
-def test_sma100_never_changes_the_regime_scorecard_or_signals(monkeypatch, horizon, make):
-    """SMA100 is context only: with absurd SMA100 values in the indicator frame, the regime, the scorecard,
+def test_sma100_never_changes_the_regime_conflicts_or_signals(monkeypatch, horizon, make):
+    """SMA100 is context only: with absurd SMA100 values in the indicator frame, the regime, the conflicts,
     the signals, the SMA20/50/200 stack, everything weekly and the price-action EMA stay exactly as they were.
     Only the SMA100 readings and, through its low-weight level candidate, the levels and what is built from
     them may move: the scenarios, and the risk block's reference-only structural stop and level target (with
@@ -328,11 +333,7 @@ def test_sma100_never_changes_the_regime_scorecard_or_signals(monkeypatch, horiz
     for k in ("sma20", "sma50", "sma200", "stack", "stack_state", "stack_periods"):
         assert tm_w[k] == tm_n[k], k
     assert weird["regime"] == normal["regime"]
-    sc_n, sc_w = normal["scorecard"], weird["scorecard"]
-    assert {p: v["score"] for p, v in sc_w["pillars"].items()} == {p: v["score"] for p, v in sc_n["pillars"].items()}
-    assert (sc_w["weighted_score"], sc_w["bias"], sc_w["confidence"]) == \
-        (sc_n["weighted_score"], sc_n["bias"], sc_n["confidence"])
-    assert sc_w == sc_n
+    assert weird["conflicts"] == normal["conflicts"]
     assert weird["signals"] == normal["signals"]
     for k in ("market_context", "multi_timeframe", "mean_reversion", "price_action", "candlesticks"):
         assert weird[k] == normal[k], k
@@ -388,7 +389,7 @@ def test_a_failing_module_is_reported_and_the_rest_still_run(monkeypatch):
     assert m["levels"]["reason"].startswith("internal error: KeyError")
     assert m["meta"]["errors"] and m["meta"]["errors"][0].startswith("levels: KeyError")
     assert m["meta"]["modules_unavailable"]["levels"].startswith("internal error")
-    assert m["scorecard"]["available"] and m["scenarios"]["available"] and m["signals"]["available"]
+    assert m["conflicts"]["available"] and m["scenarios"]["available"] and m["signals"]["available"]
     assert chart_data is not None and chart_data["levels"]["available"] is False
 
 
@@ -451,7 +452,7 @@ def test_cli_writes_metrics_and_chart(cli, tmp_path, capsys):
     html = (out / "chart.html").read_text(encoding="utf-8")
     assert 'id="ta-data"' in html and "TAChart.boot" in html
     text = capsys.readouterr().out
-    for piece in ("ACME  swing  as of 2026-10-16", "metrics.json", "chart.html", "regime", "bias", "API calls    : 13",
+    for piece in ("ACME  swing  as of 2026-10-16", "metrics.json", "chart.html", "regime", "conflicts", "API calls    : 13",
                   f"ex-dividend  : {NEXT_EX_DATE} (6 trading days), $0.5",
                   "macro events : CPI 2026-10-20, FOMC rate decision 2026-10-28 (tier 1, inside the 10-day horizon)"):
         assert piece in text

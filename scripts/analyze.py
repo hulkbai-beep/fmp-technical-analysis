@@ -9,12 +9,12 @@ metrics.json (every computed number) and a self-contained chart.html.
               position (weekly emphasis, 20/60-day stats, ~2-year levels)
   --out       output folder (default ./ta-output/<TICKER>_<as_of>/)
   --refresh   ignore the local cache and fetch everything again
-  --contract  also write the ta-2.1 contract (both horizons; the other one runs from the cache;
+  --contract  also write the ta-3.0 contract (both horizons; the other one runs from the cache;
               see contract.py)
 
 The NYSE calendar from fetch.py runs through every module that counts trading days. The
 dividends and macro_events modules (ex-dividend dates, scheduled US macro releases) are context
-like event_risk: they never change the scorecard.
+like event_risk. The output carries no scores, ratings or bias.
 
 Exit codes: 0 done; 1 the analysis could not run (unknown ticker, no data, FMP or network
 error); 2 configuration or usage problem (missing or rejected API key, bad arguments).
@@ -51,11 +51,11 @@ import macro
 import modules as M
 import price_action as PA
 import regime as R
-import scorecard as SC
+import scenarios as SC
 import signal_stats as SS
 from symbols import normalize_symbol
 
-# Module builders that take ctx only, in metrics.json order (scorecard, scenarios, risk follow).
+# Module builders that take ctx only, in metrics.json order (conflicts, scenarios, risk follow).
 BUILDERS = (
     ("market_context", R.build_market_context),
     ("regime", R.build_regime),
@@ -73,7 +73,7 @@ BUILDERS = (
     ("price_action", PA.build_price_action),
     ("candlesticks", CS.build_candlesticks),
 )
-MODULE_KEYS = tuple(name for name, _ in BUILDERS) + ("scorecard", "scenarios", "risk")
+MODULE_KEYS = tuple(name for name, _ in BUILDERS) + ("conflicts", "scenarios", "risk")
 TOP_KEYS = ("ticker", "as_of", "data_source", "horizon", "snapshot", "data_quality",
             *MODULE_KEYS, "meta")
 SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -186,9 +186,6 @@ def config_snapshot(horizon: str) -> dict:
                     "edge_min": C.SIGNAL_EDGE_MIN, "hit_edge_min": C.SIGNAL_HIT_EDGE_MIN},
         "price_action": {k[3:].lower(): getattr(C, k) for k in dir(C) if k.startswith("PA_")},
         "candlesticks": {k[3:].lower(): getattr(C, k) for k in dir(C) if k.startswith("CS_")},
-        "scorecard": {"bias_steps": [{"label": label, "bound": bound} for bound, label in C.BIAS_STEPS],
-                      "position_weight_shift": dict(C.POSITION_WEIGHT_SHIFT),
-                      "conf_agreement_high": C.CONF_AGREEMENT_HIGH, "conf_agreement_low": C.CONF_AGREEMENT_LOW},
         "risk": {"trigger_rvol": C.TRIGGER_RVOL, "stop_atr_mult": C.STOP_ATR_MULT,
                  "structure_stop_buffer_atr": C.STRUCTURE_STOP_BUFFER_ATR, "account_size": C.ACCOUNT_SIZE,
                  "risk_per_trade": C.RISK_PER_TRADE, "vol_band_k95": C.VOL_BAND_K95, "vol_stop_k": C.VOL_STOP_K,
@@ -265,8 +262,8 @@ def run_analysis(ticker: str, horizon: str = C.DEFAULT_HORIZON, client=None, now
 
     errors: list[str] = []
     mods = {name: _safe(name, fn, errors, ctx) for name, fn in BUILDERS}
-    mods["scorecard"] = _safe("scorecard", SC.build_scorecard, errors, ctx, mods)
-    mods["scenarios"] = _safe("scenarios", SC.build_scenarios, errors, ctx, mods, mods["scorecard"])
+    mods["conflicts"] = _safe("conflicts", SC.build_conflicts, errors, ctx, mods)
+    mods["scenarios"] = _safe("scenarios", SC.build_scenarios, errors, ctx, mods)
     mods["risk"] = _safe("risk", SC.build_risk, errors, ctx, mods, mods["scenarios"])
     chart_data = None
     try:
@@ -319,7 +316,7 @@ def _pct(x) -> str:
 
 def _event_lines(m: dict) -> list[str]:
     """Summary lines for the next ex-dividend date when it falls inside the horizon and for the tier-1
-    macro events inside it (context, not part of the scorecard)."""
+    macro events inside it (context only)."""
     lines = []
     dv = m.get("dividends") or {}
     nx = dv.get("next_ex_dividend") or {}
@@ -344,18 +341,18 @@ def _event_lines(m: dict) -> list[str]:
 def summary(metrics: dict, paths: dict) -> str:
     """Short plain-text summary of a run for the terminal."""
     m, meta = metrics, metrics["meta"]
-    snap, rg, sc = m["snapshot"], m["regime"], m["scorecard"]
+    snap, rg, cf = m["snapshot"], m["regime"], m["conflicts"]
     lines = [f"{m['ticker']}  {m['horizon']}  as of {m['as_of']}  close {snap['price']} "
              f"({_pct(snap['change_1d_pct'])})  [{m['data_source']}]",
              f"  metrics.json : {paths['metrics']}",
              f"  chart.html   : {paths['chart'] or 'not written (see errors)'}",
              f"  regime       : {rg.get('label') or rg.get('reason')}"
              + (f"  (type {rg['type']})" if rg.get("type") else "")]
-    if sc.get("available", True) and sc.get("bias"):
-        conf = (sc.get("confidence") or {}).get("level")
-        lines.append(f"  bias         : {sc['bias']} (weighted score {sc['weighted_score']:+.2f}), confidence {conf}")
+    if cf.get("available", True):
+        kinds = [c.get("type") for c in cf.get("items") or []]
+        lines.append(f"  conflicts    : {', '.join(kinds) if kinds else 'none flagged'}")
     else:
-        lines.append(f"  bias         : unavailable ({sc.get('reason')})")
+        lines.append(f"  conflicts    : unavailable ({cf.get('reason')})")
     sg = m["signals"]
     primary = str(sg.get("primary_horizon"))
     active = [f"{a['id']} (n={(a['horizons'].get(primary) or {}).get('n')}, {a['confidence']})"
