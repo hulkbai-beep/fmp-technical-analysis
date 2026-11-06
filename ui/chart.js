@@ -149,28 +149,12 @@
     return card(t("t_regime"), body, "regime");
   }
 
-  function scoreHtml(s) {
-    if (!s || !s.available) return card(t("t_score"), `<p class="ta-small">${esc(t("unavailable"))}: ${esc(s?.reason)}</p>`, "score");
-    const biasCls = /bull/i.test(s.bias || "") ? "pos" : /bear/i.test(s.bias || "") ? "neg" : "";
-    const conf = tv("conf_", s.confidence?.level);
-    const rows = s.pillars.map(p => {
-      const v = isNum(p.score) ? Math.max(-2, Math.min(2, p.score)) : 0, w = Math.abs(v) / 2 * 50;
-      const bar = `<i style="left:${v >= 0 ? 50 : 50 - w}%;width:${w}%;background:var(${v >= 0 ? "--up" : "--down"})"></i>`;
-      return `<div class="ta-pillar"><div class="ta-prow"><span>${esc(tv("pl_", p.name))}</span>
-          <div class="ta-pbar" role="img" aria-label="${esc(tv("pl_", p.name))} ${isNum(p.score) ? p.score : "–"}">${bar}</div>
-          <span class="sc ${pctCls(p.score)}">${isNum(p.score) ? sign(p.score) + Math.abs(p.score) : "–"}</span>
-          <span class="w">${isNum(p.weight) ? Math.round(p.weight * 100) + "%" : "–"}</span></div>
-        ${p.reason ? `<div class="ta-reason">${esc(p.reason)}</div>` : ""}</div>`;
-    }).join("");
-    const head = `<div class="ta-prow ta-small" aria-hidden="true"><span></span><span style="display:flex;justify-content:space-between"><span>−2</span><span>0</span><span>+2</span></span><span></span><span class="w">${esc(t("weight"))}</span></div>`;
-    const list = (title, items) => items.length ? `<h4 class="ta-small" style="margin-top:10px">${esc(title)}</h4><ul class="ta-list">${items.join("")}</ul>` : "";
-    const reasons = (s.confidence?.reasons || []).map(x => `<li>${esc(x)}</li>`);
-    const conflicts = (s.conflicts || []).map(c =>
-      `<li>${esc(c.description)}${c.typical_meaning ? `<div class="ta-reason">${esc(c.typical_meaning)}</div>` : ""}</li>`);
-    return card(t("t_score"), `<div class="ta-bias"><span class="b ${biasCls}">${esc(I18N.biasLabel(s.bias) || "–")}</span>
-        <span class="ta-sub">${esc(t("wscore"))} <b>${esc(fmtSigned(s.weighted_score, 2))}</b></span>
-        <span class="ta-sub">${esc(t("confidence"))} <b>${esc(conf)}</b></span></div>
-      ${head}${rows}${list(t("confidence"), reasons)}${list(t("conflicts"), conflicts)}`, "score");
+  function conflictsHtml(c) {
+    if (!c || !c.available) return card(t("t_conflicts"), `<p class="ta-small">${esc(t("unavailable"))}: ${esc(c?.reason)}</p>`, "conflicts");
+    const items = (c.items || []).map(x =>
+      `<li>${esc(x.description)}${x.typical_meaning ? `<div class="ta-reason">${esc(x.typical_meaning)}</div>` : ""}</li>`);
+    return card(t("t_conflicts"), items.length ? `<ul class="ta-list">${items.join("")}</ul>`
+      : `<p class="ta-small">${esc(t("cf_none"))}</p>`, "conflicts");
   }
 
   function activeTable(rows, primary) {
@@ -1009,7 +993,7 @@
         </section>
         ${patternCardHtml(st, "pa", data)}
         ${patternCardHtml(st, "cs", data)}
-        <aside class="ta-side">${regimeHtml(data.regime)}${scoreHtml(data.scorecard)}${signalsHtml(data.signals)}</aside>
+        <aside class="ta-side">${regimeHtml(data.regime)}${conflictsHtml(data.conflicts)}${signalsHtml(data.signals)}</aside>
         <div class="ta-below">${levelsHtml(data)}${notesHtml(data)}</div>
       </div>
       <p class="ta-disclaimer">${esc(I18N.lang() === "zh" ? t("disclaimer") : data.meta?.disclaimer || t("disclaimer"))}</p>`;

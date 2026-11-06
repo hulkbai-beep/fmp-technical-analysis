@@ -10,7 +10,8 @@ list and the US economic calendar from FMP, computes every number and writes `me
 self-contained `chart.html` with three charts: indicators, price action after Al Brooks, and candlestick
 patterns. Claude then writes `report.md` from `metrics.json` only, following
 `references/report_template.md`. Python does the arithmetic; Claude does the explaining. The output
-describes conditions and historical base rates. It is not advice.
+describes conditions and historical base rates. It carries no scores, ratings or overall bias, and it
+is not advice.
 
 ## Setup (once)
 
@@ -64,13 +65,13 @@ describes conditions and historical base rates. It is not advice.
    exactly: 12 sections in fixed order, the exact key paths and its wording rules. Write it in the
    user's language.
 5. **Reply** with a short summary:
-   - regime, bias and confidence, with the dividend note from `regime.notes` when there is one;
+   - the regime, with the dividend note from `regime.notes` when there is one, and the conflicts;
    - the nearest support and resistance, labelled reference only (仅供参考);
    - the horizon's 1σ range and calibrated 95% range (±2.4σ, not ±2σ), and the volatility stop with
      how often a stop that far away was touched in calibration;
    - any active signals, each with its n;
    - the price-action state and always-in direction, and any setup or candlestick pattern that fired
-     in the last 3 bars, each with its n (context, not part of the scorecard);
+     in the last 3 bars, each with its n (context);
    - the earnings date if it falls inside the horizon;
    - the next ex-dividend date if it falls inside the horizon (`dividends.within_horizon`), with its
      amount: the price opens lower by about that much for mechanical reasons; when none is announced but
@@ -98,19 +99,21 @@ describes conditions and historical base rates. It is not advice.
   - never "will";
   - no buy / sell / hold advice (in Chinese, no 买入 / 卖出 / 持有);
   - targets are zones, and the risk section is illustrative arithmetic.
-- **Regime first.** In trend regimes, trend, momentum and RS carry the scorecard. In range regimes,
-  mean reversion, flow and the volatility setup do. An overbought RSI in a strong uptrend is not a
-  sell signal.
+- **No scores.** The skill gives no score, rating, grade, weighted total, overall bias (bullish /
+  bearish label) or confidence in a direction, and the report never makes one up. It describes each
+  reading on its own and lists where they disagree.
+- **Regime first.** In trend regimes, read trend, momentum and RS first; in range regimes, mean
+  reversion, flow and the volatility setup. An overbought RSI in a strong uptrend is not a sell signal.
 - **SMA100 is a reference, not a vote.** The 100-day SMA (`trend_momentum.sma.sma100`) is widely watched,
-  so say where the close sits against it, but it is not in the SMA stack (20/50/200), the regime votes,
-  the scorecard or the signals; never let it decide the trend.
+  so say where the close sits against it, but it is not in the SMA stack (20/50/200), the regime votes
+  or the signals; never let it decide the trend.
 - **Signal statistics:**
   - always state n, the history start and the confidence;
   - `insufficient` (n < 15) is not evidence;
   - compare with the same-regime baseline, not with zero;
   - for a bearish rule, a *negative* edge supports it.
 - **Price action and candlestick patterns** (`price_action`, `candlesticks`):
-  - they are context next to the scorecard and never change it; say so;
+  - they are context; say so;
   - they are daily-bar approximations: never quote Al Brooks' own probabilities, only the statistics
     in `metrics.json`;
   - read them with the same statistics rules as the signals, except that the `library` rows compare with
@@ -118,7 +121,7 @@ describes conditions and historical base rates. It is not advice.
     reported as such;
   - measured-move targets are zones, never price targets presented as advice.
 - **Ex-dividend dates and macro events** (`dividends`, `macro_events`) are scheduled context:
-  - they never change the scorecard and are not signals; say so;
+  - they are context and not signals; say so;
   - give dates and New York times only. Never predict a release's outcome, its direction or the market's
     reaction, and never call one bullish or bearish ("CPI on 2026-11-10 at 08:30 falls inside the
     horizon", not "CPI could lift the stock");
@@ -127,8 +130,8 @@ describes conditions and historical base rates. It is not advice.
   - when `macro_events.coverage.complete` is false, say that FMP lists releases other than FOMC dates
     only through `coverage.listed_through`, so later ones inside the horizon may be missing, and, when
     `macro_events.window.to` comes before `coverage.horizon_end`, that FOMC dates reach only that date.
-- **Report every conflict** in `scorecard.conflicts`, with its typical meaning. Do not add your own.
-  Conflicts change no score, bias or confidence; earnings inside the horizon is one, and is never a signal.
+- **Report every conflict** in `conflicts.items`, with its typical meaning. Do not add your own.
+  Conflicts are listed only; earnings inside the horizon is one, and is never a signal.
 - **Data source:** if `data_source` names a third-party proxy, say so and suggest verifying key
   figures.
 - **Closing bar:** the price is the last *complete* close. Before 16:15 New York time (13:15 on an
@@ -147,7 +150,7 @@ describes conditions and historical base rates. It is not advice.
 | `--out` | folder | `./ta-output/<TICKER>_<as_of>/` | where `metrics.json` and `chart.html` go |
 | `--refresh` | flag | off | ignore the cache and fetch everything again |
 | `--history-start` | `YYYY-MM-DD` | IPO date | ignore the symbol's history before this date (e.g. a pre-merger SPAC shell) |
-| `--contract` | file path | off | also write the ta-2.1 contract for another tool (both horizons; see below) |
+| `--contract` | file path | off | also write the ta-3.0 contract for another tool (both horizons; see below) |
 | `FMP_BASE_URL` | URL | unset (official FMP) | only for a third-party proxy |
 | `FMP_TLS_VERIFY` | `0` / `1` | `1` | `0` only per process, only for a proxy; ignored for the official host |
 | `FMP_CACHE_DIR` | folder | `~/.cache/fmp-technical` | response cache (never contains the key) |
@@ -156,20 +159,20 @@ describes conditions and historical base rates. It is not advice.
 All analysis thresholds live in `scripts/config.py`, and each run records them in
 `meta.config_snapshot`.
 
-## Contract for other tools (ta-2.1)
+## Contract for other tools (ta-3.0)
 
-Tools that build on this skill (a decision engine, a screener) read the **ta-2.1 contract**, not
+Tools that build on this skill (a decision engine, a screener) read the **ta-3.0 contract**, not
 `metrics.json`, whose layout is internal and may change.
 - `python scripts/analyze.py TICKER --contract out.json` writes it: the requested horizon runs as usual and
   the other one runs from the same-day cache, so it costs no extra API calls.
 - `python scripts/contract.py SWING/metrics.json POSITION/metrics.json [-o out.json]` builds it from two saved
   runs of the same ticker and day. Give each run its own `--out`: by default both horizons write to the same
   folder.
-- `contracts/ta-2.1.schema.json` describes every field. Horizon-independent blocks (data quality, market,
+- `contracts/ta-3.0.schema.json` describes every field. Horizon-independent blocks (data quality, market,
   earnings, dividend, macro, volatility, extension, trend, regime, RS, flow, weekly, price-action context)
-  sit at the top; the scorecard, zones (`low` / `high`), `price_location`, scenarios, reference stops,
+  sit at the top; the conflicts, zones (`low` / `high`), `price_location`, scenarios, reference stops,
   earnings, the ex-dividend date and macro events inside the horizon, and signal and pattern statistics
-  (with `confirmed`, the scorecard's same-regime edge test) sit under `horizons.swing` and
+  (with `confirmed`, the same-regime edge test) sit under `horizons.swing` and
   `horizons.position`.
 - 1.1 adds `event.last_earnings` (the latest report on or before `as_of`, with the days since and its
   two-day move) and the `kind` of each scenario target: `level` for a support/resistance zone, `projection`
@@ -193,8 +196,11 @@ Tools that build on this skill (a decision engine, a screener) read the **ta-2.1
 
   `event.trading_days_to` and `data_quality.business_days_behind` keep their names but now count NYSE
   sessions.
+- 3.0 removes every score: the per-horizon `bias` (weighted score, label, confidence), `pillars` and
+  `weights_used`, the `pillar` of each signal and pattern, and `context_only.scored`. The contract carries
+  no scores, ratings or bias; `conflicts` stays.
 - It selects facts and judges nothing; position sizing is left to the caller. Fields are only ever added
-  within a major version; renaming or removing one means ta-3.0, and `tests/test_contract.py` checks the
+  within a major version; renaming or removing one means a new major version, and `tests/test_contract.py` checks the
   output against the schema.
 
 ## Edge cases
@@ -256,7 +262,7 @@ Tools that build on this skill (a decision engine, a screener) read the **ta-2.1
 - `references/report_template.md`: the report's section order, key paths and wording rules. Read
   it before writing `report.md`.
 - `references/methodology.md`: data, adjustments, the exchange calendar, ex-dividend dates,
-  indicators, modules (macro events included), the scorecard, scenarios and approximations.
+  indicators, modules (macro events included), the conflicts, scenarios and approximations.
 - `references/signals.md`: the 14 pre-registered signal rules and how their statistics are
   computed.
 - `references/patterns.md`: the price-action readings and setups (chart 2) and the candlestick

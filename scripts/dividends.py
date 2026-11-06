@@ -17,8 +17,7 @@ lower by about the dividend for mechanical reasons. That drop is not a gap.
   every result is the same as before.
 - build_dividends(ctx): the `dividends` metrics block. It gives the last and the next ex-dividend
   date, the next one's size against the close and the ATR, whether it falls inside the horizon and,
-  from the spacing of the last 12 months' ex-dates, about how many fall inside it. It is context only
-  and never changes the scorecard. There is no dividend yield: the skill carries no fundamentals.
+  from the spacing of the last 12 months' ex-dates, about how many fall inside it. It is context only. There is no dividend yield: the skill carries no fundamentals.
 """
 from __future__ import annotations
 

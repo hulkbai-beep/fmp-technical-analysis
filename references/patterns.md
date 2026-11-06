@@ -9,8 +9,8 @@ Two pattern libraries sit next to the indicator signals of `references/signals.m
 Both follow the same rules as the signal library: every rule is fixed in advance and applied to every
 ticker, evaluated at the close of bar t with bars <= t only (`tests/test_lookahead.py`), and measured
 with the forward-return statistics of `references/signals.md` (de-clustering, same-regime and
-unconditional baselines, edge, confidence labels, `current_side` regime filter). **They do not feed the
-scorecard.** They are context next to it, and the report quotes only the statistics measured here.
+unconditional baselines, edge, confidence labels, `current_side` regime filter). They are context, and
+the report quotes only the statistics measured here.
 All parameters live in `scripts/config.py` (`PA_*`, `CS_*`) and are recorded in
 `meta.config_snapshot`.
 

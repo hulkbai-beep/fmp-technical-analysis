@@ -15,7 +15,7 @@ from pandas.tseries.frequencies import to_offset
 import config as C
 
 # The SMA columns. The rest of the skill reads them by name, so their periods are fixed (_check_sma_config):
-# - the trend SMAs, C.SMA_PERIODS in this order (fast, mid, long): the stack, the regime votes, the scorecard,
+# - the trend SMAs, C.SMA_PERIODS in this order (fast, mid, long): the stack, the regime votes,
 #   the signals and the contract read sma20 / sma50 / sma200 as these three lines;
 # - the context SMA, C.SMA_CONTEXT_PERIODS: the chart, levels, crosscheck, the contract and the UI name sma100,
 #   a reference line that is reported, drawn and used as a low-weight level candidate only.
@@ -315,7 +315,7 @@ def compute_all(bars: pd.DataFrame) -> pd.DataFrame:
     out = {}
 
     _check_sma_config()
-    # trend SMAs (stack, regime votes, scorecard, signals), then the context SMA (reported, drawn, a level candidate)
+    # trend SMAs (stack, regime votes, signals), then the context SMA (reported, drawn, a level candidate)
     for name, period in (*zip(TREND_SMA_COLUMNS, C.SMA_PERIODS), *zip(CONTEXT_SMA_COLUMNS, C.SMA_CONTEXT_PERIODS)):
         out[name] = sma(close, period)
         out[name + "_slope"] = out[name] / out[name].shift(C.SLOPE_BARS) - 1.0

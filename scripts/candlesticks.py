@@ -6,7 +6,7 @@ doji markers.
 Each pattern is a fixed rule (references/patterns.md) with a prior-trend condition, measured
 with the same forward-return statistics as signal_stats; the library table reports every pattern's
 record on this stock at the primary horizon so a pattern without an edge is visible as such.
-Patterns do not feed the scorecard. Causal: a pattern ending at bar t uses bars <= t only.
+Patterns are context. Causal: a pattern ending at bar t uses bars <= t only.
 """
 from __future__ import annotations
 
@@ -154,7 +154,6 @@ def _caveats(ticker: str) -> list[str]:
         "Library rows compare each pattern with every day's forward return on the same side (unconditional); "
         "active rows also give the same-regime baseline.",
         "Doji bars are marked on the chart but carry no direction, so they have no statistics.",
-        "Candlestick patterns do not change the scorecard; they are context next to it.",
     ]
 
 

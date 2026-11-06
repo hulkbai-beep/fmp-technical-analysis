@@ -6,7 +6,7 @@ broad channel, trading range), the always-in direction, H1-H4 / L1-L4 pullback c
 Brooks reads 5-minute charts bar by bar and leaves much to judgement. Every rule here is a fixed,
 mechanical daily-bar approximation, documented in references/patterns.md. The setups are a
 pre-registered event library measured with the same forward-return statistics as signal_stats;
-they do not feed the scorecard. Everything is causal: values at bar t use bars <= t, and a swing
+they are context. Everything is causal: values at bar t use bars <= t, and a swing
 pivot exists only from the bar that confirms it (PA_PIVOT_K bars later).
 """
 from __future__ import annotations
@@ -399,7 +399,6 @@ def _caveats(ticker: str) -> list[str]:
         "no costs (the same method as the indicator signals).",
         "Swing pivots for wedges and measured moves are known only k bars after the swing, so those setups fire "
         "late by construction.",
-        "Price-action setups do not change the scorecard; they are context next to it.",
     ]
 
 

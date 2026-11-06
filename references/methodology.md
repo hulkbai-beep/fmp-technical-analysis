@@ -5,7 +5,7 @@ How every number in `metrics.json` is produced. Parameter names in `CODE` refer 
 
 **Principles**
 - **Regime first.** The regime (trend, range, transitional or volatility extreme) is decided before
-  anything else, and it sets the scorecard weights.
+  anything else; the other readings are read in its light.
 - **Everything is computed in Python** from FMP daily bars. No TA-Lib, and no FMP indicator endpoints in
   the analysis. Claude never estimates a figure in prose.
 - **Causal.** Every indicator and signal at bar t uses bars up to and including t. The only forward-looking
@@ -14,7 +14,9 @@ How every number in `metrics.json` is produced. Parameter names in `CODE` refer 
 - **Nothing is filled in.** A missing input gives `null` and a note. A missing module gives
   `available: false` with the reason.
 - **Scheduled events are context.** Earnings, ex-dividend dates and macro releases are reported with their
-  dates. None of them changes a pillar score; only earnings inside the horizon is listed as a conflict.
+  dates; only earnings inside the horizon is listed as a conflict.
+- **No scores.** Nothing is scored, weighted or added up into an overall bias or rating. Each module
+  reports its own readings; section 5 lists where they disagree.
 - **Conditional output.** Scenarios have triggers and invalidation levels. Nothing is a buy, sell or hold
   recommendation.
 
@@ -249,11 +251,11 @@ default periods (`rsi14`, `atr14`, …); the periods themselves come from config
 which are fixed (below).
 
 **Trend SMAs and the context SMA100.** `SMA_PERIODS` = (20, 50, 200) are the trend SMAs: the SMA stack,
-the regime direction votes, the scorecard and the signal rules use them, and regime.py and signal_stats.py
+the regime direction votes and the signal rules use them, and regime.py and signal_stats.py
 read its second and third periods as the 50- and 200-day lines. `SMA_CONTEXT_PERIODS` = (100,) adds the
 100-day SMA (`sma100`, `sma100_slope`), a widely watched reference line. SMA100 is context only: it is
-reported, drawn and used as a low-weight level candidate, and it is not in the regime votes, the stack,
-the scorecard or the signals. Both settings are fixed, not tuning knobs: the columns are named `sma20` /
+reported, drawn and used as a low-weight level candidate, and it is not in the regime votes, the stack
+or the signals. Both settings are fixed, not tuning knobs: the columns are named `sma20` /
 `sma50` / `sma200` (fast, mid, long, by position) and `sma100`, and the chart, levels, crosscheck, the
 contract (`trend.sma100`) and the UI name the 100-day line. A period inserted or replaced would silently
 put another line under one of these names (with (20, 50, 100), the `sma200` column, the regime's long
@@ -336,7 +338,7 @@ crosscheck, contract and UI, not just a config entry.
   | ADX unavailable | Uptrend / Downtrend / Mixed / Undetermined |
 
   The vol part is omitted while the percentiles are unavailable.
-- **Type** (drives the scorecard weights):
+- **Type:**
   - `vol_extreme` if the vol label is extreme;
   - otherwise `trend`, `range` or `transitional`;
   - transitional also when ADX is unavailable.
@@ -357,7 +359,7 @@ crosscheck, contract and UI, not just a config entry.
     any other order mixed. `stack_periods` = [20, 50, 200] names the SMAs it uses.
 - **SMA100 (context only):** `sma100`, `slopes.sma100` and `close_vs.sma100` sit next to them (null with
   a note before bar 100). It is a reference line: not part of the stack or `stack_state`, and not used
-  by the regime votes, the scorecard or the signals.
+  by the regime votes or the signals.
 - **MACD:** latest values, and the most recent signal-line cross after the EMA warm-up (bar index ≥
   `MACD_SLOW` + `MACD_SIGNAL` = 35), with the side of zero it happened on.
 - **Distance from the 52-week high:** the highest split-adjusted high of the last 252 bars, as a
@@ -569,7 +571,7 @@ Stocks, ETFs and SPY alike, from the parsed dividends (section 1.8) and the bars
 - **Coverage:** `ex_dates_in_history` (ex-dates within the price history) and `matched_to_bars`; a note
   names ex-dates that found no bar.
 - **No dividend yield:** the skill carries no fundamentals.
-- **Context only:** never part of the scorecard and never a conflict. When the next ex-date falls inside
+- **Context only:** never a conflict. When the next ex-date falls inside
   the primary horizon, or none is announced and the pace puts one or more inside it, the risk notes say so
   (section 6).
 - **Unavailable** (`available: false` with the reason) when the dividends request is restricted or fails.
@@ -628,8 +630,7 @@ Stocks, ETFs and SPY alike, from the parsed dividends (section 1.8) and the bars
   usually incomplete: its list is a lower bound, and a note says how far each part reaches (other releases
   through `listed_through`, FOMC dates through `window.to`, which can fall a few sessions before
   `horizon_end`).
-- **Context only:** dates and times, never an expected outcome or direction. Macro events never change the
-  scorecard and are not a conflict: a position horizon nearly always holds an FOMC decision and a CPI
+- **Context only:** dates and times, never an expected outcome or direction. Macro events are not a conflict: a position horizon nearly always holds an FOMC decision and a CPI
   release, so a conflict would be constant noise. The contract carries tiers 1-2
   (`MACRO_CONTRACT_MAX_TIER` = 2); `metrics.json` lists all three.
 - **No history:** the plan rejects an early `from` (2025-11-01 was refused; dates from 2026-01-29 were
@@ -642,7 +643,7 @@ Stocks, ETFs and SPY alike, from the parsed dividends (section 1.8) and the bars
 ---
 
 ### M. Price action (`price_action`) and candlestick patterns (`candlesticks`)
-Two further pattern libraries, both context next to the scorecard and never part of it. The rules,
+Two further pattern libraries, both context. The rules,
 parameters (`PA_*`, `CS_*` in config.py) and what the daily-bar approximation leaves out are in
 [patterns.md](patterns.md). In short:
 - **Price action:** daily-bar versions of Al Brooks' reading: bar types (trend bar, weak bar, doji),
@@ -678,112 +679,33 @@ The full pre-registered library, the rules exactly as coded, and the statistics 
 - **Confidence** at the primary horizon:
   - n ≥ `CONFIDENCE_N_NORMAL` (30): normal;
   - n ≥ `CONFIDENCE_N_LOW` (15): low;
-  - fewer: insufficient. Listed, but not scored (`scorable: false`).
+  - fewer: insufficient. Listed for transparency, but too few cases to be evidence.
+
+  The label is about sample size only: it is not a score and says nothing about direction.
+- **Confirmed:** an active signal whose label is normal or low and whose same-regime edge at the primary
+  horizon backs its pre-registered bias: bias × median edge > `SIGNAL_EDGE_MIN` (0.5%) **and** bias ×
+  hit-rate edge > `SIGNAL_HIT_EDGE_MIN` (5 points). An edge in the opposite direction never confirms;
+  flipping a rule to match one stock's history would be data mining. The contract reports it as
+  `confirmed`; it is not added up with anything.
 - **Caveats** (emitted in `signals.caveats`): single stock, in-sample, no costs or slippage,
   overlapping baselines vs de-clustered events, history depth limited by the plan.
 
 ---
 
-## 5. Scorecard (`scorecard`)
+## 5. Conflicts (`conflicts`)
 
-### 5.1 Pillar scores (-2..+2)
-
-Every input casts a vote: +1 bullish, 0 neutral, -1 bearish.
-
-- **Vote share** (trend, momentum, relative strength, volume/flow):
-  - score = clip(round_half_away(2 × net / N), -2, +2), where N is the number of slots that apply.
-  - A slot whose input is missing abstains: it stays in N as 0, which pulls the score toward 0.
-  - A slot that does not apply (sector RS for an ETF, RS vs SPY for SPY) is removed from N.
-- **Condition count** (volatility setup, mean reversion): each condition that fires adds ±1, and
-  score = clip(net, -2, +2). These are flags that are usually off, so "not stretched" is a real 0.
-- **No usable input:** the pillar scores 0, is marked `available: false` with "insufficient data (…)"
-  or "not applicable (…)", and keeps its weight.
-
-| Pillar | Inputs (vote slots) | Mode |
-|---|---|---|
-| Trend | close vs SMA50; close vs SMA200; SMA50 vs SMA200; sign of the SMA200 slope; position mode adds the weekly direction sign | vote share, N = 4 (5) |
-| Momentum | signs of 12-1 momentum, 3m return, 6m return, MACD histogram, MACD line vs 0 | vote share, N = 5 |
-| Relative strength | per benchmark (SPY; sector ETF for stocks): sign of 3m and 6m relative return; RS line at a new 252-bar high +1 / low -1 | vote share, N = 6 stock, 3 ETF, n/a for SPY |
-| Volume/flow | up/down volume ratio > `FLOW_UPDOWN_HIGH` (1.2) +1, < `FLOW_UPDOWN_LOW` (0.8) -1; OBV/A-D divergence (one combined vote); OBV/A-D 20-bar slope (+1 if every available slope is positive, -1 if every one is negative); close above more than `FLOW_AVWAP_MAJORITY` (50%) of the anchored VWAPs +1, below more than 50% -1 | vote share, N = 4 |
-| Volatility setup | squeeze on or compression: +1 × regime direction sign (0 with no direction, "break direction unknown"); a squeeze release fewer than `SQUEEZE_RELEASE_RECENT_BARS` (3) bars ago: +1 up / -1 down; extreme vol: -1 unless the direction is up (then 0, "fragile") | condition count |
-| Mean reversion | RSI14 < 30 +1, > 70 -1; RSI2 < 10 +1, > 90 -1; z20 < -2 +1, > +2 -1 (%B is used only when z20 is missing; with 2-sigma population bands the two are the same condition); (close - SMA50)/ATR < -`MR_DIST_SMA50_ATR` (2) +1, > +2 -1 | condition count; positive = oversold |
-
-Each pillar returns `score`, `raw_score` (before nudges), a one-line `reason` with the numbers, `inputs`,
-`votes` and `nudges`.
-
-### 5.2 Signal nudges
-- **Which signals nudge:** an active signal nudges its pillar only when both hold:
-  1. its confidence at the primary horizon is normal or low;
-  2. its same-regime edge confirms the rule's pre-registered bias: bias × median edge >
-     `SIGNAL_EDGE_MIN` (0.5%) **and** bias × hit-rate edge > `SIGNAL_HIT_EDGE_MIN` (5 points).
-- **Size:** each qualifying signal moves its pillar by its bias (±1). The net move per pillar is capped
-  at `SIGNAL_NUDGE_MAX` = ±1, and the result is clipped to -2..+2.
-- **Opposite edges:** an edge in the opposite direction never nudges. Flipping a rule to match one
-  stock's history would be data mining.
-
-### 5.3 Weights and bias
-
-**Weights.**
-- Start from `REGIME_WEIGHTS[regime.type]`; an unknown or missing type uses transitional.
-- Position mode adds `POSITION_WEIGHT_SHIFT` (trend +0.05, mean reversion -0.05), floors at 0 and
-  renormalizes. In a trend regime this leaves mean reversion at 0.
-- There is no separate "levels" pillar. Levels drive the scenarios and risk framing; in range regimes,
-  the mean-reversion, volume/flow and volatility-setup pillars carry the weight.
-
-| Regime type | Trend | Momentum | Relative strength | Volume/flow | Volatility setup | Mean reversion |
-|---|---|---|---|---|---|---|
-| trend | 0.25 | 0.25 | 0.20 | 0.15 | 0.10 | 0.05 |
-| range | 0.10 | 0.10 | 0.10 | 0.20 | 0.20 | 0.30 |
-| transitional | 0.20 | 0.20 | 0.15 | 0.15 | 0.15 | 0.15 |
-| vol_extreme | 0.15 | 0.10 | 0.10 | 0.20 | 0.25 | 0.20 |
-
-**Weighted score** = Σ weight × score, in the range -2..+2. The **bias** comes from `BIAS_STEPS`. A score
-exactly on a boundary takes the label nearer Neutral.
-
-| Weighted score s | Bias |
-|---|---|
-| s < -1.2 | Bearish |
-| -1.2 ≤ s < -0.4 | Moderately bearish |
-| -0.4 ≤ s ≤ 0.4 | Neutral |
-| 0.4 < s ≤ 1.2 | Moderately bullish |
-| s > 1.2 | Bullish |
-
-### 5.4 Confidence
-- **Agreement:** the weight share of pillars whose score sign equals the bias sign. For a Neutral bias,
-  it is the weight share of pillars that have data and score 0.
-- **Multi-timeframe vs the bias:**
-  - confirms: the weekly sign equals the bias sign and daily/weekly alignment is "confirms";
-  - contradicts: the weekly sign is opposite to the bias, or the alignment is "contradicts";
-  - otherwise mixed.
-
-  With a Neutral bias, a mixed weekly direction confirms.
-- **Signal support:**
-  - supporting: confirmed signals (section 5.2) with the bias's sign;
-  - opposing: confirmed signals with another bias;
-  - unconfirmed: a normal or low sample whose edge does not pass both thresholds in the signal's own
-    direction, including an edge against its own hypothesis; counted, but neither for nor against;
-  - insufficient: n < 15.
-
-  The reason line counts all four, so they add up to the active signals.
-- **Level:**
-  - **low** if agreement < `CONF_AGREEMENT_LOW` (0.5) or the weekly contradicts the bias;
-  - **high** if agreement ≥ `CONF_AGREEMENT_HIGH` (0.7), the weekly confirms, no opposing confirmed
-    signal exists, and the active signals are not all insufficient;
-  - otherwise **medium**.
-
-  Having no active signals does not lower confidence. `confidence.reasons` states each factor.
-
-### 5.5 Conflicts
-Each conflict has `type`, `involved`, `description` (with the numbers) and `typical_meaning`.
+There is no scorecard: no pillar scores, weights, weighted score, bias label or confidence in a direction.
+`conflicts.items` lists the places where the module readings disagree, each with `type`, `involved`,
+`description` (with the numbers), `typical_meaning`, and `key` / `params` for the UI's translations. They are
+listed only; nothing is added up.
 
 | Type | When | Typical meaning (abridged) |
 |---|---|---|
-| `pillar_pair` | two pillars with opposite non-zero scores | e.g. trend + / mean reversion -: overbought in an uptrend often resolves sideways or by a shallow pullback rather than a reversal |
 | `price_flow_divergence` | OBV or A/D divergence active | participation not confirming the price extreme; can persist in strong trends |
 | `daily_vs_weekly` | weekly contradicts daily | counter-trend move inside the larger trend |
-| `rs_vs_market` | RS pillar > 0 while SPY is below its SMA200 | leadership against a risk-off tape |
-| `squeeze_no_direction` | squeeze on with direction 0 | break direction unknown |
-| `earnings_in_horizon` | next earnings inside the primary horizon | the event can override the technicals; a reaction adds a jump to the ordinary range (no score, bias or confidence changes) |
+| `rs_vs_market` | the stock beat SPY over both 3m and 6m (`relative_strength.vs_spy.rel_return_3m` / `_6m` > 0) while SPY is below its SMA200 | leadership against a risk-off tape |
+| `squeeze_no_direction` | squeeze on with regime direction 0 | break direction unknown |
+| `earnings_in_horizon` | next earnings inside the primary horizon | the event can override the technicals; a reaction adds a jump to the ordinary range |
 | `signals_vs_regime` | bullish signals in a downtrend, or bearish in an uptrend | counter-trend setups; judge them on same-regime statistics |
 | `signals_both_ways` | bullish and bearish signals active together | turning point or noise |
 
@@ -833,15 +755,15 @@ paths whose high (low) reached the upper (lower) edge within h days.
 | 3 | 98.0% | 2.0% | 97.6% | 2.5% | 99.7% / 0.3% |
 
 - `VOL_BAND_COVER`, `VOL_TOUCH` (k from 0.25 to 4) and `VOL_PAIR_ODDS` in `config.py` hold these numbers for
-  h = 5, 10, 20 and 60; the scorecard uses the calibrated horizon nearest h and interpolates touch rates in k
+  h = 5, 10, 20 and 60; the risk module uses the calibrated horizon nearest h and interpolates touch rates in k
   on a log scale.
 - Up moves reached their edge more often than down moves (10 days, k = 1: 34.0% vs 29.0%; 60 days 40.0% vs
   27.5%): the sample's upward drift. The pooled number assumes no drift, like the base case.
 - For comparison, the 2 ATR stop (`atr_stop`) was touched within 10 days in 34% of cases and within 60 days in 71%.
 
 **Wording.** Each scenario carries a conditional `text`, e.g. "If X closes above Y (basis) on
-RVOL ≥ 1.5, the next zones are …; the scenario is invalidated by a close back below Z." `leaning`
-records which scenario the bias points toward; it is a description, not a forecast. The triggers and level
+RVOL ≥ 1.5, the next zones are …; the scenario is invalidated by a close back below Z." Neither scenario
+is favoured: there is no bias to point toward one. The triggers and level
 targets come from the key levels, so `scenarios.notes` says they are reference only.
 
 **Risk framing (illustrative arithmetic, not a recommendation).**
@@ -951,7 +873,7 @@ with FMP's `technical-indicators/sma` (periodLength 50 and 100, timeframe 1day) 
 - Top-level keys in this order: `ticker`, `as_of`, `data_source`, `horizon`, `snapshot`,
   `data_quality`, `market_context`, `regime`, `trend_momentum`, `relative_strength`, `mean_reversion`,
   `volume_flow`, `volatility`, `levels`, `multi_timeframe`, `event_risk`, `dividends`, `macro_events`,
-  `signals`, `price_action`, `candlesticks`, `scorecard`, `scenarios`, `risk`, `meta`.
+  `signals`, `price_action`, `candlesticks`, `conflicts`, `scenarios`, `risk`, `meta`.
 - **Values:** floats are rounded to `METRICS_SIG_DIGITS` = 6 significant digits, dates are
   `YYYY-MM-DD`, and `null` means "not computable" (the module's `notes` say why). Percent-like values
   are fractions (0.05 = 5%).

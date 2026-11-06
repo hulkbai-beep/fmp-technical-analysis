@@ -64,16 +64,12 @@ def _modules(ctx):
                    "volume_profile": {"available": True, "poc": (edges[9] + edges[10]) / 2, "value_area_low": edges[3],
                                       "value_area_high": edges[10], "bins": bins, "hvn": [], "lvn": [], "lookback_bars": 126}},
         "signals": {"available": True, "primary_horizon": 10, "active": [{
-            "id": "uptrend_pullback", "name": "Uptrend pullback", "bias": 1, "pillar": "mean_reversion",
+            "id": "uptrend_pullback", "name": "Uptrend pullback", "bias": 1,
             "fired_date": str(bars.index[-1].date()), "bars_ago": 0, "regime_used": "above_200", "confidence": "normal",
             "horizons": {10: {"n": 41, "hit_rate": 0.61, "median": 0.012, "p25": -0.01, "p75": 0.03, "median_mae": -0.02,
                               "confidence": "normal", "same_regime": {"median": 0.006, "hit_rate": 0.55},
                               "edge": {"median": 0.006, "hit_rate": 0.06}}}}]},
-        "scorecard": {"pillars": {p: {"score": s, "reason": f"{p} reason"} for p, s in
-                                  zip(C.PILLARS, (2, 1, 1, 0, -1, -2))},
-                      "weights": C.REGIME_WEIGHTS["trend"], "weighted_score": 0.65, "bias": "Moderately bullish",
-                      "confidence": {"level": "medium", "reasons": ["4 of 6 pillars agree"]},
-                      "conflicts": [{"description": "Trend up but extended", "typical_meaning": "..."}]},
+        "conflicts": {"available": True, "items": [{"description": "Trend up but extended", "typical_meaning": "..."}]},
         "event_risk": {"available": False, "reason": "test: no event module"},
         "scenarios": {"horizon_days": 10, "base": {"expected_move_1sd_pct": 0.05}},
     }
@@ -153,9 +149,8 @@ def test_earnings_markers_cover_the_window_and_the_next_report():
 def test_summary_panels_follow_the_module_outputs():
     _, d = _data()
     assert d["regime"]["label"] == "Strong uptrend / normal vol" and d["regime"]["alignment"] == "confirms"
-    assert [p["name"] for p in d["scorecard"]["pillars"]] == list(C.PILLARS)
-    assert d["scorecard"]["bias"] == "Moderately bullish"
-    (c,) = d["scorecard"]["conflicts"]
+    assert "scorecard" not in d
+    (c,) = d["conflicts"]["items"]
     assert (c["description"], c["typical_meaning"]) == ("Trend up but extended", "...")
     row = d["signals"]["active"][0]
     assert (row["n"], row["hit_rate"], row["edge_median"], row["confidence"]) == (41, 0.61, 0.006, "normal")
@@ -210,7 +205,7 @@ def test_chart_data_from_the_real_module_builders():
         import regime
         import candlesticks
         import price_action
-        import scorecard
+        import scenarios
         import signal_stats
     except ImportError as exc:
         pytest.skip(f"module builders not available: {exc}")
@@ -222,15 +217,14 @@ def test_chart_data_from_the_real_module_builders():
          "multi_timeframe": regime.build_multi_timeframe(ctx), "event_risk": modules.build_event_risk(ctx),
          "signals": signal_stats.build_signal_stats(ctx), "price_action": price_action.build_price_action(ctx),
          "candlesticks": candlesticks.build_candlesticks(ctx)}
-    m["scorecard"] = scorecard.build_scorecard(ctx, m)
-    m["scenarios"] = scorecard.build_scenarios(ctx, m, m["scorecard"])
+    m["conflicts"] = scenarios.build_conflicts(ctx, m)
+    m["scenarios"] = scenarios.build_scenarios(ctx, m)
     d = chart.build_chart_data(ctx, m)
     json.dumps(d, allow_nan=False)
     assert d["regime"]["available"] and d["regime"]["label"] == m["regime"]["label"]
     assert d["regime"]["vol_label"] == m["regime"]["volatility"]["label"]
     assert d["regime"]["alignment"] == m["multi_timeframe"]["alignment"]
-    assert [p["name"] for p in d["scorecard"]["pillars"]] == list(C.PILLARS)
-    assert all(p["weight"] is not None for p in d["scorecard"]["pillars"])
+    assert d["conflicts"]["available"] and isinstance(d["conflicts"]["items"], list)
     assert d["volume_profile"]["available"] and d["volume_profile"]["bins"]
     assert d["levels"]["supports"] or d["levels"]["resistances"]
     assert "node_zones" not in d

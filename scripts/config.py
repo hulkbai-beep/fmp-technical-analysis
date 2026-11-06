@@ -75,9 +75,9 @@ DEFAULT_HORIZON = "swing"
 TRADING_DAYS_PER_YEAR = 252
 
 # ---------------------------------------------------------------------------- indicators
-# Trend SMAs (SMA_PERIODS: fast, mid, long, in this order) drive the SMA stack, the regime direction votes, the
-# scorecard and the signals. Context SMAs (SMA_CONTEXT_PERIODS) are reported, drawn and used as low-weight level
-# candidates only: they never vote, never enter the stack, the scorecard or the signals.
+# Trend SMAs (SMA_PERIODS: fast, mid, long, in this order) drive the SMA stack, the regime direction votes and
+# the signals. Context SMAs (SMA_CONTEXT_PERIODS) are reported, drawn and used as low-weight level
+# candidates only: they never vote, never enter the stack or the signals.
 # Both are fixed, not tuning knobs, and indicators.compute_all refuses any other value: indicators.py names the
 # columns sma20 / sma50 / sma200 (in this order) and sma100, regime.py and signal_stats.py take SMA_PERIODS[1] /
 # [2] as the 50- and 200-day lines, and the chart, levels, crosscheck, the contract (trend.sma100) and the UI name
@@ -117,13 +117,12 @@ VOL_EXTREME_PCTL = 95.0           # above this -> volatility extreme (regime typ
 COMPRESSION_BW_PCTL = 10.0        # Bollinger bandwidth percentile below this -> "compression"
 
 # ---------------------------------------------------------------------------- mean-reversion states
-# shared by modules.py (state labels) and scorecard.py (mean-reversion pillar); strict inequalities
+# used by modules.py (state labels); strict inequalities
 MR_RSI14_OVERBOUGHT = 70.0        # RSI(14) above this -> "overbought"
 MR_RSI14_OVERSOLD = 30.0          # RSI(14) below this -> "oversold"
 MR_RSI2_OVERBOUGHT = 90.0         # RSI(2) above this -> "overbought"
 MR_RSI2_OVERSOLD = 10.0           # RSI(2) below this -> "oversold"
 MR_Z_EXTENDED = 2.0               # z20 beyond +-this -> stretched (= %B outside 0..1 with 2-sigma bands)
-MR_DIST_SMA50_ATR = 2.0           # |close - SMA50| / ATR beyond this -> stretched (scorecard)
 
 # ---------------------------------------------------------------------------- levels
 SWING_ATR = 1.5                   # ATR ZigZag: a swing high/low is confirmed once price reverses this many ATRs from it
@@ -245,8 +244,8 @@ SIGNAL_PARAMS = {
     "gap_rvol": 2.0,
 }
 CONFIDENCE_N_NORMAL = 30          # n >= 30 -> "normal"
-CONFIDENCE_N_LOW = 15             # 15..29 -> "low"; below 15 -> "insufficient" (not scored)
-SIGNAL_EDGE_MIN = 0.005           # median edge vs. same-regime baseline needed to nudge a pillar (0.5%)
+CONFIDENCE_N_LOW = 15             # 15..29 -> "low"; below 15 -> "insufficient"
+SIGNAL_EDGE_MIN = 0.005           # median edge vs. same-regime baseline for a signal to count as confirmed (0.5%)
 SIGNAL_HIT_EDGE_MIN = 0.05        # and hit-rate edge (5 percentage points)
 SIGNAL_MACD_WARMUP_BARS = MACD_SLOW + MACD_SIGNAL   # MACD crosses before this bar index are ignored (EMA warm-up)
 SIGNAL_DATES_SAMPLE = 10          # most recent de-clustered event dates listed per statistic
@@ -282,36 +281,6 @@ CS_SMALL_SHADOW = 0.25            # ... and the other shadow <= this share of th
 CS_DOJI_BODY = 0.1                # doji: body <= this share of the range
 CS_STAR_BODY = 0.3                # star: middle body <= this share of the first bar's body
 CS_SOLDIER_SHADOW = 0.25          # three soldiers / crows: closing shadow <= this share of the range
-
-# ---------------------------------------------------------------------------- scorecard
-PILLARS = ("trend", "momentum", "relative_strength", "volume_flow", "volatility_setup", "mean_reversion")
-REGIME_WEIGHTS = {
-    "trend":        {"trend": 0.25, "momentum": 0.25, "relative_strength": 0.20,
-                     "volume_flow": 0.15, "volatility_setup": 0.10, "mean_reversion": 0.05},
-    "range":        {"trend": 0.10, "momentum": 0.10, "relative_strength": 0.10,
-                     "volume_flow": 0.20, "volatility_setup": 0.20, "mean_reversion": 0.30},
-    "transitional": {"trend": 0.20, "momentum": 0.20, "relative_strength": 0.15,
-                     "volume_flow": 0.15, "volatility_setup": 0.15, "mean_reversion": 0.15},
-    "vol_extreme":  {"trend": 0.15, "momentum": 0.10, "relative_strength": 0.10,
-                     "volume_flow": 0.20, "volatility_setup": 0.25, "mean_reversion": 0.20},
-}
-# position mode: weekly emphasis shifts weight from mean reversion to trend
-POSITION_WEIGHT_SHIFT = {"mean_reversion": -0.05, "trend": +0.05}
-BIAS_STEPS = [            # (bound, label) in ascending order; a score exactly on a bound takes the label
-                          # nearer Neutral, so +-0.4 is Neutral and +-1.2 is Moderately bullish/bearish
-    (-1.2, "Bearish"),
-    (-0.4, "Moderately bearish"),
-    (0.4, "Neutral"),
-    (1.2, "Moderately bullish"),
-    (float("inf"), "Bullish"),
-]
-FLOW_UPDOWN_HIGH = 1.2            # 50-day up/down volume ratio above this -> +1 flow vote
-FLOW_UPDOWN_LOW = 0.8             # below this -> -1 flow vote
-FLOW_AVWAP_MAJORITY = 0.5         # close above (below) more than this share of the anchored VWAPs -> +1 (-1)
-SQUEEZE_RELEASE_RECENT_BARS = SIGNAL_ACTIVE_BARS   # a squeeze release with bars_ago < this is "just released"
-SIGNAL_NUDGE_MAX = 1              # cap on the net signal nudge per pillar
-CONF_AGREEMENT_HIGH = 0.7         # pillar agreement (weight share) needed for "high" confidence
-CONF_AGREEMENT_LOW = 0.5          # below this -> "low" confidence
 
 # ---------------------------------------------------------------------------- scenarios / risk
 TARGET_ZONE_ATR = 0.25            # target zones = level +/- this many ATRs

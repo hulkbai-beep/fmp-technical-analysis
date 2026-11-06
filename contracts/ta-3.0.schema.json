@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "ta-2.1",
-  "title": "Technical analysis contract ta-2.1",
-  "description": "The stable summary of one stock's swing and position runs that other tools read, built by scripts/contract.py. Within a major version fields are only ever added; renaming or removing one means ta-3.0. 1.1 adds event.last_earnings, event.days_since_last_earnings, event.last_earnings_move and the kind of each scenario target. 1.2 adds levels_note, range_95 and the volatility-band stop and target with calibrated touch rates in stops_ref; the support/resistance zones are reference only. 2.0 removes event.eps_estimated: the contract carries no fundamentals. 2.1 adds data_quality.calendar_source, the dividend and macro blocks, trend.sma100 (a context line, not part of the SMA stack) and, per horizon, ex_dividend_within_horizon, macro_within_horizon and macro_complete; trading-day counts (event.trading_days_to, data_quality.business_days_behind) now count NYSE sessions, exchange holidays excluded. Ex-dividend dates and macro events are context: they never change the bias. Horizon-independent blocks sit at the top, the rest under horizons.swing / horizons.position. Prices are split-adjusted closes; fractions are decimals (0.05 = 5%); null means missing, never estimated.",
+  "$id": "ta-3.0",
+  "title": "Technical analysis contract ta-3.0",
+  "description": "The stable summary of one stock's swing and position runs that other tools read, built by scripts/contract.py. Within a major version fields are only ever added; renaming or removing one means a new major version. 1.1 adds event.last_earnings, event.days_since_last_earnings, event.last_earnings_move and the kind of each scenario target. 1.2 adds levels_note, range_95 and the volatility-band stop and target with calibrated touch rates in stops_ref; the support/resistance zones are reference only. 2.0 removes event.eps_estimated: the contract carries no fundamentals. 2.1 adds data_quality.calendar_source, the dividend and macro blocks, trend.sma100 (a context line, not part of the SMA stack) and, per horizon, ex_dividend_within_horizon, macro_within_horizon and macro_complete; trading-day counts (event.trading_days_to, data_quality.business_days_behind) now count NYSE sessions, exchange holidays excluded. 3.0 removes every score: the per-horizon bias (weighted score, label, confidence), pillars and weights_used, the pillar of each signal or pattern and context_only.scored; the contract carries no scores, ratings or bias. Ex-dividend dates and macro events are context. Horizon-independent blocks sit at the top, the rest under horizons.swing / horizons.position. Prices are split-adjusted closes; fractions are decimals (0.05 = 5%); null means missing, never estimated.",
   "type": "object",
   "additionalProperties": false,
   "required": ["contract", "config_hash", "ticker", "generated_at", "as_of", "as_of_basis", "data_source", "last_close",
@@ -10,7 +10,7 @@
                "extension", "trend", "regime", "rs", "flow", "weekly", "context_only", "horizons", "skipped",
                "modules_unavailable", "restricted", "warnings", "errors", "disclaimer"],
   "properties": {
-    "contract": {"const": "ta-2.1"},
+    "contract": {"const": "ta-3.0"},
     "config_hash": {"type": "string", "description": "hash of both runs' meta.config_snapshot"},
     "ticker": {"type": "string"},
     "generated_at": {"type": "string"},
@@ -216,11 +216,10 @@
     },
     "context_only": {
       "type": "object", "additionalProperties": false,
-      "description": "price-action state and recent candlesticks: context next to the scorecard, never part of it",
-      "required": ["scored", "pa_state", "pa_state_since", "always_in", "always_in_since", "last_failed_breakout",
+      "description": "price-action state and recent candlesticks: context",
+      "required": ["pa_state", "pa_state_since", "always_in", "always_in_since", "last_failed_breakout",
                    "measured_moves", "recent_candles"],
       "properties": {
-        "scored": {"const": false},
         "pa_state": {"$ref": "#/$defs/str"}, "pa_state_since": {"$ref": "#/$defs/str"},
         "always_in": {"enum": ["long", "short", null]}, "always_in_since": {"$ref": "#/$defs/str"},
         "last_failed_breakout": {"type": ["object", "null"]},
@@ -244,7 +243,6 @@
     "str": {"type": ["string", "null"]},
     "strings": {"type": "array", "items": {"type": "string"}},
     "sign": {"enum": [-1, 0, 1, null]},
-    "label": {"enum": ["Bullish", "Moderately bullish", "Neutral", "Moderately bearish", "Bearish", null]},
     "rs_side": {
       "type": ["object", "null"], "additionalProperties": false,
       "required": ["benchmark", "rel_return_3m", "rel_return_6m", "ratio_change_3m", "ratio_change_6m", "rs_line_slope",
@@ -335,11 +333,11 @@
     },
     "evidence": {
       "type": "object", "additionalProperties": false,
-      "required": ["id", "name", "bias", "pillar", "fired_date", "bars_ago", "n", "confidence", "hit_rate", "median",
+      "required": ["id", "name", "bias", "fired_date", "bars_ago", "n", "confidence", "hit_rate", "median",
                    "same_regime_median", "edge_median", "edge_hit_rate", "confirmed"],
       "properties": {
         "id": {"$ref": "#/$defs/str"}, "name": {"$ref": "#/$defs/str"}, "bias": {"$ref": "#/$defs/sign"},
-        "pillar": {"$ref": "#/$defs/str"}, "fired_date": {"$ref": "#/$defs/str"}, "bars_ago": {"type": ["integer", "null"]},
+        "fired_date": {"$ref": "#/$defs/str"}, "bars_ago": {"type": ["integer", "null"]},
         "n": {"$ref": "#/$defs/num"},
         "confidence": {"enum": ["normal", "low", "insufficient"]},
         "hit_rate": {"$ref": "#/$defs/num"}, "median": {"$ref": "#/$defs/num"},
@@ -352,33 +350,14 @@
     },
     "horizon": {
       "type": "object", "additionalProperties": false,
-      "required": ["horizon_days", "stat_horizons", "bias", "pillars", "weights_used", "conflicts", "price_location",
+      "required": ["horizon_days", "stat_horizons", "conflicts", "price_location",
                    "supports", "resistances", "levels_window", "levels_note", "bull", "bear", "range_1sd", "range_95", "stops_ref",
                    "earnings_within_horizon", "ex_dividend_within_horizon", "macro_within_horizon", "macro_complete",
                    "signals", "patterns"],
       "properties": {
         "horizon_days": {"type": ["integer", "null"], "description": "primary statistics horizon in trading days"},
         "stat_horizons": {"type": ["array", "null"], "items": {"type": "integer"}},
-        "bias": {
-          "type": ["object", "null"], "additionalProperties": false,
-          "required": ["score", "label", "sign", "bias_confidence", "agreement", "mtf_alignment", "signal_support"],
-          "properties": {
-            "score": {"$ref": "#/$defs/num", "description": "-2..+2"},
-            "label": {"$ref": "#/$defs/label"},
-            "sign": {"$ref": "#/$defs/sign"},
-            "bias_confidence": {"enum": ["high", "medium", "low", null],
-                                "description": "how reliable the label is; Neutral + high means confidently no direction"},
-            "agreement": {"$ref": "#/$defs/num"},
-            "mtf_alignment": {"$ref": "#/$defs/str"},
-            "signal_support": {"type": ["object", "null"]}
-          }
-        },
-        "pillars": {"type": ["object", "null"], "additionalProperties": {
-          "type": "object", "additionalProperties": false, "required": ["score", "available", "weight"],
-          "properties": {"score": {"type": ["integer", "number", "null"]}, "available": {"type": "boolean"},
-                         "weight": {"$ref": "#/$defs/num"}}}},
-        "weights_used": {"$ref": "#/$defs/str"},
-        "conflicts": {"type": "array", "items": {"type": "object"}},
+        "conflicts": {"type": "array", "items": {"type": "object"}, "description": "where the readings disagree, each with its typical meaning; listed only"},
         "price_location": {
           "type": ["object", "null"], "additionalProperties": false, "required": ["state", "zone"],
           "properties": {"state": {"enum": ["inside_support", "inside_resistance", "between", "above_all", "below_all"]},
@@ -410,7 +389,7 @@
                                  "description": "tier 1-2 macro events at most horizon_days NYSE sessions away, each with its date, New York time and timing; null when the economic calendar is unavailable (restricted, failed or without US rows)"},
         "macro_complete": {"type": ["boolean", "null"], "description": "whether FMP's listing reaches the horizon's end (macro.listed_through and the request window); false: events late in the horizon may be missing; null when the economic calendar is unavailable"},
         "signals": {"type": "array", "items": {"$ref": "#/$defs/evidence"}},
-        "patterns": {"type": "array", "items": {"$ref": "#/$defs/evidence"}, "description": "context only, not scored"}
+        "patterns": {"type": "array", "items": {"$ref": "#/$defs/evidence"}, "description": "price-action setups and candlestick patterns with their statistics"}
       }
     }
   }

@@ -45,9 +45,13 @@ layouts and the wording rules.
   - illiquid (`data_quality.liquidity.illiquid` with `reason`);
   - adjusted coverage below 1 (`data_quality.adj_coverage`): returns are price-only where dividend data
     is missing.
-- **Signals with insufficient samples** (`confidence == "insufficient"`, `scorable: false`) are listed
-  with their n and clearly marked "too few cases to be evidence; not used in the scorecard". Never
-  describe them as supporting anything.
+- **Signals with insufficient samples** (`confidence == "insufficient"`) are listed with their n and
+  clearly marked "too few cases to be evidence". Never describe them as supporting anything.
+- **No scores.** `metrics.json` has no scores, ratings, weights or overall bias, and the report must not
+  make any up: no "-2..+2", no "7/10", no star or grade, no "overall bullish / bearish" verdict, no
+  confidence in a direction. Describe each reading on its own and list the conflicts. A signal's or
+  pattern's `bias` (▲ / ▼) is only the direction its rule was written for, and `confidence` is only its
+  sample size.
 - **Bearish signals:** `hit_rate` is the share of *positive* forward returns. A bearish signal's
   hypothesis is supported when its median and hit rate sit *below* the same-regime baseline, so a
   negative edge supports it.
@@ -56,9 +60,9 @@ layouts and the wording rules.
 - Write in the user's language: Chinese if the user asked in Chinese, otherwise English.
 - Indicator names stay in English in every language: SMA, EMA, RSI, MACD, ATR, ADX, +DI/-DI,
   Bollinger %B, Keltner, RVOL, OBV, A/D, VWAP, POC, HVN/LVN, z-score.
-- Fixed labels from `metrics.json` (regime label, bias, signal names, level sources) may be
+- Fixed labels from `metrics.json` (regime label, signal names, level sources) may be
   translated, with the English original in parentheses the first time.
-- Free-text fields (pillar reasons, conflict meanings, scenario texts) are in English. Translate them
+- Free-text fields (conflict descriptions and meanings, scenario texts, notes) are in English. Translate them
   faithfully, keeping every number exactly.
 
 **Reading metrics.json**
@@ -68,8 +72,8 @@ layouts and the wording rules.
   `meta.config_snapshot`.
 - Of `meta.config_snapshot`, read only the thresholds this template names:
   `meta.config_snapshot.horizon.primary` and `.stat_horizons` (section 1), `meta.config_snapshot.regime`
-  (section 3), and the scorecard's edge thresholds `meta.config_snapshot.signals.edge_min` and
-  `.hit_edge_min` (sections 4, 7 and 8).
+  (section 3), and the signals' edge thresholds `meta.config_snapshot.signals.edge_min` and
+  `.hit_edge_min` (sections 7 and 8).
 - Horizon keys inside `signals.active[*].horizons` are strings (`"10"`). The primary horizon is
   `signals.primary_horizon`.
 
@@ -129,51 +133,35 @@ or ^VIX block shows its `reason`.
 
 **Layout:** open with the label in bold, then a table (Dimension | Reading | Rule). For example:
 "ADX 28.7 | trending | ADX ≥ 25". Then 1-2 sentences:
-- what the regime implies for which signals matter: in trend regimes trend, momentum and RS carry
-  the weight; in range regimes mean reversion, flow and volatility setup do;
-- name the weights used (`scorecard.weight_basis.weights_used`).
+- what the regime implies for which readings to read first: in trend regimes trend, momentum and RS;
+  in range regimes mean reversion, flow and the volatility setup.
 
 List `regime.notes` and `multi_timeframe.notes` if present, e.g. fewer than 200 bars. Quote the dividend
 note in full when there is one (a large payer: the price as traded lags the total return, so the SMAs, MACD,
 trend votes, weekly direction and 52-week high lean down).
 
-### 4. Scorecard (评分卡)
+### 4. Readings (指标读数)
 **Fields:**
-- `scorecard.pillars.<p>.score`, `.reason` and `.available` for the six pillars in this order: trend,
-  momentum, relative_strength, volume_flow, volatility_setup, mean_reversion;
-- `scorecard.weights.<p>`;
-- `scorecard.weighted_score`, `scorecard.bias`;
-- `scorecard.confidence.level`, `.agreement`, `.mtf_alignment`, `.reasons`, `.signal_support`
-  (`supporting`, `opposing`, `unconfirmed`, `insufficient`);
-- `scorecard.signal_nudges`, and `scorecard.pillars.<p>.raw_score` when a nudge changed the score.
+- trend: `trend_momentum.sma.stack`, `.sma.close_vs`, `.sma.slopes`, `.from_52w_high.pct`;
+  `trend_momentum.sma.sma100` and `.sma.close_vs.sma100` as a reference line (e.g. "close +3.1% vs SMA100,
+  a widely watched reference line"): it is not part of `.sma.stack` (SMA20/50/200, `.sma.stack_periods`);
+- momentum: `trend_momentum.mom_12_1`, `.returns.1m/3m/6m/12m`, `.macd.hist`, `.macd.last_cross` (type, date);
+- relative strength: `relative_strength.vs_spy.rel_return_3m/6m`, `.rs_new_high` / `.rs_new_low`, the same
+  for `relative_strength.vs_sector` (stocks), `relative_strength.beta_1y`, `.corr_1y`;
+- mean reversion: `mean_reversion.rsi14`, `.rsi2`, `.z20`, `.bb_pct_b`, `.dist_sma50_atr`;
+- volume / flow: `volume_flow.rvol`, `.updown_volume_ratio_50d`, `.obv.divergence`, `.ad.divergence`;
+- volatility: `volatility.atr14`, `.atr_pct`, `.bb_width_pctl`, `.squeeze.on`, `.squeeze.bars`.
 
-**Layout:**
-1. Pillar table (Pillar | Score (-2..+2) | Weight | Reason). Use the reason text; translate it but keep
-   the numbers. Mark unavailable pillars "insufficient data" or "not applicable" with their reason.
-2. One line: "Weighted score {weighted_score:+.2f} → **{bias}**; confidence **{level}**", followed by
-   the confidence reasons as bullets. Only *confirmed* signals count for or against the bias: their
-   same-regime edge passes both scorecard thresholds (`meta.config_snapshot.signals.edge_min` on the median,
-   `.hit_edge_min` on the hit rate) in the signal's own direction. A signal with a normal or low sample that
-   fails this test is unconfirmed (`signal_support.unconfirmed`), even when section 7 shows an edge against
-   its own hypothesis; it counts neither for nor against.
-3. Supporting readings: a compact table of the most relevant raw values.
-   - `trend_momentum.mom_12_1`, `.returns.1m/3m/6m/12m`, `.sma.stack`, `.macd.hist`,
-     `.macd.last_cross` (type, date), `.from_52w_high.pct`;
-   - `trend_momentum.sma.sma100` and `.sma.close_vs.sma100`: the 100-day SMA as a reference line
-     (e.g. "close +3.1% vs SMA100, a widely watched reference line"). It is not part of `.sma.stack`
-     (SMA20/50/200, `.sma.stack_periods`) and no pillar or vote uses it;
-   - `relative_strength.vs_spy.rel_return_3m/6m`, `relative_strength.beta_1y`, `.corr_1y`;
-   - `mean_reversion.rsi14`, `.rsi2`, `.z20`, `.bb_pct_b`, `.dist_sma50_atr`;
-   - `volume_flow.rvol`, `.updown_volume_ratio_50d`, `.obv.divergence`, `.ad.divergence`;
-   - `volatility.atr14`, `.atr_pct`, `.bb_width_pctl`, `.squeeze.on`, `.squeeze.bars`.
-
-   Skip null values with "n/a (reason)".
+**Layout:** a table (Dimension | Readings | Plain reading), one row per dimension above in that order. The
+plain reading describes the numbers in words ("price above all three trend SMAs, stacked 20>50>200";
+"RSI14 72, overbought"). Skip null values with "n/a (reason)". No score, rating or overall verdict: do not
+add the rows up, rank them or turn them into a bullish / bearish call.
 
 ### 5. Conflicts (冲突项)
-**Fields:** each item of `scorecard.conflicts`: `type`, `description`, `typical_meaning`.
+**Fields:** each item of `conflicts.items`: `type`, `description`, `typical_meaning`.
 
 **Layout:** one bullet per conflict, "**{description}** — {typical_meaning}". If the list is empty,
-write "No conflicts were flagged." Conflicts are listed only: they change no score, bias or confidence.
+write "No conflicts were flagged." Conflicts are listed only.
 
 Do not invent conflicts, and do not drop any.
 
@@ -222,7 +210,7 @@ line. Never say a zone "should hold", "is strong support" or "is likely to cap t
 ### 7. Signal statistics (信号统计)
 **Fields:**
 - `signals.active[*]`: `name`, `id`, `bias`, `fired_date`, `bars_ago`, `regime_used`, `confidence`,
-  `scorable`, `rule`;
+  `rule`;
 - at the primary horizon `h = signals.primary_horizon`: `signals.active[*].horizons["h"]` with `n`,
   `hit_rate`, `median`, `p25`, `p75`, `median_mae`, `same_regime.median`, `same_regime.hit_rate`,
   `unconditional.median`, `edge.median`, `edge.hit_rate`;
@@ -230,17 +218,19 @@ line. Never say a zone "should hold", "is strong support" or "is likely to cap t
 
 **Layout:**
 1. A table at the primary horizon: Signal (bias ▲/▼) | Fired | Regime used | n | Hit rate | Median |
-   p25-p75 | Median MAE | Same-regime median / hit | Edge (median / hit, pp) | Confidence.
+   p25-p75 | Median MAE | Same-regime median / hit | Edge (median / hit, pp) | Sample (`confidence`).
    Median MAE is measured against the signal's bias (`signals.active[*].mae_basis`): for a bullish
    signal it is the lowest low after entry (negative = adverse), for a bearish one the highest high
    (positive = adverse). Say which in the table note.
 2. Optionally, the other horizons in one line each.
-3. One sentence per scorable signal, in this form: "Historically, in {n} de-clustered cases since
+3. One sentence per signal with a normal or low sample, in this form: "Historically, in {n} de-clustered cases since
    {history.first_date} when {plain description of the rule} {in regime_used}, the median {h}-day
    forward return was {median} (hit rate {hit_rate}) versus {same_regime.median} ({same_regime.hit_rate})
-   for all comparable days: an edge of {edge.median} / {edge.hit_rate} pp."
+   for all comparable days: an edge of {edge.median} / {edge.hit_rate} pp." Say whether the edge passes
+   both thresholds (`meta.config_snapshot.signals.edge_min` on the median, `.hit_edge_min` on the hit rate)
+   in the rule's own direction; do not combine signals into an overall call.
 4. Insufficient-n signals: "{name} fired {bars_ago} bar(s) ago, but only {n} past cases exist: too few
-   to be evidence; not used in the scorecard."
+   to be evidence."
 
 **No active signals:** write "No rule from the pre-registered library (references/signals.md) fired in
 the last 3 bars."
@@ -249,8 +239,7 @@ the last 3 bars."
 single stock, in-sample, no costs or slippage, and history depth.
 
 ### 8. Price action and candlestick patterns (价格行为与 K 线形态)
-These two libraries are context next to the scorecard, not part of it (`references/patterns.md`). Say
-so once.
+These two libraries are context (`references/patterns.md`). Say so once.
 
 **Fields:**
 - `price_action.state.label`, `.since`, `.bars`; `price_action.always_in.direction`, `.since`;
@@ -274,7 +263,7 @@ so once.
    sentence form as section 7, at the primary horizon. None active: "No price-action setup or
    candlestick pattern fired in the last 3 bars."
 4. **Library record:** one sentence per library. Its edges are against all days (`base_median`,
-   `base_hit_rate`), not the same-regime baseline of the active rows; say so once. Use the scorecard's test
+   `base_hit_rate`), not the same-regime baseline of the active rows; say so once. Use the edge test
    (`meta.config_snapshot.signals.edge_min` on `edge_median`, `.hit_edge_min` on `edge_hit_rate`): name,
    with n and both edges, the rules with normal or low confidence whose edges pass both thresholds in the
    rule's own direction (they supported their hypothesis), then those that pass both in the other direction
@@ -288,7 +277,7 @@ H2, 楔形, 假突破, 等距目标位.
 
 ### 9. Event risk (事件风险)
 Scheduled events: earnings (stocks only), the next ex-dividend date and US macro releases. They are
-context next to the scorecard and never change a score, the bias or the confidence; say so once. Earnings
+context; say so once. Earnings
 inside the horizon is also listed among the conflicts (section 5): call it a conflict listed there, never a
 signal (in Chinese 冲突项, not 信号), here and in the reply.
 
@@ -364,12 +353,12 @@ apply. A restricted or missing endpoint: give that part's reason (`event_risk.re
   `.range_low`, `.range_high`, `.earnings_caveat`;
 - the calibrated 95% band: `scenarios.base.band_95_k`, `.expected_move_95_pct`, `.range_95_low`,
   `.range_95_high`, and `.coverage.within_1sd`, `.within_2sd`, `.within_95_band`, `.horizon_days`;
-- `scenarios.horizon_days`, `scenarios.leaning`, `scenarios.notes`.
+- `scenarios.horizon_days`, `scenarios.notes`.
 
 **Layout:** a table (Scenario | Trigger | Target zones | Invalidation), with rows Bull, Bear, Base 1σ and
 Base 95% (±`band_95_k`σ). Below it, the scenario `text`s (translated), the base-case text and the earnings
-caveat. Projection targets must be called "projections (no level beyond the trigger)". Mention `leaning`
-as "the scorecard bias leans toward the {bull|bear} scenario", not as a forecast.
+caveat. Projection targets must be called "projections (no level beyond the trigger)". Present the bull
+and bear scenarios side by side; never say which one is more likely or favoured.
 
 **Bands:** the 95% band is ±`band_95_k`σ (about 2.4σ), not ±2σ: fat tails mean ±2σ held only
 `coverage.within_2sd` of closes in calibration. Never call ±2σ a 95% range. Give each band's coverage
@@ -466,20 +455,20 @@ technical analysis for information only, not investment advice.* Chinese: *仅�
 | Volatility | normal (rv20 25.2%, 72nd percentile) | 20-80th percentile → normal |
 | Weekly | uptrend, confirms the daily | close > 10w > 40w |
 
-In a trend regime the scorecard weights trend, momentum and relative strength most (trend weights).
+In a trend regime, read trend, momentum and relative strength first.
 
-## 4. Scorecard
-| Pillar | Score | Weight | Reason |
-|---|---|---|---|
-| Trend | +2 | 25% | close above SMA50 (+15.0%) … net +4 of 4 votes |
-| … | | | |
-
-Weighted score +1.25 → **Bullish**; confidence **high**
-- pillar agreement 0.85 …
+## 4. Readings
+| Dimension | Readings | Plain reading |
+|---|---|---|
+| Trend | close +15.0% vs SMA50, +32.7% vs SMA200; stack 20>50>200 | above all three trend SMAs, stacked bullishly |
+| Mean reversion | RSI14 75.2, RSI2 96.1, z20 +2.4 | overbought and stretched above the 20-day mean |
+| … | | |
 
 ## 5. Conflicts
-- **trend +2 vs mean_reversion -2** — Overbought in an uptrend: this often resolves by sideways
-  consolidation or a shallow pullback rather than a reversal.
+- **outperforming SPY over 3m (+40.2%) and 6m (+64.0%) while SPY is below its 200-day SMA (-17.2%)** —
+  Leadership against a risk-off tape: relative strength in a weak market can mark future leaders, but in
+  broad selloffs strong names are often sold late.
+- …
 
 ## 6. Key levels
 Reference only: zones where price traded or turned before, not a forecast of where it will turn next.
@@ -497,32 +486,32 @@ POC 3,540.12; value area 3,402.55-3,781.20 (daily-bar approximation, last 126 ba
 filled).
 
 ## 7. Signal statistics
-| Signal | Fired | Regime | n | Hit | Median | Same-regime | Edge | Confidence |
+| Signal | Fired | Regime | n | Hit | Median | Same-regime | Edge | Sample |
 |---|---|---|---|---|---|---|---|---|
 | ▲ New 52-week closing high | 1 bar ago | above 200 SMA | 107 | 55% | +0.8% | +0.4% / 53% | +0.4% / +2 pp | normal |
 
 Historically, in 107 de-clustered cases since 1996-10-01 when ACME made a new 52-week closing high,
 the median 10-day forward return was +0.8% (hit rate 55%), versus +0.4% (53%) for all days above the
-200-day SMA: an edge of +0.4% / +2 pp, below the scorecard's thresholds.
+200-day SMA: an edge of +0.4% / +2 pp, below both edge thresholds.
 - Caveats: single stock, in-sample, no costs or slippage, history since 1996-10-01.
 
 ## 8. Price action and candlestick patterns
-Context only, not part of the scorecard (daily-bar approximation of Al Brooks' methods). The market
+Context only (daily-bar approximation of Al Brooks' methods). The market
 has been in a tight bull channel since 2026-10-09 (6 bars), always-in long since 2026-09-30; the close
 sits 1.4 ATR above the rising 20 EMA. The last H2 was 4 bars ago. Unreached measured-move zone:
 4,701.20 (+3.1%, +1.4 ATR). Recent candlestick patterns: shooting star 2 bars ago.
 
-| Setup / pattern | Fired | Regime | n | Hit | Median | Same-regime | Edge | Confidence |
+| Setup / pattern | Fired | Regime | n | Hit | Median | Same-regime | Edge | Sample |
 |---|---|---|---|---|---|---|---|---|
 | ▼ Shooting star | 2 bars ago | above 200 SMA | 96 | 54% | +1.0% | +0.9% / 55% | +0.1% / −1 pp | normal |
 
 Library record at 10 days, against all days (not the same-regime baseline): H2 pullbacks near the rising
-EMA (n = 74, +0.6% / +6 pp) passed both scorecard thresholds in their own direction; none went against
+EMA (n = 74, +0.6% / +6 pp) passed both edge thresholds in their own direction; none went against
 its hypothesis, and the other 7 price-action rules show no edge beyond both thresholds. No candlestick
 pattern passed both thresholds either way.
 
 ## 9. Event risk
-Scheduled events are context only, not part of the scorecard.
+Scheduled events are context only.
 - Earnings on 2026-10-29 (13 calendar days, 9 trading days) fall inside the 10-day horizon. The median
   absolute two-day reaction over the last 12 reports was 1.6%.
 - Ex-dividend on 2026-10-26 (6 trading days, inside the horizon): the price is expected to open lower by

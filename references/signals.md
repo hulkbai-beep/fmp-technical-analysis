@@ -24,22 +24,22 @@ report.
 
 ## The rules
 
-| # | id | Name | Rule (as coded) | Regime filter | Bias | Pillar |
-|---|----|------|-----------------|---------------|------|--------|
-| 1 | `uptrend_pullback` | Uptrend pullback | `close > sma200 and rsi2 < 10` | above_200 | +1 | mean_reversion |
-| 2 | `downtrend_oversold` | Downtrend oversold | `close < sma200 and rsi14 < 30` | below_200 | +1 | mean_reversion |
-| 3 | `breakout_55d` | 55-day closing-high breakout on volume | `close > hh55_prev (highest close of the previous 55 bars) and rvol50 >= 1.5` | current_side | +1 | momentum |
-| 4 | `new_52w_high` | New 52-week closing high | `close > hh252_prev (highest close of the previous 252 bars) and sma200 is defined` | above_200 | +1 | momentum |
-| 5 | `squeeze_release_up` | Squeeze release up | `squeeze_on[t-1] and not squeeze_on[t] and squeeze_bars[t-1] >= 5 and close > sma20` | current_side | +1 | volatility_setup |
-| 5 | `squeeze_release_down` | Squeeze release down | `squeeze_on[t-1] and not squeeze_on[t] and squeeze_bars[t-1] >= 5 and close <= sma20` | current_side | -1 | volatility_setup |
-| 6 | `golden_cross` | Golden cross (50/200 SMA) | `sma50[t-1] <= sma200[t-1] and sma50[t] > sma200[t]` | current_side | +1 | trend |
-| 6 | `death_cross` | Death cross (50/200 SMA) | `sma50[t-1] >= sma200[t-1] and sma50[t] < sma200[t]` | current_side | -1 | trend |
-| 7 | `pullback_rising_50` | Pullback to a rising 50 SMA | `sma50 > sma200 and sma50 > sma50[t-20] and abs(close - sma50) <= 1 x atr14` | current_side | +1 | trend |
-| 8 | `extension_2sigma` | Extension > 2 sigma above the 20-day mean | `z20 > 2` | current_side | -1 | mean_reversion |
-| 9 | `gap_up_atr` | Gap up > 1 ATR on volume | `open - close[t-1] > 1 x atr14[t-1] and rvol50 >= 2` | current_side | +1 | volume_flow |
-| 9 | `gap_down_atr` | Gap down > 1 ATR on volume | `(close[t-1] - dividend[t]) - open > 1 x atr14[t-1] and rvol50 >= 2` | current_side | -1 | volume_flow |
-| 10 | `macd_bull_cross_below_zero` | MACD bullish cross below zero | `macd[t-1] <= macd_signal[t-1] and macd[t] > macd_signal[t] and macd[t] < 0 (bar index >= 35)` | current_side | +1 | momentum |
-| 10 | `macd_bear_cross_above_zero` | MACD bearish cross above zero | `macd[t-1] >= macd_signal[t-1] and macd[t] < macd_signal[t] and macd[t] > 0 (bar index >= 35)` | current_side | -1 | momentum |
+| # | id | Name | Rule (as coded) | Regime filter | Bias |
+|---|----|------|-----------------|---------------|------|
+| 1 | `uptrend_pullback` | Uptrend pullback | `close > sma200 and rsi2 < 10` | above_200 | +1 |
+| 2 | `downtrend_oversold` | Downtrend oversold | `close < sma200 and rsi14 < 30` | below_200 | +1 |
+| 3 | `breakout_55d` | 55-day closing-high breakout on volume | `close > hh55_prev (highest close of the previous 55 bars) and rvol50 >= 1.5` | current_side | +1 |
+| 4 | `new_52w_high` | New 52-week closing high | `close > hh252_prev (highest close of the previous 252 bars) and sma200 is defined` | above_200 | +1 |
+| 5 | `squeeze_release_up` | Squeeze release up | `squeeze_on[t-1] and not squeeze_on[t] and squeeze_bars[t-1] >= 5 and close > sma20` | current_side | +1 |
+| 5 | `squeeze_release_down` | Squeeze release down | `squeeze_on[t-1] and not squeeze_on[t] and squeeze_bars[t-1] >= 5 and close <= sma20` | current_side | -1 |
+| 6 | `golden_cross` | Golden cross (50/200 SMA) | `sma50[t-1] <= sma200[t-1] and sma50[t] > sma200[t]` | current_side | +1 |
+| 6 | `death_cross` | Death cross (50/200 SMA) | `sma50[t-1] >= sma200[t-1] and sma50[t] < sma200[t]` | current_side | -1 |
+| 7 | `pullback_rising_50` | Pullback to a rising 50 SMA | `sma50 > sma200 and sma50 > sma50[t-20] and abs(close - sma50) <= 1 x atr14` | current_side | +1 |
+| 8 | `extension_2sigma` | Extension > 2 sigma above the 20-day mean | `z20 > 2` | current_side | -1 |
+| 9 | `gap_up_atr` | Gap up > 1 ATR on volume | `open - close[t-1] > 1 x atr14[t-1] and rvol50 >= 2` | current_side | +1 |
+| 9 | `gap_down_atr` | Gap down > 1 ATR on volume | `(close[t-1] - dividend[t]) - open > 1 x atr14[t-1] and rvol50 >= 2` | current_side | -1 |
+| 10 | `macd_bull_cross_below_zero` | MACD bullish cross below zero | `macd[t-1] <= macd_signal[t-1] and macd[t] > macd_signal[t] and macd[t] < 0 (bar index >= 35)` | current_side | +1 |
+| 10 | `macd_bear_cross_above_zero` | MACD bearish cross above zero | `macd[t-1] >= macd_signal[t-1] and macd[t] < macd_signal[t] and macd[t] > 0 (bar index >= 35)` | current_side | -1 |
 
 `[t-k]` means the value k bars earlier; no index means bar t. **Bias** is the pre-registered hypothesis
 (+1: forward returns should beat the baseline, -1: they should lag it). It is a hypothesis to test,
@@ -95,7 +95,7 @@ the dividend data could not be loaded.
 
 The horizons are those of the chosen mode (`config.HORIZONS[mode]["stat_horizons"]`): swing 5/10/20
 trading days, position 20/60. The primary horizon (swing 10, position 60) carries the confidence label
-and is the one the scorecard uses.
+and the `confirmed` edge test.
 
 1. **Events**: the days t on which the rule fired, restricted to the signal's regime mask (below).
 2. **Outcome available**: only events with t+h inside the data count. Fires in the last h bars,
@@ -139,14 +139,15 @@ A bearish signal supports its hypothesis when its median and hit rate sit **belo
 
 | n (de-clustered events at the horizon) | Label | Use |
 |----------------------------------------|-------|-----|
-| n >= 30 (`CONFIDENCE_N_NORMAL`) | normal | reported and scored |
-| 15 <= n < 30 (`CONFIDENCE_N_LOW`) | low | reported and scored, flagged as low confidence |
-| n < 15 | insufficient | reported for transparency, excluded from scoring (`scorable: false`) |
+| n >= 30 (`CONFIDENCE_N_NORMAL`) | normal | reported as evidence |
+| 15 <= n < 30 (`CONFIDENCE_N_LOW`) | low | reported as evidence, flagged as a small sample |
+| n < 15 | insufficient | reported for transparency only: too few cases to be evidence |
 
-The signal's `confidence` is the label at the primary horizon. Only active signals with normal or low
-confidence can nudge their pillar in the scorecard, and only when their same-regime edge at the primary
-horizon clears `SIGNAL_EDGE_MIN` (median) and `SIGNAL_HIT_EDGE_MIN` (hit rate); the exact rule is in
-methodology.md.
+The signal's `confidence` is the sample-size label at the primary horizon; it says nothing about
+direction and is not a score. A signal counts as **confirmed** (the contract's `confirmed`) when its label
+is normal or low and its same-regime edge at the primary horizon clears `SIGNAL_EDGE_MIN` (median) and
+`SIGNAL_HIT_EDGE_MIN` (hit rate) in its own direction. Confirmed only means the stock's own history backs
+the rule; nothing is added up or weighted.
 
 ## Active signals
 
@@ -157,8 +158,8 @@ its total number of (raw, not de-clustered) fire days, for transparency.
 
 ## Output (`metrics.json` -> `signals`)
 
-- `active`: list of `{id, family, name, bias, pillar, rule, fired_date, bars_ago, regime_used,
-  horizons, confidence, scorable}`; `horizons[h]` holds the signal statistics above plus
+- `active`: list of `{id, family, name, bias, rule, fired_date, bars_ago, regime_used,
+  horizons, confidence}`; `horizons[h]` holds the signal statistics above plus
   `unconditional`, `same_regime` and `edge`.
 - `inactive_ids`, `library` (`{id, name, last_fired, fires_total}`), `primary_horizon`,
   `stat_horizons`, `history {first_date, last_date, bars, adj_coverage}`, `definitions` (including

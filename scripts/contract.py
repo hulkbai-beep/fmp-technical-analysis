@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-The ta-2.1 contract: a small, versioned summary of one stock's swing and position runs for other tools.
+The ta-3.0 contract: a small, versioned summary of one stock's swing and position runs for other tools.
 
 metrics.json is internal and may change between versions. The contract is the public interface: within a major
 version fields are only ever added, and renaming or removing one means a new major version (ta-3.0). It selects and
-normalises facts and judges nothing (no "buy", no target of its own). contracts/ta-2.1.schema.json describes every
+normalises facts and judges nothing (no "buy", no target of its own). contracts/ta-3.0.schema.json describes every
 field; tests/test_contract.py checks both.
 
 Blocks that do not depend on the horizon (data quality, market, event, dividend, macro, volatility, extension,
-trend, regime, RS, flow, weekly, price-action context) sit at the top; what does (scorecard, levels, scenarios,
+trend, regime, RS, flow, weekly, price-action context) sit at the top; what does (conflicts, levels, scenarios,
 stops, earnings, the ex-dividend date and macro events inside the horizon, signal and pattern statistics) sits
 under horizons.swing and horizons.position.
 
@@ -27,13 +27,15 @@ import sys
 from pathlib import Path
 
 import config as C
-import scorecard as SC
+import scenarios as SC
 
-CONTRACT = "ta-2.1"   # 1.1 adds event.last_earnings*, targets' kind; 1.2 levels_note, range_95, vol stops;
+CONTRACT = "ta-3.0"   # 1.1 adds event.last_earnings*, targets' kind; 1.2 levels_note, range_95, vol stops;
 #                       2.0 removes event.eps_estimated (no fundamentals); 2.x only add fields:
 #                       2.1 data_quality.calendar_source, dividend, macro, horizons.*.ex_dividend_within_horizon /
 #                       macro_within_horizon / macro_complete (session counts exclude NYSE holidays),
-#                       trend.sma100 (a context line, not part of the stack; slopes / close_vs carry it too)
+#                       trend.sma100 (a context line, not part of the stack; slopes / close_vs carry it too);
+#                       3.0 removes every score: horizons.*.bias, .pillars, .weights_used, the signals' / patterns'
+#                       pillar and context_only.scored (the scorecard is gone; conflicts stay)
 HORIZONS = ("swing", "position")
 MACRO_EVENT_KEYS = ("id", "label", "tier", "date", "time_ny", "timing", "session", "trading_days_to")
 MACRO_BRIEF_KEYS = ("id", "label", "tier", "date", "time_ny", "timing", "trading_days_to")
@@ -262,10 +264,9 @@ def _weekly(mtf):
 
 
 def _context(pa, cs):
-    """Price-action state and recent candlesticks: context next to the scorecard, never part of it."""
+    """Price-action state and recent candlesticks: context."""
     st, ai = _get(pa, "state") or {}, _get(pa, "always_in") or {}
-    return {"scored": False,
-            "pa_state": st.get("label"), "pa_state_since": st.get("since"),
+    return {"pa_state": st.get("label"), "pa_state_since": st.get("since"),
             "always_in": ai.get("direction"), "always_in_since": ai.get("since"),
             "last_failed_breakout": _pick(_get(pa, "last_failed_breakout"), ("side", "date", "level", "bars_ago")),
             "measured_moves": [_pick(x, ("side", "target", "reached", "distance_pct")) for x in _get(pa, "measured_moves") or []],
@@ -311,15 +312,15 @@ def _stops(side):
 
 
 def _evidence(entries, primary, source=None):
-    """Active signals or patterns with their statistics at the primary horizon. confirmed is the scorecard's
-    own test: a sample-backed edge over the same-regime baseline in the signal's direction."""
+    """Active signals or patterns with their statistics at the primary horizon. confirmed is the edge
+    test: a sample-backed edge over the same-regime baseline in the signal's direction."""
     out = []
     for e in entries or []:
         if not isinstance(e, dict):
             continue
         v = SC._signal_view(e, primary)
         hs = SC._horizon_stats(e, primary)
-        row = {"id": e.get("id"), "name": e.get("name"), "bias": v["bias"], "pillar": v["pillar"],
+        row = {"id": e.get("id"), "name": e.get("name"), "bias": v["bias"],
                "fired_date": e.get("fired_date"), "bars_ago": e.get("bars_ago"), "n": v["n"],
                "confidence": v["confidence"], "hit_rate": _num(hs.get("hit_rate")), "median": _num(hs.get("median")),
                "same_regime_median": _num(_get(hs, "same_regime", "median")),
@@ -331,29 +332,19 @@ def _evidence(entries, primary, source=None):
 
 
 def _horizon(m):
-    sc, lv, sn, rk = _mod(m, "scorecard"), _mod(m, "levels"), _mod(m, "scenarios"), _mod(m, "risk")
+    cf, lv, sn, rk = _mod(m, "conflicts"), _mod(m, "levels"), _mod(m, "scenarios"), _mod(m, "risk")
     sig, pa, cs, er = m.get("signals") or {}, m.get("price_action") or {}, m.get("candlesticks") or {}, _mod(m, "event_risk")
     dv, me = _mod(m, "dividends"), _mod(m, "macro_events")
     macro_in = None if not me or me.get("within_horizon") is None else \
         [_pick(e, MACRO_BRIEF_KEYS) for e in me["within_horizon"] if _contract_tier(e)]
-    primary = int(_num(sig.get("primary_horizon")) or _num(_get(sc, "primary_horizon")) or 0)
+    primary = int(_num(sig.get("primary_horizon")) or _num(_get(cf, "primary_horizon")) or 0)
     supports = [_zone(z) for z in _get(lv, "supports") or []]
     resistances = [_zone(z) for z in _get(lv, "resistances") or []]
-    conf = _get(sc, "confidence") or {}
     base = _get(sn, "base") or {}
     return {
         "horizon_days": primary or None,
         "stat_horizons": sig.get("stat_horizons"),
-        "bias": None if not sc else {
-            "score": _num(sc.get("weighted_score")), "label": sc.get("bias"), "sign": sc.get("bias_sign"),
-            "bias_confidence": conf.get("level"), "agreement": _num(conf.get("agreement")),
-            "mtf_alignment": conf.get("mtf_alignment"),
-            "signal_support": _pick(conf.get("signal_support"), ("supporting", "opposing", "insufficient", "unconfirmed"))},
-        "pillars": None if not sc else {k: {"score": p.get("score"), "available": bool(p.get("available")),
-                                            "weight": _num((sc.get("weights") or {}).get(k))}
-                                        for k, p in (sc.get("pillars") or {}).items()},
-        "weights_used": _get(sc, "weight_basis", "weights_used"),
-        "conflicts": [_pick(c, ("type", "key", "involved", "description", "typical_meaning")) for c in _get(sc, "conflicts") or []],
+        "conflicts": [_pick(c, ("type", "key", "involved", "description", "typical_meaning")) for c in _get(cf, "items") or []],
         "price_location": price_location(_num(_get(lv, "last_close")), supports, resistances),
         "supports": supports,
         "resistances": resistances,

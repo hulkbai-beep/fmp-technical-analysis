@@ -55,7 +55,7 @@ def test_library_matches_contract():
     for s in S.SIGNALS:
         assert s["bias"] in (-1, 1)
         assert s["regime"] in ("above_200", "below_200", "current_side")
-        assert s["pillar"] in C.PILLARS
+        assert "pillar" not in s
         assert 1 <= s["family"] <= 10 and s["rule"]
 
 
@@ -370,7 +370,7 @@ def test_insufficient_and_empty_samples():
     a = out["active"][0]
     assert set(a["horizons"]) == {5, 10, 20}
     assert a["horizons"][10]["n"] == 4
-    assert a["confidence"] == "insufficient" and a["scorable"] is False
+    assert a["confidence"] == "insufficient" and "scorable" not in a
 
     bars, ind = neutral()
     put(bars, range(N), close=101.0)
