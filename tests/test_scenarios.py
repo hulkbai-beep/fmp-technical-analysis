@@ -169,6 +169,34 @@ def test_scenarios_with_levels():
     assert bear["text"].startswith("If TEST closes below 95.00 (bottom of the nearest support zone: pivot_low, poc)")
 
 
+def test_scenarios_trigger_on_the_zone_the_close_is_in():
+    # the close (100) is inside a zone 99-101.5: the triggers are a close out of it, not through the next zones
+    m = modules_for(1)
+    m["levels"] = {**LEVELS, "current_zone": {"price": 100.4, "zone_low": 99.0, "zone_high": 101.5,
+                                              "sources": ["sma50", "poc"], "close_position": 0.4}}
+    sc = S.build_scenarios(ctx_for(), m)
+    bull, bear = sc["bull"], sc["bear"]
+    assert bull["trigger"]["level"] == 101.5 and bull["trigger"]["distance_atr"] == pytest.approx(0.75)
+    assert bull["trigger"]["basis"] == "top of the zone the close is in: sma50, poc"
+    assert bull["invalidation"]["level"] == 99.0                 # the zone's bottom beats trigger - 0.5 ATR (100.5)
+    assert [t["price"] for t in bull["targets"]] == [110.0, 116.0]      # every resistance lies beyond the trigger
+    assert bear["trigger"]["level"] == 99.0 and bear["trigger"]["basis"] == "bottom of the zone the close is in: sma50, poc"
+    assert bear["invalidation"]["level"] == 101.5
+    assert [t["price"] for t in bear["targets"]] == [96.0, 90.0]
+    assert bull["text"].startswith("If TEST closes above 101.50 (top of the zone the close is in: sma50, poc)")
+    # the structural stops go behind the same zone; the level targets stay the nearest zones on each side
+    risk = S.build_risk(ctx_for(), m, sc)
+    lg, sh = risk["long_side"], risk["short_side"]
+    assert lg["structural_stop"] == pytest.approx(98.0) and sh["structural_stop"] == pytest.approx(102.5)
+    assert lg["structural_stop_basis"] == "bottom of the zone the close is in - 0.5 ATR (reference only)"
+    assert sh["structural_stop_basis"] == "top of the zone the close is in + 0.5 ATR (reference only)"
+    assert (lg["structural_ref"]["zone_low"], lg["structural_ref"]["zone_high"]) == (99.0, 101.5)
+    assert lg["level_target"] == 110.0 and sh["level_target"] == 96.0
+    # without a current zone nothing changes
+    plain = {**m, "levels": {**LEVELS, "current_zone": None}}
+    assert S.build_scenarios(ctx_for(), plain) == S.build_scenarios(ctx_for(), modules_for(1))
+
+
 def test_base_case_expected_move():
     m = modules_for(1)
     base = S.build_scenarios(ctx_for(), m)["base"]

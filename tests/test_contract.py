@@ -1,4 +1,4 @@
-"""The ta-3.1 contract (scripts/contract.py, contracts/ta-3.1.schema.json) on a fake FMP (no network).
+"""The ta-3.2 contract (scripts/contract.py, contracts/ta-3.2.schema.json) on a fake FMP (no network).
 
 Every contract must match the schema, and its numbers must be the metrics' numbers. A small JSON Schema checker
 lives here so the tests need nothing beyond pandas, numpy and pytest.
@@ -36,6 +36,10 @@ def validate(inst, schema, root=SCHEMA, path="$"):
         errs.append(f"{path}: {inst!r} is not {schema['const']!r}")
     if "enum" in schema and inst not in schema["enum"]:
         errs.append(f"{path}: {inst!r} not in {schema['enum']}")
+    if "anyOf" in schema:
+        alts = [validate(inst, alt, root, path) for alt in schema["anyOf"]]
+        if all(alts):
+            errs += min(alts, key=len)
     if "type" in schema:
         types = schema["type"] if isinstance(schema["type"], list) else [schema["type"]]
         if not any(TYPES[t](inst) for t in types):
@@ -114,6 +118,12 @@ def test_numbers_are_the_metrics(stock):
         assert all("pillar" not in s for s in h["signals"] + h["patterns"])
         assert [(z["low"], z["high"]) for z in h["supports"]] == \
             [(z["zone_low"], z["zone_high"]) for z in m["levels"]["supports"]]
+        # 3.2: the zone the close is in (None when it is in none) and each zone's record since its last break
+        cz = m["levels"]["current_zone"]
+        assert (h["current_zone"] is None) == (cz is None)
+        assert (h["price_location"]["state"] == "inside_zone") == (cz is not None)
+        assert [(z["last_break"], z["holds_since_break"]) for z in h["supports"] + h["resistances"]] == \
+            [(z["last_break"], z["holds_since_break"]) for z in m["levels"]["supports"] + m["levels"]["resistances"]]
         assert h["levels_window"]["lookback_bars"] == m["levels"]["lookback_bars"]
         assert h["bull"]["trigger"] == m["scenarios"]["bull"]["trigger"]["level"]
         assert h["stops_ref"]["long"]["structural"] == m["risk"]["long_side"]["structural_stop"]
@@ -322,6 +332,32 @@ def test_price_location(close, state, zone):
     sup = [{"low": 98.0, "high": 100.0}, {"low": 95.0, "high": 96.0}]
     res = [{"low": 110.0, "high": 111.0}]
     assert contract.price_location(close, sup, res) == {"state": state, "zone": zone}
+
+
+def test_price_location_in_the_current_zone():
+    sup, res = [{"low": 95.0, "high": 96.0}], [{"low": 110.0, "high": 111.0}]
+    cur = {"low": 99.0, "high": 101.0}
+    assert contract.price_location(100.0, sup, res, cur) == {"state": "inside_zone", "zone": None}
+    assert contract.price_location(100.0, [], [], cur) == {"state": "inside_zone", "zone": None}
+    assert contract.price_location(100.0, sup, res, None) == {"state": "between", "zone": None}
+
+
+def test_current_zone_is_the_metrics_zone(stock):
+    swing, _, _ = stock
+    zone = {"price": 100.2, "zone_low": 99.0, "zone_high": 101.5, "score": 2.5, "touches": 3, "holds": 2, "breaks": 1,
+            "flips": 1, "fresh": False, "last_test": "2026-09-01", "last_break": "2026-06-01", "holds_since_break": 1,
+            "reaction_score": 1.5, "sources": ["pivot_low", "sma50"], "distance_pct": 0.002, "distance_atr": 0.1,
+            "close_position": 0.4}
+    m = {**swing, "levels": {**swing["levels"], "current_zone": zone}}
+    h = contract._horizon(m)
+    assert validate(h, SCHEMA["$defs"]["horizon"]) == []
+    cur = h["current_zone"]
+    assert (cur["low"], cur["high"], cur["close_position"]) == (99.0, 101.5, 0.4)
+    assert (cur["last_break"], cur["holds_since_break"], cur["sources"]) == ("2026-06-01", 1, ["pivot_low", "sma50"])
+    assert h["price_location"] == {"state": "inside_zone", "zone": None}
+    # a broken current zone is caught by the checker
+    assert validate({**h, "current_zone": {"low": 99.0}}, SCHEMA["$defs"]["horizon"])
+    assert validate({**h, "current_zone": None}, SCHEMA["$defs"]["horizon"]) == []
 
 
 def test_price_location_edges():

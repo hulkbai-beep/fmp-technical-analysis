@@ -169,7 +169,8 @@ Do not invent conflicts, and do not drop any.
 **Fields:**
 - resistances and supports: `levels.resistances[*]` and `levels.supports[*]`, each with `price`,
   `zone_low`, `zone_high`, `distance_pct`, `distance_atr`, `sources`, `touches` (earlier tests), `holds`,
-  `breaks`, `weak`, `flips`, `fresh`, `score`;
+  `breaks`, `weak`, `flips`, `fresh`, `last_break`, `holds_since_break`, `score`;
+- the zone the close is in: `levels.current_zone` (the same fields plus `close_position`), or `null`;
 - the last close and ATR: `levels.last_close`, `levels.atr`;
 - the window: `levels.lookback_bars`, `levels.window_start`;
 - volume profile: `levels.volume_profile.poc`, `.value_area_low`, `.value_area_high`;
@@ -184,9 +185,15 @@ Do not invent conflicts, and do not drop any.
 **Layout:**
 1. One table, top to bottom: R3, R2, R1, **Close**, S1, S2, S3. Columns: Level | Price | Zone | Distance
    (% / ATR) | Sources | Tests (`touches` = holds + breaks + weak, e.g. "8 (4 held, 1 of them a flip;
-   3 broken; 1 weak)"; leave out a part that is 0; "untested" when `fresh`). Under the table, one line: a
-   hold left on the side it came from and then traded 1 ATR beyond the zone within 10 bars, a break left on
-   the other side, a weak test did neither, and a flip is a hold right after a break.
+   3 broken; 1 weak)"; leave out a part that is 0; "untested" when `fresh`). When `last_break` is set, add
+   "last broken {last_break}, {holds_since_break} held since" to the Tests cell. Under the table, one line:
+   a hold left on the side it came from and then traded 1 ATR beyond the zone within 10 bars, a break left
+   on the other side, a weak test did neither, and a flip is a hold right after a break.
+   - **Current zone.** When `levels.current_zone` is not null, the close is inside a zone: put it in the
+     **Close** row's place as "Current zone (当前所在区间)" with its zone, sources and tests, and the close
+     with where it sits ("close 101.20, in the lower third" from `close_position`: 0 = bottom, 1 = top).
+     Call it neither support nor resistance: price is trading inside the area, and R1 and S1 are the next
+     zones beyond it. Its top and bottom are the scenario triggers (section 10).
 2. One line with the POC and value area, and one with the 52-week range. Say the close is at a 52-week or
    all-time high or low only when that `levels.extremes` flag is true (the all-time one when both are, with
    "available history"); a false flag needs no sentence.
@@ -200,7 +207,7 @@ Do not invent conflicts, and do not drop any.
 and `sma200` are the 50-, 100- and 200-day SMAs (low-weight moving-average candidates; write them SMA50,
 SMA100, SMA200). If a side has fewer than 3
 levels, quote the note (e.g. "price at an all-time high (available history): no resistance levels
-above the last close in the window"). Give the other `levels.notes` as short bullets (anchored VWAPs too
+above the last close in the window"; with a current zone it reads "... above the current zone ..."). Give the other `levels.notes` as short bullets (anchored VWAPs too
 young to be levels, gaps on ex-dividend bars that the dividend explains).
 
 **Reference only.** Head the section with `levels.evidence.note`, translated (Chinese: 仅供参考), in one

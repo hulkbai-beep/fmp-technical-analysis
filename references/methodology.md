@@ -476,14 +476,28 @@ crosscheck, contract and UI, not just a config entry.
     target falls back to the level target only when there is no volatility target, e.g. without rv20);
   - dated candidates (pivots, supply/demand zones, gaps) are also x 0.5 ^ (bars since / half-life),
     half-life = `LEVEL_HALF_LIFE` (0.5) x the window: 63 bars for swing, 252 for position.
-- **Zones** (`KDE_BANDWIDTH_ATR` = 0.25): candidates below and above the close are handled apart.
-  - Per side, each candidate adds its weight x a Gaussian kernel of width 0.25 ATR at its price (a
-    candidate with a zone spreads its weight across it).
+- **Zones** (`KDE_BANDWIDTH_ATR` = 0.25): one density over all candidates, on both sides of the close.
+  - Each candidate adds its weight x a Gaussian kernel of width 0.25 ATR at its price (a candidate with
+    a zone spreads its weight across it).
   - Every peak of that density is a zone: the prices around the peak where the density is at least
     half the peak (`ZONE_HALF_MAX`), not crossing the low point towards a neighbouring peak, clamped to
-    `ZONE_MIN_ATR` = 0.2 to `ZONE_MAX_ATR` = 1 ATR and to the close (supports end below it,
-    resistances start above it). A lone candidate gives a zone about 0.6 ATR wide.
+    `ZONE_MIN_ATR` = 0.2 to `ZONE_MAX_ATR` = 1.5 ATR. A lone candidate gives a zone about 0.6 ATR wide.
+  - **Merging** (`ZONE_MERGE_GAP_ATR` = 0.25): zones less than 0.25 ATR apart form a band. A band at
+    most 1.5 ATR wide is one zone, from its lowest edge to its highest. A wider band is cut where the
+    density between two of its zones is lowest and each part is treated the same way, so two touching
+    zones too wide to be one stay two. Support and resistance are areas, not lines (Murphy, *Technical
+    Analysis of the Financial Markets*, ch. 4; Edwards & Magee), so two bands a few cents apart are one
+    area and are reported as one.
   - Price = the weight-averaged member candidates inside the zone; `weight` = the members' total weight.
+- **Sides and the current zone** (`zone_side`):
+  - a zone wholly below the close is a support, one wholly above it a resistance;
+  - a zone the close is inside, at least `TEST_TOL_ATR` (0.1) ATR from both of its edges, is the
+    **current zone** (`levels.current_zone`): price is trading in that area, so it is neither support
+    nor resistance, and it is not cut in two at the close. It is listed like a level, with
+    `close_position` = where the close sits in it (0 at its bottom, 1 at its top). It must qualify like
+    any level (Selection below); `null` when the close is in no qualifying zone;
+  - with the close nearer an edge than 0.1 ATR, the zone still lies beyond the close: a resistance when
+    the close is at its bottom, a support when it is at its top.
 - **Tests** (`TEST_TOL_ATR` = 0.1, `REACTION_ATR` = 1, `REACTION_BARS` = 10), over the window:
   - a bar is above the zone when its low is more than 0.1 ATR above it, below it in the mirror case, and in
     it otherwise;
@@ -494,24 +508,34 @@ crosscheck, contract and UI, not just a config entry.
   - **flip** (role reversal): a hold right after a break;
   - tests still running at the last bar, holds that could still complete and a run at the window's
     first bar are left out;
+  - a wick through the zone is not a break: a break needs a whole bar beyond the far edge (its low more
+    than 0.1 ATR above the zone, or its high more than 0.1 ATR below it), which is stricter than a close
+    beyond it;
   - `touches` = tests = `holds` + `breaks` + `weak`; `flips` (counted among the holds), `fresh` = no test,
-    `last_test`.
+    `last_test`;
+  - `last_break` = the date of the most recent break (`null` if the zone never broke in the window) and
+    `holds_since_break` = the holds after it (every hold when it never broke): the zone's record in its
+    present role. A zone broken last month that has not held since is read differently from one that
+    has held three times since it flipped.
 - **Score:** recency x (`LEVEL_HOLD_POINTS` 1 per hold, plus `LEVEL_FLIP_POINTS` 0.5 per flip, minus
-  `LEVEL_BREAK_POINTS` 0.5 per break) summed over the tests, recency = 0.5 ^ (bars since the test /
-  half-life), + `LEVEL_CONFLUENCE_WEIGHT` (0.5) x `weight`. Scores are absolute, so they compare across
-  runs. `volume_share` (profile volume in the zone / total) is shown, not scored.
+  `LEVEL_BREAK_POINTS` 1 per break) summed over the tests, recency = 0.5 ^ (bars since the test /
+  half-life), + `LEVEL_CONFLUENCE_WEIGHT` (0.5) x `weight`. A break takes what a hold gives, so an area
+  price has crossed as often as it has turned at earns nothing from its tests and qualifies only on the
+  weight of the candidates in it. Scores are absolute, so they compare across runs. `volume_share`
+  (profile volume in the zone / total) is shown, not scored.
 - **Selection** (`LEVELS_PER_SIDE` = 3, `LEVEL_MIN_SCORE` = 1, `levels_reach_atr` = 4 ATR for swing, 8 for
   position):
   - zones scoring at least 1, or holding the 52-week high or low, qualify;
-  - per side: the nearest qualifying zone, then the highest-scoring other qualifying zones within reach
-    of the close; the nearest zones beyond reach fill any shortfall;
+  - per side (the current zone is on neither): the nearest qualifying zone, then the highest-scoring
+    other qualifying zones within reach of the close; the nearest zones beyond reach fill any shortfall;
   - listed nearest first, each with its score, `distance_pct` and `distance_atr` (negative below the close).
 - **Extremes** (`levels.extremes`, with its `rule`): the close is at the 52-week high when it is the highest
   close of the last 252 bars, the last bar included, or within `EXTREME_NEAR_ATR` (0.5) ATR of their highest
   high; at the all-time high the same over all available history. Lows mirror it. A record close that ends
   well below its own bar's high still counts (AAPL on 2026-11-04 closed 0.58 ATR below a record high).
 - **Short side:** if a side has fewer than 3 levels, a note says so, naming an all-time or 52-week
-  extreme when price is at one.
+  extreme when price is at one. With a current zone the note counts the levels beyond that zone
+  ("... above the current zone ...").
 - **Reference only:** `levels.evidence` = `{note}` (`LEVELS_EVIDENCE_NOTE`). The report, the chart and the
   contract (`levels_note`) carry the note. Read the zones as where price has traded or turned before, not
   as predictions.
@@ -717,8 +741,10 @@ The horizon h is `HORIZONS[mode].primary`: 10 trading days for swing, 60 for pos
 split-adjusted, and ATR is ATR(14).
 
 **Bull scenario.**
-- **Trigger:** a close above the top (`zone_high`) of the nearest resistance zone, on RVOL ≥
-  `TRIGGER_RVOL` (1.5). If there is no resistance zone:
+- **Trigger:** a close above the top (`zone_high`) of the zone the close is in (`levels.current_zone`)
+  or, when the close is in no zone, of the nearest resistance zone, on RVOL ≥ `TRIGGER_RVOL` (1.5). The
+  basis says which ("top of the zone the close is in" / "top of the nearest resistance zone"). If there
+  is neither:
   - the 52-week high, if it is above the close (labelled "all-time high (available history)" when it
     is the highest high in the data);
   - otherwise the close + `NO_LEVEL_TRIGGER_ATR` (1) ATR.
@@ -728,7 +754,9 @@ split-adjusted, and ATR is ATR(14).
 - **Invalidation:** a close back below min(trigger zone low, trigger - `INVALIDATION_MIN_ATR` (0.5)
   ATR). This defines a failed breakout.
 
-**Bear scenario.** The mirror image, built from supports.
+**Bear scenario.** The mirror image, built from the bottom of the current zone or from supports. Inside
+a zone the two scenarios share it: the bull trigger is its top and its bottom the bull invalidation
+(unless trigger - 0.5 ATR is lower), and the reverse for the bear case.
 
 **Base case.**
 - σ_h = `rv20` × √(h/252); 1σ move = close × σ_h. The output gives it in %, in price and in ATRs, plus the
@@ -773,7 +801,7 @@ targets come from the key levels, so `scenarios.notes` says they are reference o
 | Entry reference | last close |
 | Volatility stop (primary) | entry × (1 - `VOL_STOP_K` (2.4) × σ_h): the 95% band edge; none without rv20 or at or below zero |
 | ATR stop | entry - `STOP_ATR_MULT` (2) ATR |
-| Structural stop (reference) | nearest support `zone_low` - `STRUCTURE_STOP_BUFFER_ATR` (0.5) ATR; none if no support below |
+| Structural stop (reference) | `zone_low` of the zone the close is in, else of the nearest support, - `STRUCTURE_STOP_BUFFER_ATR` (0.5) ATR; none with neither |
 | Stop distance | in ATRs, % of entry and σ_h, for each stop |
 | Touch rate | for each stop and the first target: the calibrated share of paths that reached a price that many σ_h away within h days |
 | First target | entry × (1 + `VOL_TARGET_K` (1) × σ_h), the 1σ band edge; without rv20, the level target |

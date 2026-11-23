@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-The ta-3.1 contract: a small, versioned summary of one stock's swing and position runs for other tools.
+The ta-3.2 contract: a small, versioned summary of one stock's swing and position runs for other tools.
 
 metrics.json is internal and may change between versions. The contract is the public interface: within a major
 version fields are only ever added, and renaming or removing one means a new major version (ta-4.0). It selects and
-normalises facts and judges nothing (no "buy", no target of its own). contracts/ta-3.1.schema.json describes every
+normalises facts and judges nothing (no "buy", no target of its own). contracts/ta-3.2.schema.json describes every
 field; tests/test_contract.py checks both.
 
 Blocks that do not depend on the horizon (data quality, market, event, dividend, macro, volatility, extension,
@@ -29,14 +29,16 @@ from pathlib import Path
 import config as C
 import scenarios as SC
 
-CONTRACT = "ta-3.1"   # 1.1 adds event.last_earnings*, targets' kind; 1.2 levels_note, range_95, vol stops;
+CONTRACT = "ta-3.2"   # 1.1 adds event.last_earnings*, targets' kind; 1.2 levels_note, range_95, vol stops;
 #                       2.0 removes event.eps_estimated (no fundamentals); 2.x only add fields:
 #                       2.1 data_quality.calendar_source, dividend, macro, horizons.*.ex_dividend_within_horizon /
 #                       macro_within_horizon / macro_complete (session counts exclude NYSE holidays),
 #                       trend.sma100 (a context line, not part of the stack; slopes / close_vs carry it too);
 #                       3.0 removes every score: horizons.*.bias, .pillars, .weights_used, the signals' / patterns'
 #                       pillar and context_only.scored (the scorecard is gone; conflicts stay);
-#                       3.x only add fields: 3.1 volatility.squeeze_last_release
+#                       3.x only add fields: 3.1 volatility.squeeze_last_release; 3.2 horizons.*.current_zone
+#                       (the zone the close is in), the zones' last_break and holds_since_break, and the
+#                       price_location state "inside_zone"
 HORIZONS = ("swing", "position")
 MACRO_EVENT_KEYS = ("id", "label", "tier", "date", "time_ny", "timing", "session", "trading_days_to")
 MACRO_BRIEF_KEYS = ("id", "label", "tier", "date", "time_ny", "timing", "trading_days_to")
@@ -85,10 +87,14 @@ def regime_state(regime):
     return rtype if rtype in REGIME_STATES else None
 
 
-def price_location(close, supports, resistances):
-    """Where the last close sits against the zones: inside one (nearest first), between, or beyond all of them."""
-    if close is None or (not supports and not resistances):
+def price_location(close, supports, resistances, current=None):
+    """Where the last close sits against the zones: in the current zone (inside_zone), at the edge of a
+    support or resistance zone (inside_support / inside_resistance, nearest first), between, or beyond
+    all of them."""
+    if close is None or (not supports and not resistances and not current):
         return None
+    if current:
+        return {"state": "inside_zone", "zone": None}
     for side, zones in (("support", supports), ("resistance", resistances)):
         for i, z in enumerate(zones):
             if z["low"] is not None and z["high"] is not None and z["low"] <= close <= z["high"]:
@@ -281,6 +287,7 @@ def _zone(z):
     return {"price": _num(z.get("price")), "low": _num(z.get("zone_low")), "high": _num(z.get("zone_high")),
             "score": _num(z.get("score")), "touches": z.get("touches"), "holds": z.get("holds"), "breaks": z.get("breaks"),
             "flips": z.get("flips"), "fresh": z.get("fresh"), "last_test": z.get("last_test"),
+            "last_break": z.get("last_break"), "holds_since_break": z.get("holds_since_break"),
             "reaction_score": _num(z.get("reaction_score")), "sources": list(z.get("sources") or []),
             "distance_pct": _num(z.get("distance_pct")), "distance_atr": _num(z.get("distance_atr"))}
 
@@ -343,12 +350,15 @@ def _horizon(m):
     primary = int(_num(sig.get("primary_horizon")) or _num(_get(cf, "primary_horizon")) or 0)
     supports = [_zone(z) for z in _get(lv, "supports") or []]
     resistances = [_zone(z) for z in _get(lv, "resistances") or []]
+    cz = _get(lv, "current_zone")
+    current = None if not cz else {**_zone(cz), "close_position": _num(cz.get("close_position"))}
     base = _get(sn, "base") or {}
     return {
         "horizon_days": primary or None,
         "stat_horizons": sig.get("stat_horizons"),
         "conflicts": [_pick(c, ("type", "key", "involved", "description", "typical_meaning")) for c in _get(cf, "items") or []],
-        "price_location": price_location(_num(_get(lv, "last_close")), supports, resistances),
+        "price_location": price_location(_num(_get(lv, "last_close")), supports, resistances, current),
+        "current_zone": current,
         "supports": supports,
         "resistances": resistances,
         "levels_window": None if not lv else _pick(lv, ("lookback_bars", "window_start", "window_end")),
