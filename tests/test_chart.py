@@ -161,6 +161,31 @@ def test_summary_panels_follow_the_module_outputs():
     assert len(d["data_notes"]["approximations"]) == 2
 
 
+def test_the_zone_the_close_is_in_reaches_the_chart_in_its_own_colour(monkeypatch):
+    _, plain = _data()
+    assert plain["levels"]["current_zone"] is None
+    real = chart.build_chart_data
+
+    def with_zone(ctx, m):
+        close = float(ctx["bars"]["close"].iloc[-1])
+        zone = {"price": close * 1.002, "zone_low": close * 0.99, "zone_high": close * 1.02, "sources": ["sma50", "poc"],
+                "touches": 4, "holds": 2, "breaks": 1, "last_break": "2025-03-03", "holds_since_break": 1,
+                "score": 2.0, "close_position": 1 / 3, "distance_pct": 0.002, "distance_atr": 0.1, "extra": "dropped"}
+        return real(ctx, {**m, "levels": {**m["levels"], "current_zone": zone}})
+
+    monkeypatch.setattr(chart, "build_chart_data", with_zone)
+    _, d = _data()
+    cur = d["levels"]["current_zone"]
+    assert set(cur) == set(chart.LEVEL_KEYS) | {"close_position"}
+    assert (cur["last_break"], cur["holds_since_break"], cur["sources"]) == ("2025-03-03", 1, ["sma50", "poc"])
+    css = (UI / "chart.css").read_text(encoding="utf-8")
+    blocks = [b for b in re.findall(r"\{([^{}]*)\}", css) if "--up-zone:" in b]
+    assert len(blocks) == 3 and all("--mid:" in b and "--mid-zone:" in b and "--mid-edge:" in b for b in blocks)
+    js, i18n = (UI / "chart.js").read_text(encoding="utf-8"), (UI / "i18n.js").read_text(encoding="utf-8")
+    assert 'z: ["current", "--mid"]' in js and "lv.current_zone" in js
+    assert i18n.count("lg_current:") == 2 and i18n.count("since_break:") == 2      # zh and en
+
+
 def test_weekly_candles_follow_the_exchange_calendar():
     import market_calendar as MC
     bars = synthetic_bars(n=600, seed=3).loc[:"2022-04-14"]          # the Thursday before Good Friday 2022

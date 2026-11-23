@@ -184,7 +184,7 @@
 
   function levelsHtml(d) {
     const lv = d.levels || {};
-    if (!lv.available || !(lv.supports.length + lv.resistances.length)) {
+    if (!lv.available || !(lv.supports.length + lv.resistances.length + (lv.current_zone ? 1 : 0))) {
       return card(t("t_levels"), `<p class="ta-small">${esc(t("lv_none"))}${lv.reason ? " " + esc(lv.reason) : ""}</p>`);
     }
     const MAX_SRC = 4;
@@ -195,11 +195,14 @@
       return `<tr><td class="${cls}"><b>${tag}</b></td><td>${esc(fmtPx(x.price))}${zone ? `<br><span class="ta-sub">${esc(zone)}</span>` : ""}</td>
         <td>${esc(fmtPct(x.distance_pct, 1, true))}<br><span class="ta-sub">${esc(fmtSigned(x.distance_atr, 1))} ATR</span></td>
         <td class="l wrap" title="${esc(src.join(", "))}">${esc(src.slice(0, MAX_SRC).join(", ") + more)}
-          ${isNum(x.touches) ? `<div class="ta-sub">${esc(t("touches", x.touches, x.holds, x.breaks))}</div>` : ""}</td></tr>`;
+          ${isNum(x.touches) ? `<div class="ta-sub">${esc(t("touches", x.touches, x.holds, x.breaks))}</div>` : ""}
+          ${x.last_break ? `<div class="ta-sub">${esc(t("since_break", x.last_break, x.holds_since_break))}</div>` : ""}</td></tr>`;
     };
     const res = lv.resistances.map((x, i) => row("R" + (i + 1), x, "neg")).reverse().join("");
     const sup = lv.supports.map((x, i) => row("S" + (i + 1), x, "pos")).join("");
-    const price = `<tr class="price"><td>${esc(t("k_price"))}</td><td>${esc(fmtPx(d.key_numbers?.price))}</td><td></td><td></td></tr>`;
+    // the zone the close is in sits next to the price row: it is neither support nor resistance
+    const cur = lv.current_zone ? row(esc(t("k_zone")), lv.current_zone, "") : "";
+    const price = cur + `<tr class="price"><td>${esc(t("k_price"))}</td><td>${esc(fmtPx(d.key_numbers?.price))}</td><td></td><td></td></tr>`;
     return card(t("t_levels"), `<div class="ta-tablewrap"><table class="ta-table"><thead><tr><th></th><th>${esc(t("th_level"))}</th>
       <th>${esc(t("th_dist"))}</th><th class="l">${esc(t("th_src"))}</th></tr></thead>
       <tbody>${res}${price}${sup}</tbody></table></div><p class="ta-small">${esc(t("lv_ref"))}</p>`);
@@ -230,6 +233,7 @@
     }
     if (d.levels?.supports?.length) items.push({ key: "supports", label: t("lg_supports"), color: "var(--up)", fill: "var(--up-zone)", sw: "box" });
     if (d.levels?.resistances?.length) items.push({ key: "resistances", label: t("lg_resistances"), color: "var(--down)", fill: "var(--down-zone)", sw: "box" });
+    if (d.levels?.current_zone) items.push({ key: "current", label: t("lg_current"), color: "var(--mid)", fill: "var(--mid-zone)", sw: "box" });
     if (d.volume_profile?.available) items.push({ key: "vp", label: t("lg_vp"), color: "var(--va)", sw: "box" });
     if ((d.earnings_dates || []).length) items.push({ key: "earnings", label: t("lg_earnings"), color: "var(--text)", sw: "box" });
     return items;
@@ -313,7 +317,9 @@
     const levels = [];
     (d.levels?.resistances || []).forEach((x, i) => levels.push({ ...x, tag: "R" + (i + 1), side: "r" }));
     (d.levels?.supports || []).forEach((x, i) => levels.push({ ...x, tag: "S" + (i + 1), side: "s" }));
-    const shown = levels.filter(x => on(x.side === "s" ? "supports" : "resistances"));
+    if (d.levels?.current_zone) levels.push({ ...d.levels.current_zone, tag: "Z", side: "z" });   // the zone the close is in
+    const SIDE = { s: ["supports", "--up"], r: ["resistances", "--down"], z: ["current", "--mid"] };
+    const shown = levels.filter(x => on(SIDE[x.side][0]));
     const tagText = x => W < 560 ? x.tag : `${x.tag} ${fmtPx(x.price)}`;
     // axis text uses tabular figures; the canvas measures proportional ones, so measure every digit as 0
     const tabW = s => measure(String(s).replace(/\d/g, "0"), 11, 650);
@@ -414,11 +420,12 @@
       }
     }
 
-    // support / resistance zones: light green / light red bands with a line at the level price, drawn
-    // under the moving averages and the candles. Their tags sit on the price axis, never over a candle.
+    // support / resistance zones: light green / light red bands (grey for the zone the close is in) with
+    // a line at the level price, drawn under the moving averages and the candles. Their tags sit on the
+    // price axis, never over a candle.
     const tags = [];
     for (const x of shown) {
-      const col = x.side === "s" ? "--up" : "--down";
+      const col = SIDE[x.side][1];
       if (inMain(x.price)) {
         const y1 = y(Math.max(x.zone_high, x.price)), y2 = y(Math.min(x.zone_low, x.price));
         const h = Math.max(4, y2 - y1), yt = (y1 + y2 - h) / 2, yl = Math.round(y(x.price)) + 0.5;
@@ -444,7 +451,7 @@
     spread(tags.filter(l => l.up), -1, top + EDGE);
     spread(tags.filter(l => !l.up), 1, top + HM - EDGE);
     for (const l of tags) {
-      const c = l.cls === "s" ? "--up" : "--down";
+      const c = SIDE[l.cls][1];
       // a thin line carries the level across the volume-profile sidebar to its tag
       if (l.at != null) {
         fore += `<path d="M${PW},${l.at.toFixed(1)}H${XA - 10}L${XA - 4},${l.y.toFixed(1)}" fill="none" stroke="var(${c})" stroke-width="1" opacity=".55"/>`;

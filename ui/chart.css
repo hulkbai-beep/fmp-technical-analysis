@@ -6,6 +6,7 @@
   --border: #dde2e8; --grid: #edf0f4; --row: #f2f4f7; --accent: #2563eb; --on-accent: #ffffff;
   --up: #15803d; --down: #c62828; --up-zone: rgba(34, 197, 94, .2); --down-zone: rgba(239, 68, 68, .16);
   --up-edge: rgba(21, 128, 61, .35); --down-edge: rgba(198, 40, 40, .3);
+  --mid: #5a6573; --mid-zone: rgba(100, 116, 139, .16); --mid-edge: rgba(90, 101, 115, .4);
   --warn-bg: #fff7e6; --warn-text: #7a4f00;
   --sma20: #2a78d6; --sma50: #eb6834; --sma100: #7d1984; --sma200: #6250d6;
   --av-last_earnings: #c0397a; --av-high_52w: #b07800; --av-low_52w: #13866a;
@@ -21,6 +22,7 @@
     --border: #2a313a; --grid: #20262e; --row: #1e242c; --accent: #6ea0ff; --on-accent: #0f1216;
     --up: #34c77b; --down: #f06262; --up-zone: rgba(52, 199, 123, .18); --down-zone: rgba(240, 98, 98, .17);
     --up-edge: rgba(52, 199, 123, .4); --down-edge: rgba(240, 98, 98, .4);
+    --mid: #a0a9b6; --mid-zone: rgba(148, 163, 184, .16); --mid-edge: rgba(160, 169, 182, .45);
     --warn-bg: #2b2210; --warn-text: #f5c56b;
     --sma20: #3987e5; --sma50: #d95926; --sma100: #a92ab3; --sma200: #9085e9;
     --av-last_earnings: #d55181; --av-high_52w: #c98500; --av-low_52w: #199e70;
@@ -36,6 +38,7 @@
   --border: #2a313a; --grid: #20262e; --row: #1e242c; --accent: #6ea0ff; --on-accent: #0f1216;
   --up: #34c77b; --down: #f06262; --up-zone: rgba(52, 199, 123, .18); --down-zone: rgba(240, 98, 98, .17);
   --up-edge: rgba(52, 199, 123, .4); --down-edge: rgba(240, 98, 98, .4);
+  --mid: #a0a9b6; --mid-zone: rgba(148, 163, 184, .16); --mid-edge: rgba(160, 169, 182, .45);
   --warn-bg: #2b2210; --warn-text: #f5c56b;
   --sma20: #3987e5; --sma50: #d95926; --sma100: #a92ab3; --sma200: #9085e9;
   --av-last_earnings: #d55181; --av-high_52w: #c98500; --av-low_52w: #199e70;
@@ -142,7 +145,7 @@ button { font: inherit; }
 .ta-chartbox .pv { fill: var(--muted); font-weight: 400; }
 .ta-chartbox text.chip { fill: var(--on-accent); font-weight: 650; }
 .ta-chartbox text.lvl { font-size: 11px; font-weight: 650; }
-.ta-chartbox text.lvl.s { fill: var(--up); } .ta-chartbox text.lvl.r { fill: var(--down); }
+.ta-chartbox text.lvl.s { fill: var(--up); } .ta-chartbox text.lvl.r { fill: var(--down); } .ta-chartbox text.lvl.z { fill: var(--mid); }
 .ta-chartbox text.e { fill: var(--text); font-size: 10px; font-weight: 700; }
 .ta-chartbox text.halo { paint-order: stroke; stroke: var(--card); stroke-width: 3px; stroke-linejoin: round; }
 .ta-chartbox .xh { stroke: var(--muted); stroke-width: 1; pointer-events: none; }

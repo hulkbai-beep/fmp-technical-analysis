@@ -11,7 +11,8 @@ import levels as L
 from conftest import synthetic_bars
 
 REQUIRED_LEVEL_KEYS = {"price", "zone_low", "zone_high", "sources", "touches", "holds", "breaks", "weak", "flips",
-                       "fresh", "volume_share", "score", "distance_pct", "distance_atr"}
+                       "fresh", "last_break", "holds_since_break", "volume_share", "score", "distance_pct",
+                       "distance_atr"}
 
 
 def frame(highs, lows, volumes=None, start="2024-01-01"):
@@ -201,13 +202,53 @@ def test_density_zones_merge_close_candidates_and_split_far_ones():
     assert high["zone_high"] - high["zone_low"] == pytest.approx(2.355 * C.KDE_BANDWIDTH_ATR, abs=0.02)
 
 
-def test_density_zones_bound_and_candidate_zones():
+def test_density_zones_candidate_zones():
     cands = [{"price": 10.4, "zone_low": 10.0, "zone_high": 10.8, "source": "gap_up", "weight": 0.75}]
     (z,) = L.density_zones(cands, atr=1.0)
     assert z["zone_low"] < 10.2 and z["zone_high"] > 10.6 and z["source_types"] == ["gap"]
-    (clipped,) = L.density_zones([{"price": 99.9, "source": "pivot_low"}], atr=1.0, bound=(-np.inf, 99.95))
-    assert clipped["zone_high"] == 99.95 and clipped["price"] == pytest.approx(99.9)
     assert L.density_zones([{"price": float("nan"), "source": "x"}], 1.0) == []
+
+
+def test_density_zones_merge_neighbouring_zones_into_one():
+    # two peaks 0.75 ATR apart: each is about 0.59 ATR wide at half its peak, so the two bands lie
+    # about 0.16 ATR apart (< ZONE_MERGE_GAP_ATR) and together span about 1.34 ATR (<= ZONE_MAX_ATR)
+    cands = [{"price": 100.0, "source": "pivot_low", "weight": 1.0},
+             {"price": 100.75, "source": "sma50", "weight": 1.0}]
+    (z,) = L.density_zones(cands, atr=1.0)
+    assert z["sources"] == ["pivot_low", "sma50"] and z["n_candidates"] == 2
+    assert z["weight"] == pytest.approx(2.0) and z["price"] == pytest.approx(100.375)
+    assert z["zone_low"] < 100.0 and z["zone_high"] > 100.75
+    assert z["zone_high"] - z["zone_low"] == pytest.approx(0.75 + 2.355 * C.KDE_BANDWIDTH_ATR, abs=0.03)
+    # 0.9 ATR apart the bands are 0.31 ATR from each other: two zones
+    far = [cands[0], {**cands[1], "price": 100.9}]
+    assert [x["sources"] for x in L.density_zones(far, atr=1.0)] == [["pivot_low"], ["sma50"]]
+
+
+def span(lo, hi, height, name):
+    return {"lo": lo, "hi": hi, "peak": (lo + hi) / 2.0, "height": height, "members": [name]}
+
+
+def test_merge_bands_joins_touching_spans_up_to_the_width_cap():
+    a, b, c = span(100.0, 100.5, 1.0, "a"), span(100.6, 101.2, 2.0, "b"), span(102.0, 102.5, 1.0, "c")
+    low, high = L.merge_bands([a, b, c], joints=[0.5, 0.1], atr=1.0)
+    # a and b are 0.1 ATR apart and 1.2 ATR together: one zone with the peak of the higher span
+    assert (low["lo"], low["hi"], low["peak"], low["members"]) == (100.0, 101.2, b["peak"], ["a", "b"])
+    assert (high["lo"], high["hi"], high["members"]) == (102.0, 102.5, ["c"])     # 0.8 ATR away: on its own
+    assert L.merge_bands([], [], 1.0) == [] and L.merge_bands([a], [], 1.0)[0]["members"] == ["a"]
+
+
+def test_merge_bands_cuts_a_band_wider_than_the_cap_at_its_weakest_joint():
+    a, b, c = span(100.0, 100.6, 1.0, "a"), span(100.7, 101.3, 1.0, "b"), span(101.4, 102.0, 1.0, "c")
+    members = lambda zones: [z["members"] for z in zones]                          # noqa: E731
+    # 2.0 ATR in all (> ZONE_MAX_ATR 1.5): cut where the density between two spans is lowest
+    assert members(L.merge_bands([a, b, c], joints=[0.2, 0.8], atr=1.0)) == [["a"], ["b", "c"]]
+    assert members(L.merge_bands([a, b, c], joints=[0.8, 0.2], atr=1.0)) == [["a", "b"], ["c"]]
+    assert members(L.merge_bands([a, b, c], joints=[0.5, 0.5], atr=1.0)) == [["a"], ["b", "c"]]   # tie: the lower one
+    # two touching spans too wide to be one zone stay two
+    wide = [span(100.0, 100.9, 1.0, "a"), span(101.0, 101.9, 1.0, "b")]
+    assert members(L.merge_bands(wide, joints=[0.9], atr=1.0)) == [["a"], ["b"]]
+    for z in L.merge_bands([a, b, c], joints=[0.2, 0.8], atr=1.0):
+        assert z["hi"] - z["lo"] <= C.ZONE_MAX_ATR + 1e-9
 
 
 def test_zone_sources_name_only_candidates_inside_the_band():
@@ -235,8 +276,21 @@ def test_zone_tests_hold_break_and_flip():
     scored, = L.score_zones([{"price": 10.25, "zone_low": 10.0, "zone_high": 10.5, "weight": 2.0}],
                             df, {"available": False}, atr=1.0, half_life=1e12)
     assert (scored["touches"], scored["holds"], scored["breaks"], scored["weak"], scored["flips"]) == (3, 2, 1, 0, 1)
-    assert scored["score"] == pytest.approx(1.0 - 0.5 + 1.5 + C.LEVEL_CONFLUENCE_WEIGHT * 2.0)
+    # a break takes what a hold gives: hold 1 - break 1 + flip 1.5
+    assert scored["score"] == pytest.approx(1.0 - 1.0 + 1.5 + C.LEVEL_CONFLUENCE_WEIGHT * 2.0)
     assert scored["fresh"] is False and scored["last_test"] == df.index[8].strftime("%Y-%m-%d")
+    # the record in its present role: broken at bar 5, one hold (the flip) since
+    assert scored["last_break"] == df.index[5].strftime("%Y-%m-%d") and scored["holds_since_break"] == 1
+
+
+def test_score_zones_never_broken_counts_every_hold_since():
+    df = frame(*zip(*TEST_BARS[:4]))                                   # the first hold only
+    (scored,) = L.score_zones([{"price": 10.25, "zone_low": 10.0, "zone_high": 10.5, "weight": 0.0}],
+                              df, {"available": False}, atr=1.0, half_life=1e12)
+    assert (scored["holds"], scored["breaks"], scored["last_break"], scored["holds_since_break"]) == (1, 0, None, 1)
+    (fresh,) = L.score_zones([{"price": 20.0, "zone_low": 19.9, "zone_high": 20.1, "weight": 0.0}],
+                             df, {"available": False}, atr=1.0, half_life=1e12)
+    assert fresh["fresh"] and fresh["last_break"] is None and fresh["holds_since_break"] == 0
 
 
 def test_zone_tests_leave_out_unresolved_tests_and_count_jumps_and_weak_ones():
@@ -260,7 +314,7 @@ def test_score_zones_decay_and_volume_share():
     z = {"price": 10.25, "zone_low": 10.0, "zone_high": 10.5, "weight": 0.0}
     (s,) = L.score_zones([z], df, vp, atr=1.0, half_life=1.0)
     n = len(df)
-    assert s["score"] == pytest.approx(0.5 ** (n - 1 - 2) - 0.5 * 0.5 ** (n - 1 - 5) + 1.5 * 0.5 ** (n - 1 - 8))
+    assert s["score"] == pytest.approx(0.5 ** (n - 1 - 2) - 1.0 * 0.5 ** (n - 1 - 5) + 1.5 * 0.5 ** (n - 1 - 8))
     assert s["volume_share"] == pytest.approx(L._zone_volume(vp, 10.0, 10.5) / vp["total_volume"])
 
 
@@ -298,38 +352,75 @@ def test_select_levels_keeps_weak_52_week_extremes_and_drops_zones_holding_the_c
     assert [c["price"] for c in sup] == [98] and [c["price"] for c in res] == [103]
 
 
+def test_zone_side_and_the_current_zone():
+    side = lambda lo, hi: L.zone_side({"price": (lo + hi) / 2, "zone_low": lo, "zone_high": hi}, 100.0, 2.0)  # noqa: E731
+    assert side(97.0, 99.0) == "support" and side(101.0, 103.0) == "resistance"
+    assert side(99.0, 101.0) == "current"
+    # the close within TEST_TOL_ATR (0.1 ATR = 0.2) of an edge: the zone still lies beyond the close
+    assert side(99.9, 101.5) == "resistance" and side(98.5, 100.1) == "support"
+    assert side(99.8, 101.5) == "current" and side(98.5, 100.2) == "current"
+
+    zones = [lv(100.2, 2.0, lo=99.5, hi=101.5), lv(96.0, 3.0, lo=95.5, hi=96.5)]
+    cur = L.current_zone(zones, close=100.0, atr=2.0, min_score=1.0)
+    assert cur["price"] == 100.2 and cur["close_position"] == pytest.approx(0.25)
+    assert cur["distance_pct"] == pytest.approx(0.002) and cur["distance_atr"] == pytest.approx(0.1)
+    # a zone too weak to be a level is not the current zone either, unless it holds a 52-week extreme
+    assert L.current_zone([lv(100.2, 0.5, lo=99.5, hi=101.5)], 100.0, 2.0, min_score=1.0) is None
+    assert L.current_zone([lv(100.2, 0.5, lo=99.5, hi=101.5, sources=["high_52w"])], 100.0, 2.0, 1.0) is not None
+    assert L.current_zone(zones[1:], 100.0, 2.0, 1.0) is None
+
+
+def test_select_levels_files_a_zone_whose_edge_is_at_the_close_on_the_far_side():
+    clusters = [lv(100.8, 2.0, lo=99.9, hi=101.5), lv(99.3, 2.0, lo=98.5, hi=100.1), lv(95.0, 2.0), lv(105.0, 2.0)]
+    sup, res = L.select_levels(clusters, close=100.0, atr=2.0, per_side=3, min_score=1.0)
+    assert [c["price"] for c in sup] == [99.3, 95.0] and [c["price"] for c in res] == [100.8, 105.0]
+
+
 def patched_candidates(monkeypatch, make):
     """Run build_levels on synthetic bars with _candidates replaced by make(close, atr)."""
     bars = synthetic_bars(n=400)
     ctx = make_ctx(bars)
     close, atr = float(bars["close"].iloc[-1]), float(ctx["ind"]["atr14"].iloc[-1])
     monkeypatch.setattr(L, "_candidates", lambda *a, **k: make(close, atr))
-    monkeypatch.setattr(C, "LEVEL_MIN_SCORE", 0.0)               # keep every cluster: this tests sides only
+    monkeypatch.setattr(C, "LEVEL_MIN_SCORE", -1e9)              # keep every cluster: this tests sides only
     return L.build_levels(ctx), close, atr
 
 
-def test_build_levels_splits_a_cluster_that_would_straddle_the_close(monkeypatch):
-    # reviewer's case: pivot low 0.15 ATR below, SMA50 0.3 ATR above -> one zone holding the close
-    # under a single merge; per-side merging keeps the support at the pivot low
+def test_build_levels_gives_a_cluster_holding_the_close_as_the_current_zone(monkeypatch):
+    # pivot low 0.15 ATR below the close, SMA50 0.3 ATR above: one area that price is inside. It is the
+    # current zone, on neither side, and is not cut in two at the close
     out, close, atr = patched_candidates(monkeypatch, lambda c, a: [
         {"price": c - 0.15 * a, "source": "pivot_low"}, {"price": c + 0.3 * a, "source": "sma50"},
         {"price": c - 3.0 * a, "source": "pivot_low"}, {"price": c + 4.0 * a, "source": "pivot_high"}])
-    s1, r1 = out["supports"][0], out["resistances"][0]
-    assert s1["price"] == pytest.approx(close - 0.15 * atr) and s1["sources"] == ["pivot_low"]
-    assert r1["price"] == pytest.approx(close + 0.3 * atr) and r1["sources"] == ["sma50"]
-    for x in out["supports"]:
-        assert x["zone_high"] < close
-    for x in out["resistances"]:
-        assert x["zone_low"] > close
+    cur = out["current_zone"]
+    assert cur["sources"] == ["pivot_low", "sma50"] and cur["price"] == pytest.approx(close + 0.075 * atr)
+    assert cur["zone_low"] < close - 0.15 * atr and cur["zone_high"] > close + 0.3 * atr
+    assert cur["close_position"] == pytest.approx((close - cur["zone_low"]) / (cur["zone_high"] - cur["zone_low"]))
+    assert 0.0 < cur["close_position"] < 0.5                       # the close sits in its lower half
+    assert REQUIRED_LEVEL_KEYS <= cur.keys()
+    (s1,), (r1,) = out["supports"], out["resistances"]
+    assert s1["price"] == pytest.approx(close - 3.0 * atr) and r1["price"] == pytest.approx(close + 4.0 * atr)
+    assert s1["zone_high"] < cur["zone_low"] and r1["zone_low"] > cur["zone_high"]
+    assert any(n.startswith("only 1 support level(s) below the current zone") for n in out["notes"])
 
 
-def test_build_levels_files_the_52_week_high_above_the_close_as_resistance(monkeypatch):
+def test_build_levels_has_no_current_zone_when_the_close_is_between_zones(monkeypatch):
+    out, close, atr = patched_candidates(monkeypatch, lambda c, a: [
+        {"price": c - 1.0 * a, "source": "pivot_low"}, {"price": c + 1.0 * a, "source": "pivot_high"}])
+    assert out["current_zone"] is None
+    assert out["supports"][0]["zone_high"] < close < out["resistances"][0]["zone_low"]
+    assert any(n.startswith("only 1 support level(s) below the last close") for n in out["notes"])
+
+
+def test_build_levels_keeps_the_52_week_high_just_above_the_close_in_the_current_zone(monkeypatch):
     out, close, atr = patched_candidates(monkeypatch, lambda c, a: [
         {"price": c - 0.1 * a, "source": "pivot_high"}, {"price": c + 0.1 * a, "source": "high_52w"},
         {"price": c - 0.3 * a, "source": "avwap_high_52w"}])
-    assert [x["sources"] for x in out["resistances"]] == [["high_52w"]]
-    assert all("high_52w" not in x["sources"] for x in out["supports"])
-    assert not any("no resistance levels" in n for n in out["notes"])
+    # the three sit within 0.4 ATR of each other around the close: one zone, with the 52-week high in it
+    assert out["current_zone"]["sources"] == ["pivot_high", "high_52w", "avwap_high_52w"]
+    assert out["current_zone"]["zone_high"] > close + 0.1 * atr
+    assert out["resistances"] == [] and out["supports"] == []
+    assert any("no resistance levels above the current zone" in n for n in out["notes"])
 
 
 # ---------------------------------------------------------------------------- build_levels

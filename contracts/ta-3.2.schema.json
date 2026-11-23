@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "ta-3.1",
-  "title": "Technical analysis contract ta-3.1",
-  "description": "The stable summary of one stock's swing and position runs that other tools read, built by scripts/contract.py. Within a major version fields are only ever added; renaming or removing one means a new major version. 1.1 adds event.last_earnings, event.days_since_last_earnings, event.last_earnings_move and the kind of each scenario target. 1.2 adds levels_note, range_95 and the volatility-band stop and target with calibrated touch rates in stops_ref; the support/resistance zones are reference only. 2.0 removes event.eps_estimated: the contract carries no fundamentals. 2.1 adds data_quality.calendar_source, the dividend and macro blocks, trend.sma100 (a context line, not part of the SMA stack) and, per horizon, ex_dividend_within_horizon, macro_within_horizon and macro_complete; trading-day counts (event.trading_days_to, data_quality.business_days_behind) now count NYSE sessions, exchange holidays excluded. 3.0 removes every score: the per-horizon bias (weighted score, label, confidence), pillars and weights_used, the pillar of each signal or pattern and context_only.scored; the contract carries no scores, ratings or bias. 3.1 adds volatility.squeeze_last_release, the last bar the squeeze switched off (its date, bars ago, direction and how many bars the squeeze had lasted). Ex-dividend dates and macro events are context. Horizon-independent blocks sit at the top, the rest under horizons.swing / horizons.position. Prices are split-adjusted closes; fractions are decimals (0.05 = 5%); null means missing, never estimated.",
+  "$id": "ta-3.2",
+  "title": "Technical analysis contract ta-3.2",
+  "description": "The stable summary of one stock's swing and position runs that other tools read, built by scripts/contract.py. Within a major version fields are only ever added; renaming or removing one means a new major version. 1.1 adds event.last_earnings, event.days_since_last_earnings, event.last_earnings_move and the kind of each scenario target. 1.2 adds levels_note, range_95 and the volatility-band stop and target with calibrated touch rates in stops_ref; the support/resistance zones are reference only. 2.0 removes event.eps_estimated: the contract carries no fundamentals. 2.1 adds data_quality.calendar_source, the dividend and macro blocks, trend.sma100 (a context line, not part of the SMA stack) and, per horizon, ex_dividend_within_horizon, macro_within_horizon and macro_complete; trading-day counts (event.trading_days_to, data_quality.business_days_behind) now count NYSE sessions, exchange holidays excluded. 3.0 removes every score: the per-horizon bias (weighted score, label, confidence), pillars and weights_used, the pillar of each signal or pattern and context_only.scored; the contract carries no scores, ratings or bias. 3.1 adds volatility.squeeze_last_release, the last bar the squeeze switched off (its date, bars ago, direction and how many bars the squeeze had lasted). 3.2 adds, per horizon, current_zone (the zone the last close is in, which is on neither side), each zone's last_break and holds_since_break, and the price_location state inside_zone; zones may be up to 1.5 ATR wide and a break now cancels one hold in the score. Ex-dividend dates and macro events are context. Horizon-independent blocks sit at the top, the rest under horizons.swing / horizons.position. Prices are split-adjusted closes; fractions are decimals (0.05 = 5%); null means missing, never estimated.",
   "type": "object",
   "additionalProperties": false,
   "required": ["contract", "config_hash", "ticker", "generated_at", "as_of", "as_of_basis", "data_source", "last_close",
@@ -10,7 +10,7 @@
                "extension", "trend", "regime", "rs", "flow", "weekly", "context_only", "horizons", "skipped",
                "modules_unavailable", "restricted", "warnings", "errors", "disclaimer"],
   "properties": {
-    "contract": {"const": "ta-3.1"},
+    "contract": {"const": "ta-3.2"},
     "config_hash": {"type": "string", "description": "hash of both runs' meta.config_snapshot"},
     "ticker": {"type": "string"},
     "generated_at": {"type": "string"},
@@ -274,13 +274,17 @@
     "zone": {
       "type": "object", "additionalProperties": false,
       "required": ["price", "low", "high", "score", "touches", "holds", "breaks", "flips", "fresh", "last_test",
-                   "reaction_score", "sources", "distance_pct", "distance_atr"],
+                   "last_break", "holds_since_break", "reaction_score", "sources", "distance_pct", "distance_atr"],
       "properties": {
         "price": {"$ref": "#/$defs/num"}, "low": {"$ref": "#/$defs/num"}, "high": {"$ref": "#/$defs/num"},
         "score": {"$ref": "#/$defs/num"}, "touches": {"type": ["integer", "null"]}, "holds": {"type": ["integer", "null"]},
         "breaks": {"type": ["integer", "null"]}, "flips": {"type": ["integer", "null"]}, "fresh": {"type": ["boolean", "null"]},
-        "last_test": {"$ref": "#/$defs/str"}, "reaction_score": {"$ref": "#/$defs/num"},
-        "sources": {"$ref": "#/$defs/strings"}, "distance_pct": {"$ref": "#/$defs/num"}, "distance_atr": {"$ref": "#/$defs/num"}
+        "last_test": {"$ref": "#/$defs/str"},
+        "last_break": {"$ref": "#/$defs/str", "description": "3.2: date of the most recent break of the zone; null if it never broke in the window"},
+        "holds_since_break": {"type": ["integer", "null"], "description": "3.2: holds after last_break (every hold if it never broke): the zone's record in its present role"},
+        "reaction_score": {"$ref": "#/$defs/num"},
+        "sources": {"$ref": "#/$defs/strings"}, "distance_pct": {"$ref": "#/$defs/num"}, "distance_atr": {"$ref": "#/$defs/num"},
+        "close_position": {"$ref": "#/$defs/num", "description": "current_zone only: where the last close sits in the zone, 0 at its bottom and 1 at its top"}
       }
     },
     "scenario": {
@@ -302,7 +306,7 @@
       "type": ["object", "null"], "additionalProperties": false,
       "required": ["structural", "structural_distance_pct", "atr", "atr_distance_pct", "vol", "vol_distance_pct",
                    "vol_target", "touch_rate", "target_touch_rate", "primary"],
-      "properties": {"structural": {"$ref": "#/$defs/num", "description": "nearest level's far edge - 0.5 ATR; reference only"},
+      "properties": {"structural": {"$ref": "#/$defs/num", "description": "far edge of the zone the close is in, else of the nearest level, - 0.5 ATR; reference only"},
                      "structural_distance_pct": {"$ref": "#/$defs/num"},
                      "atr": {"$ref": "#/$defs/num"}, "atr_distance_pct": {"$ref": "#/$defs/num"},
                      "vol": {"$ref": "#/$defs/num", "description": "last close x (1 -+ 2.4 x rv20 x sqrt(h / 252)): the calibrated 95% band edge"},
@@ -361,7 +365,7 @@
     },
     "horizon": {
       "type": "object", "additionalProperties": false,
-      "required": ["horizon_days", "stat_horizons", "conflicts", "price_location",
+      "required": ["horizon_days", "stat_horizons", "conflicts", "price_location", "current_zone",
                    "supports", "resistances", "levels_window", "levels_note", "bull", "bear", "range_1sd", "range_95", "stops_ref",
                    "earnings_within_horizon", "ex_dividend_within_horizon", "macro_within_horizon", "macro_complete",
                    "signals", "patterns"],
@@ -371,11 +375,14 @@
         "conflicts": {"type": "array", "items": {"type": "object"}, "description": "where the readings disagree, each with its typical meaning; listed only"},
         "price_location": {
           "type": ["object", "null"], "additionalProperties": false, "required": ["state", "zone"],
-          "properties": {"state": {"enum": ["inside_support", "inside_resistance", "between", "above_all", "below_all"]},
-                         "zone": {"type": ["integer", "null"], "description": "index into supports / resistances"}}
+          "properties": {"state": {"enum": ["inside_zone", "inside_support", "inside_resistance", "between", "above_all", "below_all"],
+                                   "description": "inside_zone (3.2) = the close is in current_zone; inside_support / inside_resistance = the close is at the edge of that zone (within 0.1 ATR of it)"},
+                         "zone": {"type": ["integer", "null"], "description": "index into supports / resistances; null for inside_zone"}}
         },
-        "supports": {"type": "array", "items": {"$ref": "#/$defs/zone"}, "description": "nearest first"},
-        "resistances": {"type": "array", "items": {"$ref": "#/$defs/zone"}, "description": "nearest first"},
+        "current_zone": {"anyOf": [{"$ref": "#/$defs/zone"}, {"type": "null"}],
+                         "description": "3.2: the zone the last close is in (at least 0.1 ATR inside both edges), with close_position; null when the close is in no zone. It is neither a support nor a resistance: the bull trigger is its top and the bear trigger its bottom"},
+        "supports": {"type": "array", "items": {"$ref": "#/$defs/zone"}, "description": "zones below the close, nearest first"},
+        "resistances": {"type": "array", "items": {"$ref": "#/$defs/zone"}, "description": "zones above the close, nearest first"},
         "levels_window": {"type": ["object", "null"]},
         "levels_note": {"$ref": "#/$defs/str", "description": "the key levels' reference-only note (levels.evidence.note)"},
         "bull": {"$ref": "#/$defs/scenario"},

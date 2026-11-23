@@ -9,7 +9,7 @@ metrics.json (every computed number) and a self-contained chart.html.
               position (weekly emphasis, 20/60-day stats, ~2-year levels)
   --out       output folder (default ./ta-output/<TICKER>_<as_of>/)
   --refresh   ignore the local cache and fetch everything again
-  --contract  also write the ta-3.1 contract (both horizons; the other one runs from the cache;
+  --contract  also write the ta-3.2 contract (both horizons; the other one runs from the cache;
               see contract.py)
 
 The NYSE calendar from fetch.py runs through every module that counts trading days. The
@@ -180,7 +180,9 @@ def config_snapshot(horizon: str) -> dict:
                    "vol_high_pctl": C.VOL_HIGH_PCTL, "vol_extreme_pctl": C.VOL_EXTREME_PCTL,
                    "compression_bw_pctl": C.COMPRESSION_BW_PCTL},
         "levels": {"swing_atr": C.SWING_ATR, "profile_bins": C.PROFILE_BINS, "value_area": C.VALUE_AREA_SHARE,
-                   "kde_bandwidth_atr": C.KDE_BANDWIDTH_ATR, "reaction_atr": C.REACTION_ATR, "per_side": C.LEVELS_PER_SIDE},
+                   "kde_bandwidth_atr": C.KDE_BANDWIDTH_ATR, "zone_max_atr": C.ZONE_MAX_ATR,
+                   "zone_merge_gap_atr": C.ZONE_MERGE_GAP_ATR, "reaction_atr": C.REACTION_ATR,
+                   "break_points": C.LEVEL_BREAK_POINTS, "per_side": C.LEVELS_PER_SIDE},
         "signals": {"active_bars": C.SIGNAL_ACTIVE_BARS, "params": dict(C.SIGNAL_PARAMS),
                     "confidence_n_normal": C.CONFIDENCE_N_NORMAL, "confidence_n_low": C.CONFIDENCE_N_LOW,
                     "edge_min": C.SIGNAL_EDGE_MIN, "hit_edge_min": C.SIGNAL_HIT_EDGE_MIN},

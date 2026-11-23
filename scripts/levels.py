@@ -1,11 +1,11 @@
 """
 Key levels (module H): ATR ZigZag swing pivots, supply/demand base zones, a volume profile, the
 52-week range and unfilled gaps, plus the current SMA50/SMA100/SMA200 and anchored VWAPs, as weighted
-candidate prices. Per side of the last close, a Gaussian density of the candidates gives the zones
-(its peaks, as wide as the density stays above half the peak); each zone is scored by how price
-reacted on earlier tests (holds, breaks, role reversals, recent ones counting more) plus the
-weight of candidates in it. A support zone lies wholly below the close and a resistance zone
-wholly above it.
+candidate prices. A Gaussian density of the candidates gives the zones (its peaks, as wide as the
+density stays above half the peak, neighbours a fraction of an ATR apart merged); each zone is scored
+by how price reacted on earlier tests (holds, breaks, role reversals, recent ones counting more) plus
+the weight of candidates in it. A support zone lies wholly below the close and a resistance zone
+wholly above it; a zone that holds the close is the current zone, on neither side.
 
 The zones are reference only: a map of where price traded or turned before, not a forecast of where
 it will turn next. The stops and targets in scenarios.py come from volatility bands.
@@ -359,17 +359,18 @@ def _decay(age_bars, half_life: float):
     return 0.5 ** (np.asarray(age_bars, dtype=float) / half_life)
 
 
-def density_zones(candidates: list[dict], atr: float, bound: tuple[float, float] | None = None) -> list[dict]:
+def density_zones(candidates: list[dict], atr: float) -> list[dict]:
     """Zones from a weighted Gaussian density of candidate prices, ascending.
 
     Each candidate adds weight x a kernel of width C.KDE_BANDWIDTH_ATR x atr at its price (a
     candidate with a zone spreads its weight evenly across it). Every local peak of the density is
     a zone: it spans the prices around the peak where the density is at least C.ZONE_HALF_MAX x
     the peak, without crossing the lowest point between it and a neighbouring peak, clamped to
-    C.ZONE_MIN_ATR..C.ZONE_MAX_ATR ATRs around the peak and to `bound` (lo, hi). Its members are
-    the candidates between those lowest points; price = weighted mean of the members inside the
-    zone (the peak if none); weight = summed member weight; sources = the sources of the members
-    inside the zone.
+    C.ZONE_MIN_ATR..C.ZONE_MAX_ATR ATRs around the peak. Its members are the candidates between
+    those lowest points. Neighbouring zones less than C.ZONE_MERGE_GAP_ATR ATRs apart are then one
+    zone where that fits C.ZONE_MAX_ATR (merge_bands). Per zone: price = weighted mean of the
+    members inside the zone (the peak if none); weight = summed member weight; sources = the sources
+    of the members inside the zone.
     """
     pts = [c for c in candidates if _num(c.get("price")) is not None and float(c.get("weight", 1.0)) > 0]
     if not pts:
@@ -391,7 +392,7 @@ def density_zones(candidates: list[dict], atr: float, bound: tuple[float, float]
     peaks = np.flatnonzero(up & down & (dens > 1e-12 * dens.max()))
     cuts = [0] + [p + int(np.argmin(dens[p:q + 1])) for p, q in zip(peaks[:-1], peaks[1:])] + [len(grid) - 1]
     prices = np.array([float(c["price"]) for c in pts])
-    out = []
+    spans = []
     for n, p in enumerate(peaks):
         a, b = cuts[n], cuts[n + 1]
         half = C.ZONE_HALF_MAX * dens[p]
@@ -406,22 +407,51 @@ def density_zones(candidates: list[dict], atr: float, bound: tuple[float, float]
         hi = min(float(grid[j]), peak + C.ZONE_MAX_ATR * atr / 2.0)
         if hi - lo < C.ZONE_MIN_ATR * atr:
             lo, hi = peak - C.ZONE_MIN_ATR * atr / 2.0, peak + C.ZONE_MIN_ATR * atr / 2.0
-        if bound is not None:
-            lo, hi = max(lo, bound[0]), min(hi, bound[1])
-            if hi <= lo:
-                continue
         members = [c for c, x in zip(pts, prices) if (x >= grid[a] if n == 0 else x > grid[a]) and x <= grid[b]]
-        if not members:
-            continue
-        inside = [c for c in members if lo <= c["price"] <= hi]
+        if members:
+            spans.append({"lo": lo, "hi": hi, "peak": peak, "height": float(dens[p]), "at": int(p), "members": members})
+    # the density at the lowest point between each zone and the next: how firmly the two are joined
+    joints = [float(dens[x["at"]:y["at"] + 1].min()) for x, y in zip(spans[:-1], spans[1:])]
+    out = []
+    for z in merge_bands(spans, joints, atr):
+        lo, hi = z["lo"], z["hi"]
+        inside = [c for c in z["members"] if lo <= c["price"] <= hi]
         price = (sum(c["price"] * c.get("weight", 1.0) for c in inside) / sum(c.get("weight", 1.0) for c in inside)
-                 if inside else min(max(peak, lo), hi))
+                 if inside else min(max(z["peak"], lo), hi))
         # sources name only the candidates inside the band, so a 52-week extreme outside it does not count
         sources = list(dict.fromkeys(m["source"] for m in inside))
         out.append({"price": float(price), "zone_low": float(lo), "zone_high": float(hi),
                     "sources": sources, "source_types": list(dict.fromkeys(map(source_type, sources))),
-                    "n_candidates": len(members),
-                    "weight": float(sum(float(m.get("weight", 1.0)) for m in members))})
+                    "n_candidates": len(z["members"]),
+                    "weight": float(sum(float(m.get("weight", 1.0)) for m in z["members"]))})
+    return out
+
+
+def merge_bands(spans: list[dict], joints: list[float], atr: float) -> list[dict]:
+    """Zone spans ({lo, hi, peak, height, members}, ascending) with neighbours that belong to one
+    area merged. Spans less than C.ZONE_MERGE_GAP_ATR x atr apart form a band. A band at most
+    C.ZONE_MAX_ATR x atr wide is one zone, from its lowest span's bottom to its highest span's top; a
+    wider band is cut at its weakest joint (joints[k] = the density at the lowest point between
+    spans k and k + 1; the lower-priced one on a tie) and each part is treated the same way, so two
+    touching zones too wide to be one stay two zones. A merged zone keeps the peak of its highest
+    span and every member."""
+    gap_max, width_max = C.ZONE_MERGE_GAP_ATR * atr, C.ZONE_MAX_ATR * atr * (1.0 + 1e-9)
+
+    def one(first: int, last: int) -> list[dict]:
+        part = spans[first:last + 1]
+        hi = max(x["hi"] for x in part)
+        if first == last or hi - part[0]["lo"] <= width_max:
+            top = max(part, key=lambda x: x["height"])
+            return [{"lo": part[0]["lo"], "hi": hi, "peak": top["peak"], "height": top["height"],
+                     "members": [m for x in part for m in x["members"]]}]
+        cut = first + int(np.argmin(joints[first:last]))
+        return one(first, cut) + one(cut + 1, last)
+
+    out, first = [], 0
+    for k in range(len(spans)):
+        if k == len(spans) - 1 or spans[k + 1]["lo"] - spans[k]["hi"] >= gap_max:
+            out += one(first, k)
+            first = k + 1
     return out
 
 
@@ -484,7 +514,9 @@ def score_zones(zones: list[dict], df: pd.DataFrame, profile: dict, atr: float, 
     score = sum over tests of recency x (C.LEVEL_HOLD_POINTS per hold, + C.LEVEL_FLIP_POINTS when
     it is a flip, - C.LEVEL_BREAK_POINTS per break) + C.LEVEL_CONFLUENCE_WEIGHT x zone weight,
     recency = 0.5 ** (bars since the test / half_life). touches = number of tests = holds + breaks
-    + weak; flips are holds; fresh = no test.
+    + weak; flips are holds; fresh = no test. last_break = the date of the most recent break (None if
+    the zone never broke in df) and holds_since_break = the holds after it (every hold when it never
+    broke): the zone's record in its present role.
     volume_share = profile volume inside the zone / total profile volume (shown, not scored).
     """
     n = len(df)
@@ -502,14 +534,36 @@ def score_zones(zones: list[dict], df: pd.DataFrame, profile: dict, atr: float, 
                  if profile.get("available") else 0.0)
         holds = sum(t["result"] == "hold" for t in tests)
         last = max((t["end"] for t in tests), default=None)
+        broke = max((t["end"] for t in tests if t["result"] == "break"), default=None)
+        since = sum(t["result"] == "hold" and (broke is None or t["end"] > broke) for t in tests)
         out.append({**z, "touches": len(tests), "holds": int(holds),
                     "breaks": int(sum(t["result"] == "break" for t in tests)),
                     "weak": int(sum(t["result"] == "weak" for t in tests)),
                     "flips": int(sum(t["flip"] for t in tests)), "fresh": not tests,
                     "last_test": _iso(df.index[last]) if last is not None else None,
+                    "last_break": _iso(df.index[broke]) if broke is not None else None,
+                    "holds_since_break": int(since),
                     "reaction_score": float(pts), "volume_share": float(share),
                     "score": float(pts + C.LEVEL_CONFLUENCE_WEIGHT * z.get("weight", 0.0))})
     return out
+
+
+def zone_side(zone: dict, close: float, atr: float) -> str:
+    """"support", "resistance" or "current": which side of the close a zone is on.
+
+    A zone wholly below the close is support and one wholly above it resistance. A zone holding the
+    close is the current zone when the close is at least C.TEST_TOL_ATR x atr inside both of its
+    edges; with the close nearer an edge than that, the zone still counts as lying beyond it:
+    resistance when the close is at its bottom, support when it is at its top."""
+    lo, hi = zone.get("zone_low", zone["price"]), zone.get("zone_high", zone["price"])
+    if hi < close:
+        return "support"
+    if lo > close:
+        return "resistance"
+    tol = C.TEST_TOL_ATR * atr
+    if close - lo >= tol and hi - close >= tol:
+        return "current"
+    return "resistance" if close - lo < hi - close else "support"
 
 
 def qualifies(cluster: dict, min_score: float = C.LEVEL_MIN_SCORE) -> bool:
@@ -526,8 +580,8 @@ def select_levels(clusters: list[dict], close: float, atr: float, per_side: int 
     per_side in all, nearest first, with signed distances (price / close - 1 and
     (price - close) / atr; negative below).
 
-    Supports lie wholly below the close (zone_high < close), resistances wholly above it
-    (zone_low > close); a zone containing the close belongs to neither side.
+    The side of each zone comes from zone_side: supports lie below the close and resistances above
+    it; the zone holding the close belongs to neither side (see current_zone).
     """
     def with_distance(c: dict) -> dict:
         return {**c, "distance_pct": c["price"] / close - 1.0, "distance_atr": (c["price"] - close) / atr}
@@ -543,9 +597,22 @@ def select_levels(clusters: list[dict], close: float, atr: float, per_side: int 
         return sorted(chosen, key=lambda c: abs(c["price"] - close))
 
     strong = [c for c in clusters if qualifies(c, min_score)]
-    below = sorted((c for c in strong if c.get("zone_high", c["price"]) < close), key=lambda c: close - c["price"])
-    above = sorted((c for c in strong if c.get("zone_low", c["price"]) > close), key=lambda c: c["price"] - close)
+    below = sorted((c for c in strong if zone_side(c, close, atr) == "support"), key=lambda c: abs(close - c["price"]))
+    above = sorted((c for c in strong if zone_side(c, close, atr) == "resistance"), key=lambda c: abs(c["price"] - close))
     return [with_distance(c) for c in pick(below)], [with_distance(c) for c in pick(above)]
+
+
+def current_zone(zones: list[dict], close: float, atr: float, min_score: float = C.LEVEL_MIN_SCORE) -> dict | None:
+    """The qualifying zone the close is in (zone_side "current"; the highest-scoring one if two
+    overlap), or None. It carries the signed distances of its price like a level, plus
+    close_position: where the close sits in it, 0 at its bottom and 1 at its top."""
+    inside = [z for z in zones if zone_side(z, close, atr) == "current" and qualifies(z, min_score)]
+    if not inside:
+        return None
+    z = max(inside, key=lambda c: float(c.get("score") or 0.0))
+    width = z["zone_high"] - z["zone_low"]
+    return {**z, "distance_pct": z["price"] / close - 1.0, "distance_atr": (z["price"] - close) / atr,
+            "close_position": (close - z["zone_low"]) / width if width > 0 else 0.5}
 
 
 # ---------------------------------------------------------------------------- builder
@@ -656,11 +723,13 @@ def _extremes(bars: pd.DataFrame, r52: dict, close: float, near: float) -> dict:
             "rule": EXTREMES_RULE.format(m=C.EXTREME_NEAR_ATR)}
 
 
-def _shortfall_note(side: str, n: int, weak: int, extremes: dict) -> str:
-    """Note for a side with fewer than C.LEVELS_PER_SIDE levels, naming the extreme price is at."""
+def _shortfall_note(side: str, n: int, weak: int, extremes: dict, in_zone: bool = False) -> str:
+    """Note for a side with fewer than C.LEVELS_PER_SIDE levels, naming the extreme price is at.
+    in_zone: the close is in the current zone, so the side starts beyond that zone."""
     word, where = ("high", "above") if side == "resistance" else ("low", "below")
-    msg = (f"no {side} levels {where} the last close in the window" if n == 0
-           else f"only {n} {side} level(s) {where} the last close in the window")
+    ref = "the current zone" if in_zone else "the last close"
+    msg = (f"no {side} levels {where} {ref} in the window" if n == 0
+           else f"only {n} {side} level(s) {where} {ref} in the window")
     if weak:
         msg += f" ({weak} weaker zone(s) with score < {C.LEVEL_MIN_SCORE:g} not used)"
     if extremes[f"at_all_time_{word}"]:
@@ -672,9 +741,9 @@ def _shortfall_note(side: str, n: int, weak: int, extremes: dict) -> str:
 
 def build_levels(ctx) -> dict:
     """H: swing pivots, supply/demand zones, volume profile, 52-week range, gaps, SMAs and anchored
-    VWAPs as weighted candidates; per side of the close, density zones scored by earlier reactions
-    and candidate weight; the nearest qualifying zone and the strongest within reach, up to
-    C.LEVELS_PER_SIDE supports and resistances around the last close."""
+    VWAPs as weighted candidates; density zones scored by earlier reactions and candidate weight;
+    the zone the last close is in (current_zone), and per side the nearest qualifying zone and the
+    strongest within reach, up to C.LEVELS_PER_SIDE supports and resistances."""
     notes: list[str] = []
     bars = ctx.get("bars")
     if bars is not None and ctx.get("as_of"):
@@ -717,21 +786,17 @@ def build_levels(ctx) -> dict:
 
     avwaps = _avwap_candidates({**ctx, "bars": bars, "ind": ind}, last_date, notes)
     candidates = _candidates(pivots, bases, profile, r52, gaps, ind_row, avwaps, atr, age, notes)
-    # each side is built on its own and bounded by the close, so no zone straddles it; a candidate
-    # exactly at the close is on neither side
-    below = density_zones([c for c in candidates if c["price"] < close], atr,
-                          (-math.inf, float(np.nextafter(close, -math.inf))))
-    above = density_zones([c for c in candidates if c["price"] > close], atr,
-                          (float(np.nextafter(close, math.inf)), math.inf))
-    zones = score_zones(below + above, window, profile, atr, half_life)
+    # one density for both sides: a zone may hold the close, and is then the current zone
+    zones = score_zones(density_zones(candidates, atr), window, profile, atr, half_life)
     supports, resistances = select_levels(zones, close, atr, C.LEVELS_PER_SIDE, C.LEVEL_MIN_SCORE, reach)
+    current = current_zone(zones, close, atr, C.LEVEL_MIN_SCORE)
 
     extremes = _extremes(bars, r52, close, C.EXTREME_NEAR_ATR * atr)
-    weak = {"support": sum(not qualifies(c, C.LEVEL_MIN_SCORE) for c in zones[:len(below)]),
-            "resistance": sum(not qualifies(c, C.LEVEL_MIN_SCORE) for c in zones[len(below):])}
+    weak = {side: sum(zone_side(c, close, atr) == side and not qualifies(c, C.LEVEL_MIN_SCORE) for c in zones)
+            for side in ("support", "resistance")}
     for side, levels in (("support", supports), ("resistance", resistances)):
         if len(levels) < C.LEVELS_PER_SIDE:
-            notes.append(_shortfall_note(side, len(levels), weak[side], extremes))
+            notes.append(_shortfall_note(side, len(levels), weak[side], extremes, current is not None))
 
     return {
         "available": True,
@@ -755,6 +820,7 @@ def build_levels(ctx) -> dict:
                       "rule": f"per side: the nearest zone with score >= {C.LEVEL_MIN_SCORE:g} (or holding "
                               f"the 52-week high/low), then the highest-scoring such zones within "
                               f"{reach:g} ATR of the close, {C.LEVELS_PER_SIDE} in all"},
+        "current_zone": current,
         "supports": supports,
         "resistances": resistances,
         "evidence": {"note": C.LEVELS_EVIDENCE_NOTE},

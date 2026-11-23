@@ -33,7 +33,7 @@ VWAP_NOTE = ("Anchored VWAPs are a daily-bar approximation: typical price (H+L+C
 PROFILE_NOTE = ("Volume profile is a daily-bar approximation: each bar's volume is spread evenly across "
                 "its high-low range.")
 LEVEL_KEYS = ("price", "zone_low", "zone_high", "sources", "touches", "holds", "breaks", "flips", "fresh",
-              "volume_share", "score", "distance_pct", "distance_atr")
+              "last_break", "holds_since_break", "volume_share", "score", "distance_pct", "distance_atr")
 MODULE_NAMES = ("market_context", "regime", "trend_momentum", "relative_strength", "mean_reversion",
                 "volume_flow", "volatility", "levels", "multi_timeframe", "event_risk", "dividends",
                 "macro_events", "signals", "price_action", "candlesticks", "conflicts", "scenarios", "risk")
@@ -223,11 +223,14 @@ def _earnings(ctx, modules: dict, bars: pd.DataFrame, start: pd.Timestamp) -> li
 def _levels(lv: dict) -> dict:
     if not lv.get("available"):
         return {"available": False, "reason": lv.get("reason") or "levels module unavailable",
-                "supports": [], "resistances": []}
+                "current_zone": None, "supports": [], "resistances": []}
     def side(xs):
         return [{k: x.get(k) for k in LEVEL_KEYS} for x in xs or []]
 
+    cz = lv.get("current_zone")
     return {"available": True, "supports": side(lv.get("supports")), "resistances": side(lv.get("resistances")),
+            # the zone the close is in: on neither side, drawn in a neutral colour
+            "current_zone": None if not cz else {**side([cz])[0], "close_position": cz.get("close_position")},
             "high_52w": lv.get("high_52w"), "low_52w": lv.get("low_52w"),
             "lookback_bars": lv.get("lookback_bars"), "window_start": lv.get("window_start"),
             "notes": lv.get("notes") or []}

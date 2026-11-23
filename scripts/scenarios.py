@@ -259,7 +259,8 @@ def _pct1(x: float | None) -> str:
 
 # ---------------------------------------------------------------------------- scenarios
 def _market(ctx, modules) -> dict:
-    """Last close, ATR(14), 20-day realized vol and 52-week / all-time extremes, from ctx or the modules."""
+    """Last close, ATR(14), 20-day realized vol, 52-week / all-time extremes and the key levels (the zone
+    the close is in, supports, resistances), from ctx or the modules."""
     lv, vol = _usable(modules, "levels"), _usable(modules, "volatility")
     tm, rg = _usable(modules, "trend_momentum"), _usable(modules, "regime")
     bars = (ctx or {}).get("bars")
@@ -278,8 +279,10 @@ def _market(ctx, modules) -> dict:
     else:
         ath = bool(_get(lv, "extremes", "at_all_time_high"))
         atl = bool(_get(lv, "extremes", "at_all_time_low"))
+    cz = _get(lv, "current_zone")
     return {"close": close, "atr": atr, "rv20": rv20, "high_52w": hi52, "low_52w": lo52,
             "high_52w_is_all_time": ath, "low_52w_is_all_time": atl,
+            "current_zone": cz if _num(_get(cz, "price")) is not None else None,
             "supports": [x for x in (_get(lv, "supports") or []) if _num(_get(x, "price")) is not None],
             "resistances": [x for x in (_get(lv, "resistances") or []) if _num(_get(x, "price")) is not None]}
 
@@ -310,18 +313,24 @@ def _projection(price: float, mult: float, d: int, close: float, atr: float) -> 
 
 
 def _directional(d: int, mk: dict, ticker: str) -> dict:
-    """Bull (d=+1) or bear (d=-1) scenario: trigger, target zones beyond it, invalidation, text."""
+    """Bull (d=+1) or bear (d=-1) scenario: trigger, target zones beyond it, invalidation, text.
+
+    The trigger is a close out of the zone the last close is in (its top for the bull case, its bottom
+    for the bear case) when there is one, else a close through the nearest resistance / support zone."""
     close, atr = mk["close"], mk["atr"]
     side_levels = mk["resistances"] if d > 0 else mk["supports"]
     kind, cond, back = ("resistance", "close above", "below") if d > 0 else ("support", "close below", "above")
     ext, ext_name = (mk["high_52w"], "high") if d > 0 else (mk["low_52w"], "low")
     ext_all_time = mk["high_52w_is_all_time"] if d > 0 else mk["low_52w_is_all_time"]
 
-    if side_levels:
-        near = side_levels[0]
+    if mk["current_zone"]:
+        near, where = mk["current_zone"], "the zone the close is in"
+    else:
+        near, where = (side_levels[0] if side_levels else None), f"the nearest {kind} zone"
+    if near:
         level = float(_first(near.get("zone_high") if d > 0 else near.get("zone_low"), near["price"]))
         near_edge = float(_first(near.get("zone_low") if d > 0 else near.get("zone_high"), near["price"]))
-        basis = f"{'top' if d > 0 else 'bottom'} of the nearest {kind} zone: {_sources(near, kind)}"
+        basis = f"{'top' if d > 0 else 'bottom'} of {where}: {_sources(near, kind)}"
     elif ext is not None and d * (ext - close) > 0:
         level = near_edge = float(ext)
         basis = (f"all-time {ext_name} (available history)" if ext_all_time else f"52-week {ext_name}") + \
@@ -478,7 +487,9 @@ def _risk_side(d: int, mk: dict, scen_side: dict | None, h: int) -> dict:
             vol_target = None
             notes.append("volatility target would be at or below zero")
 
-    ref = stop_side[0] if stop_side else None
+    # the structure a stop goes behind: the zone the close is in, else the nearest zone on the stop's side
+    in_zone = mk["current_zone"] is not None
+    ref = mk["current_zone"] if in_zone else (stop_side[0] if stop_side else None)
     structural = None
     if ref is not None:
         edge = _first(ref.get("zone_low") if d > 0 else ref.get("zone_high"), ref["price"])
@@ -536,8 +547,10 @@ def _risk_side(d: int, mk: dict, scen_side: dict | None, h: int) -> dict:
             "price": float(ref["price"]), "zone_low": _num(ref.get("zone_low")), "zone_high": _num(ref.get("zone_high")),
             "sources": list(ref.get("sources") or []), "distance_atr": (float(ref["price"]) - entry) / atr,
             "distance_pct": float(ref["price"]) / entry - 1},
-        "structural_stop_basis": (f"nearest {'support zone low -' if d > 0 else 'resistance zone high +'} "
-                                  f"{C.STRUCTURE_STOP_BUFFER_ATR:g} ATR (reference only)"),
+        "structural_stop_basis": ((f"{'bottom' if d > 0 else 'top'} of the zone the close is in "
+                                   f"{'-' if d > 0 else '+'} " if in_zone else
+                                   f"nearest {'support zone low -' if d > 0 else 'resistance zone high +'} ")
+                                  + f"{C.STRUCTURE_STOP_BUFFER_ATR:g} ATR (reference only)"),
         "atr_stop": atr_stop,
         "atr_stop_basis": f"entry {'-' if d > 0 else '+'} {C.STOP_ATR_MULT:g} ATR",
         "stop_distance_atr": dist_atr,
