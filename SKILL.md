@@ -52,7 +52,7 @@ is not advice.
 2. **Run** from the skill folder:
    `python scripts/analyze.py TICKER --horizon swing|position [--out DIR] [--refresh] [--history-start YYYY-MM-DD] [--contract PATH]`.
    - Output goes to `./ta-output/<TICKER>_<as_of>/` by default.
-   - Add `--contract PATH` only when another tool needs the ta-3.2 contract: the other horizon also runs,
+   - Add `--contract PATH` only when another tool needs the ta-3.3 contract: the other horizon also runs,
      from the cache, and the contract covers both (see "Contract for other tools").
    - An uncached run makes 13 API calls for a stock, 11 for an ETF and 10 for SPY. A same-day
      re-run makes 0.
@@ -68,6 +68,8 @@ is not advice.
    - the regime, with the dividend note from `regime.notes` when there is one, and the conflicts;
    - the nearest support and resistance, and the zone the close is in when `levels.current_zone` is set,
      labelled reference only (仅供参考);
+   - the swing structure (`trend_momentum.structure`: higher or lower highs and lows) with its
+     invalidation price, and a trendline (`levels.trendlines`) when one is close or was just broken;
    - the horizon's 1σ range and calibrated 95% range (±2.4σ, not ±2σ), and the volatility stop with
      how often a stop that far away was touched in calibration;
    - any active signals, each with its n;
@@ -108,6 +110,15 @@ is not advice.
 - **SMA100 is a reference, not a vote.** The 100-day SMA (`trend_momentum.sma.sma100`) is widely watched,
   so say where the close sits against it, but it is not in the SMA stack (20/50/200), the regime votes
   or the signals; never let it decide the trend.
+- **Swing structure and trendlines are readings, not votes.** `trend_momentum.structure` and
+  `multi_timeframe.weekly.structure` say whether the swing highs and lows are rising or falling (Dow
+  theory) and give the swing whose break ends the sequence (`invalidation`); `levels.trendlines` gives the
+  line through two swing lows or highs. Neither changes the regime, and a trendline is not a zone: it has
+  no test record. Say "a close below X would end the sequence of higher lows", never that the trend "will"
+  turn. A swing marked `provisional` is the leg still in progress.
+- **Where a zone comes from.** `sources` may name weekly swing points (`weekly_pivot_*`, the larger
+  structure) and `round_number`. A zone with `round_fill: true` is a weak reference: it is listed
+  because that side has few zones, not because price has reacted there. Say so when you list it.
 - **Signal statistics:**
   - always state n, the history start and the confidence;
   - `insufficient` (n < 15) is not evidence;
@@ -120,7 +131,9 @@ is not advice.
   - read them with the same statistics rules as the signals, except that the `library` rows compare with
     all days (`base_median`), not the same-regime baseline; a pattern with no edge on this stock is
     reported as such;
-  - measured-move targets are zones, never price targets presented as advice.
+  - measured-move targets are zones, never price targets presented as advice;
+  - a candlestick pattern with `at_level: true` formed at a support/resistance zone (`level`). Say where
+    it formed; the statistics are for the pattern anywhere, not for the pattern at a level.
 - **Ex-dividend dates and macro events** (`dividends`, `macro_events`) are scheduled context:
   - they are context and not signals; say so;
   - give dates and New York times only. Never predict a release's outcome, its direction or the market's
@@ -151,7 +164,7 @@ is not advice.
 | `--out` | folder | `./ta-output/<TICKER>_<as_of>/` | where `metrics.json` and `chart.html` go |
 | `--refresh` | flag | off | ignore the cache and fetch everything again |
 | `--history-start` | `YYYY-MM-DD` | IPO date | ignore the symbol's history before this date (e.g. a pre-merger SPAC shell) |
-| `--contract` | file path | off | also write the ta-3.2 contract for another tool (both horizons; see below) |
+| `--contract` | file path | off | also write the ta-3.3 contract for another tool (both horizons; see below) |
 | `FMP_BASE_URL` | URL | unset (official FMP) | only for a third-party proxy |
 | `FMP_TLS_VERIFY` | `0` / `1` | `1` | `0` only per process, only for a proxy; ignored for the official host |
 | `FMP_CACHE_DIR` | folder | `~/.cache/fmp-technical` | response cache (never contains the key) |
@@ -160,16 +173,16 @@ is not advice.
 All analysis thresholds live in `scripts/config.py`, and each run records them in
 `meta.config_snapshot`.
 
-## Contract for other tools (ta-3.2)
+## Contract for other tools (ta-3.3)
 
-Tools that build on this skill (a decision engine, a screener) read the **ta-3.2 contract**, not
+Tools that build on this skill (a decision engine, a screener) read the **ta-3.3 contract**, not
 `metrics.json`, whose layout is internal and may change.
 - `python scripts/analyze.py TICKER --contract out.json` writes it: the requested horizon runs as usual and
   the other one runs from the same-day cache, so it costs no extra API calls.
 - `python scripts/contract.py SWING/metrics.json POSITION/metrics.json [-o out.json]` builds it from two saved
   runs of the same ticker and day. Give each run its own `--out`: by default both horizons write to the same
   folder.
-- `contracts/ta-3.2.schema.json` describes every field. Horizon-independent blocks (data quality, market,
+- `contracts/ta-3.3.schema.json` describes every field. Horizon-independent blocks (data quality, market,
   earnings, dividend, macro, volatility, extension, trend, regime, RS, flow, weekly, price-action context)
   sit at the top; the conflicts, zones (`low` / `high`), `price_location`, scenarios, reference stops,
   earnings, the ex-dividend date and macro events inside the horizon, and signal and pattern statistics
@@ -209,6 +222,22 @@ Tools that build on this skill (a decision engine, a screener) read the **ta-3.2
   it. Each zone also carries `last_break` and `holds_since_break`, its record since it last broke. Zones
   may now be up to 1.5 ATR wide (neighbours less than 0.25 ATR apart are merged), and a break cancels one
   hold in `score`.
+- 3.3 adds:
+  - `trend.structure` and `weekly.structure`: the sequence of swing highs and lows (`state` `uptrend`,
+    `downtrend` or `mixed`; `highs` / `lows` `higher`, `lower` or `equal`), the last two swing highs and
+    lows, and `invalidation`, the swing low (high) whose break ends an uptrend (downtrend). A reading
+    only: it is not part of the regime;
+  - per horizon, `trendlines.up` and `trendlines.down`: the line through two swing lows (highs), its
+    price today, the distance, how many swings touch it and whether a close has broken it (`state`
+    `intact` or `broken`). They are not zones and carry no test record;
+  - on candlestick patterns, `at_level` (true when a bullish pattern formed at a support or in the
+    current zone, a bearish one at a resistance or in the current zone) and `level`, the zone. The
+    pattern's statistics do not depend on it.
+
+  Zone `sources` may now name `weekly_pivot_high` / `weekly_pivot_low` (swing points of the weekly chart
+  over about two years, weighted above daily pivots) and `round_number`. A round-number zone that has not
+  earned its place on the test record is shown only where a side has fewer than three zones, and is
+  marked `round_fill: true`.
 - It selects facts and judges nothing; position sizing is left to the caller. Fields are only ever added
   within a major version; renaming or removing one means a new major version, and `tests/test_contract.py` checks the
   output against the schema.

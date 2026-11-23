@@ -364,6 +364,27 @@ crosscheck, contract and UI, not just a config entry.
   `MACD_SLOW` + `MACD_SIGNAL` = 35), with the side of zero it happened on.
 - **Distance from the 52-week high:** the highest split-adjusted high of the last 252 bars, as a
   percentage of the close and in ATRs.
+- **Swing structure** (`structure`, `swings.swing_structure`; `STRUCTURE_LOOKBACK` = 504 bars,
+  `STRUCTURE_EQUAL_ATR` = 0.25): the Dow-theory definition of a trend, read from the same ATR ZigZag
+  swings as the key levels (section H) over a fixed window, so both horizons see the same swings.
+  - `highs` / `lows`: the last swing high (low) against the one before it: `higher`, `lower`, or `equal`
+    when the two are within 0.25 ATR;
+  - `state`: `uptrend` when both are higher, `downtrend` when both are lower, otherwise `mixed`
+    (Murphy, ch. 4: an uptrend is a series of successively higher peaks and troughs);
+  - **the swing in progress:** a pivot needs a 1.5 ATR reversal to be confirmed, but passing the last
+    swing needs none. Once a close after the last pivot is above the last swing high, the leg in
+    progress counts as a swing high at its highest high (`provisional: true`, and its price can still
+    extend); a close below the last swing low makes a provisional swing low the same way. A stock
+    closing at a new high therefore reads as a higher high on that bar, not weeks later;
+  - `invalidation`: the price that ends the sequence, with its date and distance: the last swing low of
+    an uptrend (a close below it makes a lower low), the last swing high of a downtrend; `null` when
+    mixed. `last_high`, `prev_high`, `last_low`, `prev_low` give the four swings compared, and `swings`
+    the last `STRUCTURE_SWINGS` = 6 in time order, each labelled against the previous swing of its side
+    (HH, LH, EH / HL, LL, EL);
+  - these are swings of 1.5 daily ATR, so this is the short-term structure; the weekly chart's is in
+    section I. It is a reading next to the averages: it has no vote in the regime (section B), and
+    where it disagrees with the averages a conflict says so (section 5). `available: false` with a
+    `reason` when the window holds fewer than two swing highs and two swing lows.
 
 ### D. Relative strength (`relative_strength`)
 - **RS line:** the stock's return index divided by the benchmark's, on dates both have (inner join).
@@ -427,11 +448,22 @@ crosscheck, contract and UI, not just a config entry.
   - the window is the last `levels_lookback` bars: 126 for swing, 504 for position (all history if
     shorter, with a note);
   - ATR = ATR(14) at the last bar; without it the module is unavailable.
-- **Swing pivots** (ATR ZigZag, `SWING_ATR` = 1.5):
+- **Swing pivots** (ATR ZigZag, `SWING_ATR` = 1.5; `swings.py`, shared with sections C and I):
   - the running high since the last pivot becomes a pivot high once a later bar's low is 1.5 ATR (that
     bar's ATR) below it; pivot lows mirror this, and pivots alternate;
-  - the latest swing is not confirmed yet, so it is not a pivot, and the first bar only starts the count;
+  - the latest swing is not confirmed yet, so it is not a pivot, and the first bar only starts the count
+    (the count starts `SWING_LEAD_BARS` = 15 bars before the window);
   - `swing_atr` = the smaller of the legs into and out of the pivot, in ATRs.
+- **Weekly swing pivots** (`weekly_pivots`; `WEEKLY_PIVOT_WEEKS` = 104): the major swings.
+  - the same ZigZag on weekly bars (W-FRI), with 1.5 x the weekly ATR(14) as the reversal, over the last
+    104 complete weeks (the count starts `WEEKLY_PIVOT_LEAD` = 26 weeks earlier). The week in progress
+    is left out, so a weekly pivot appears and is confirmed by complete weeks only;
+  - the window is the same for both horizons. A swing run sees only 126 daily bars, so after a long
+    advance the resistance it broke on the way up has left its window, yet by role reversal that is the
+    support to watch (Murphy, ch. 4; Edwards & Magee). The weekly swings bring those prices back, and
+    the longer a level's time frame the more it matters;
+  - each pivot's `date` is the daily bar that made the extreme (`week` = the last trading day of its
+    week), so it lines up with the daily chart; `atr_weekly` is the weekly ATR at the last complete week.
 - **Supply/demand zones** (`BASE_MAX_ATR` = 1, `IMPULSE_ATR` = 2, `IMPULSE_BARS` = 3):
   - a demand base is a bar with a range of at most 1 ATR after which, within 3 bars, a close is at least
     2 ATR above its close, the first of those bars closes up, and no low goes under the base's low;
@@ -461,6 +493,8 @@ crosscheck, contract and UI, not just a config entry.
     missing and gaps are not adjusted.
 - **Candidates, source types and weights** (`LEVEL_SOURCE_WEIGHTS`):
   - swing pivot highs and lows (pivot, 1.0 x `swing_atr` / 1.5, between 1 and `SWING_WEIGHT_CAP` = 3);
+  - weekly swing pivot highs and lows (weekly_pivot, 2.0 x the same size factor in weekly ATRs): twice
+    a daily pivot's weight, and a weekly swing still inside the daily window counts as both;
   - supply/demand zones (supply_demand, 1.0; x `LEVEL_FRESH_FACTOR` = 1.5 when fresh);
   - POC (volume_profile, 1.0), VAL, VAH and HVNs (0.5);
   - 52-week high and low (range_52w, 1.0);
@@ -474,8 +508,16 @@ crosscheck, contract and UI, not just a config entry.
     `structural_distance_pct` and `touch_rate.structural`). The volatility-band stop and target, the
     ATR stop and the headline position-size example do not use the levels and do not move (the first
     target falls back to the level target only when there is no volatility target, e.g. without rv20);
+  - round numbers (round_number, 0.25, like a moving average; Murphy, ch. 4; Osler 2000 and 2003 found
+    orders clustered at them). The step follows the price (`ROUND_STEPS`): 1 below 10, 5 below 50, 10
+    below 200, 50 below 1,000, then 100; it is raised along `ROUND_LADDER` (1, 5, 10, 50, 100, 500, ...)
+    until it is at least `ROUND_MIN_STEP_ATR` = 2 ATR, so a volatile or high-priced stock does not get a
+    round number inside every day's range. Candidates are the multiples of the step within
+    `levels_reach_atr` of the close, plus the nearest one above and the nearest one below it
+    (`levels.round_numbers`: `step`, `prices`);
   - dated candidates (pivots, supply/demand zones, gaps) are also x 0.5 ^ (bars since / half-life),
-    half-life = `LEVEL_HALF_LIFE` (0.5) x the window: 63 bars for swing, 252 for position.
+    half-life = `LEVEL_HALF_LIFE` (0.5) x the window: 63 bars for swing, 252 for position. Weekly
+    pivots age by their own window instead: half-life 0.5 x 104 weeks = 260 bars for both horizons.
 - **Zones** (`KDE_BANDWIDTH_ATR` = 0.25): one density over all candidates, on both sides of the close.
   - Each candidate adds its weight x a Gaussian kernel of width 0.25 ATR at its price (a candidate with
     a zone spreads its weight across it).
@@ -528,6 +570,11 @@ crosscheck, contract and UI, not just a config entry.
   - zones scoring at least 1, or holding the 52-week high or low, qualify;
   - per side (the current zone is on neither): the nearest qualifying zone, then the highest-scoring
     other qualifying zones within reach of the close; the nearest zones beyond reach fill any shortfall;
+  - **round-number fill:** a side still short of 3 takes the nearest zones that hold a round number, did
+    not qualify, and have not been broken more than they held (`reaction_score` >= 0; untested counts).
+    Where price has little or no history, at a new high above all, round numbers are the reference
+    prices left. Such a zone never displaces a qualifying one, keeps its own low score, names
+    `round_number` in its `sources` and is marked `round_fill: true` (every other zone `false`);
   - listed nearest first, each with its score, `distance_pct` and `distance_atr` (negative below the close).
 - **Extremes** (`levels.extremes`, with its `rule`): the close is at the 52-week high when it is the highest
   close of the last 252 bars, the last bar included, or within `EXTREME_NEAR_ATR` (0.5) ATR of their highest
@@ -536,6 +583,27 @@ crosscheck, contract and UI, not just a config entry.
 - **Short side:** if a side has fewer than 3 levels, a note says so, naming an all-time or 52-week
   extreme when price is at one. With a current zone the note counts the levels beyond that zone
   ("... above the current zone ...").
+- **Trendlines** (`levels.trendlines`: `up`, `down`; `swings.trendlines`): sloping support and
+  resistance, reported next to the zones and never mixed into them (a line's price changes every day).
+  - **up line:** from the lowest swing low of the window through the later swing low that gives the
+    flattest line, so every later swing low is on or above it: the line "drawn along successive reaction
+    lows" (Murphy, ch. 4; Edwards & Magee). The **down line** mirrors it through swing highs from the
+    window's highest swing high;
+  - its two points are at least `TRENDLINE_MIN_BARS` = 20 bars apart and the line moves at least
+    `TRENDLINE_MIN_SLOPE_ATR` = 0.01 ATR a bar (about 2.5 ATR a year; a flatter line is a horizontal
+    level, which the zones cover). When either fails, the line starts from the second point instead,
+    which gives the steeper line of an accelerating trend; with no such pair of swings the line is `null`;
+  - `price` = the line's value at the last bar, with `distance_pct` / `distance_atr`; `slope_per_bar`
+    moves it one trading day. The line is straight on an arithmetic price scale, as the charts draw it;
+  - `touches` = the swings within `TRENDLINE_TOL_ATR` = 0.25 ATR of the line, its two points included;
+    `confirmed` = three or more (two points draw a line, the third confirms it);
+  - `state` = `broken` once any close after the second point lay more than 0.25 ATR beyond the line
+    (`broken_on` = the first such bar, `closes_beyond` = how many), else `intact`; `close_side` says
+    where the last close is now. A broken line is still reported: by role reversal it can act from the
+    other side. Once the swing that broke it is confirmed as a pivot, the line is redrawn flatter through
+    it (the fan principle);
+  - the window is the levels window, so the swing run gives the trendline of the last six months and the
+    position run the one of the last two years. Like the zones, trendlines are reference only.
 - **Reference only:** `levels.evidence` = `{note}` (`LEVELS_EVIDENCE_NOTE`). The report, the chart and the
   contract (`levels_note`) carry the note. Read the zones as where price has traded or turned before, not
   as predictions.
@@ -551,6 +619,11 @@ crosscheck, contract and UI, not just a config entry.
   - contradicts: opposite non-zero signs;
   - mixed: anything else.
 - **Partial week:** the latest week is flagged while it has NYSE sessions left (section 2).
+- **Weekly swing structure** (`weekly.structure`): the reading of section C on the weekly swing pivots
+  of section H (1.5 weekly ATR, complete weeks): the major trend's highs and lows, with the same
+  provisional swing once a daily close passes the last weekly swing. "Equal" is within 0.25 weekly ATR;
+  `invalidation.distance_atr` is in daily ATRs. A reading only: the weekly direction and the alignment
+  above still come from the averages.
 
 ### J. Event risk (`event_risk`, stocks only)
 - **Next earnings:** the earliest report after `as_of`, or one dated `as_of` that is not reported yet.
@@ -676,6 +749,15 @@ parameters (`PA_*`, `CS_*` in config.py) and what the daily-bar approximation le
   20-gap-bar EMA tests and measured-move targets. Eight setups (`pa_*`) get statistics.
 - **Candlestick patterns:** twelve classic directional patterns after a 5-bar decline or advance
   (`cs_*`), plus doji markers without statistics.
+- **Where a pattern formed** (`candlesticks.active[].at_level`, `.level`; `candlesticks.locate`): a
+  reversal pattern means more at support or resistance than in the middle of nowhere (Nison). A bullish
+  pattern is at a level when the lowest low of its bars reached a support zone, or the zone the close
+  is in (came within `TEST_TOL_ATR` = 0.1 ATR of its top or lower), and its last bar closed at or above
+  that zone's bottom; a bearish pattern mirrors this with its highest high at a resistance zone or the
+  current zone. `level` names the zone (`label` S1.. / R1.. / Z, `side`, `price`, `zone_low`,
+  `zone_high`, `sources`); `at_level` is `null` when the key levels are unavailable. The zones are the
+  horizon's key levels as of the last bar. It is a label only: the statistics stay those of the pattern
+  wherever it formed, since a per-location record would need the levels as they stood on every past bar.
 - **Statistics:** the same machinery as section 4 (`signal_stats.OutcomeCache`, `active_rows`): active
   rows with same-regime baselines, plus a `library` table of every rule at the primary horizon against
   the unconditional baseline.
@@ -727,6 +809,7 @@ listed only; nothing is added up.
 |---|---|---|
 | `price_flow_divergence` | OBV or A/D divergence active | participation not confirming the price extreme; can persist in strong trends |
 | `daily_vs_weekly` | weekly contradicts daily | counter-trend move inside the larger trend |
+| `trend_vs_structure` | regime direction up while the last swing low is lower than the one before (`trend_momentum.structure.lows` = lower), unless a later swing high is a higher high (the trend resumed); or direction down with a higher last swing high, unless a later swing low is a lower low. When both sides go against the averages the description says so | the averages lag the swings: often the first sign of a change of trend, or a deeper pullback than the averages show yet |
 | `rs_vs_market` | the stock beat SPY over both 3m and 6m (`relative_strength.vs_spy.rel_return_3m` / `_6m` > 0) while SPY is below its SMA200 | leadership against a risk-off tape |
 | `squeeze_no_direction` | squeeze on with regime direction 0 | break direction unknown |
 | `earnings_in_horizon` | next earnings inside the primary horizon | the event can override the technicals; a reaction adds a jump to the ordinary range |
@@ -855,6 +938,8 @@ drop out.
   split-adjusted candles, with:
   - SMA20/50/100/200 (SMA100, the context line, in its own colour) and the anchored VWAPs;
   - the nearest 3 supports and resistances as zones;
+  - the up and down trendlines of the levels window (dash-dot while intact, dotted once broken, with a
+    dot at each of their two points); the key-levels card lists them under the zones;
   - earnings markers;
   - a volume-profile sidebar (POC, value area);
   - volume with RVOL, RSI(14) with 30/70 lines, and the RS line vs SPY rebased to 100 at the window start.

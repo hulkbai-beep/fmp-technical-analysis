@@ -15,6 +15,7 @@ import pandas as pd
 
 import config as C
 import indicators as I
+import swings as SW
 
 SMA_MID, SMA_LONG = C.SMA_PERIODS[1], C.SMA_PERIODS[2]
 
@@ -381,8 +382,10 @@ def alignment(weekly_sign: int | None, daily_sign: int) -> str | None:
 
 
 def build_multi_timeframe(ctx) -> dict:
-    """I: weekly (W-FRI) close vs 10w/40w SMA and weekly RSI, and whether it confirms the daily direction.
-    The latest week is partial while sessions of it remain (ctx["calendar"]; weekdays without one)."""
+    """I: weekly (W-FRI) close vs 10w/40w SMA and weekly RSI, whether it confirms the daily direction, and
+    the swing structure of the weekly chart (swings.swing_structure on the weekly ZigZag pivots: the major
+    swings; a reading only). The latest week is partial while sessions of it remain (ctx["calendar"];
+    weekdays without one); weekly pivots come from complete weeks."""
     notes: list[str] = []
     fast, slow = C.WEEKLY_SMA_FAST, C.WEEKLY_SMA_SLOW
     wk = I.resample_weekly(ctx["bars"], ctx.get("calendar"))
@@ -403,6 +406,14 @@ def build_multi_timeframe(ctx) -> dict:
     else:
         w_sign, w_label = 0, "Mixed"
 
+    major = SW.weekly_pivots(ctx["bars"], ctx.get("calendar"))
+    if major["available"]:
+        ind = ctx.get("ind")
+        atr_d = last(ind["atr14"]) if ind is not None and "atr14" in ind else None
+        structure = SW.swing_structure(ctx["bars"], major, major["atr_weekly"], atr_d or major["atr_weekly"])
+    else:
+        structure = {"available": False, "reason": major["reason"]}
+
     daily_sign = daily_direction(ctx)["sign"]
     align = alignment(w_sign, daily_sign)
     if align is None:
@@ -422,6 +433,7 @@ def build_multi_timeframe(ctx) -> dict:
             "date": iso(wk.index[-1]), "bars": len(wk), "close": c,
             "sma10w": f, "sma40w": s, "rsi14w": rsi_w,
             "direction": w_label, "sign": w_sign, "partial_week": partial,
+            "structure": structure,
         },
         "daily_sign": daily_sign,
         "alignment": align,

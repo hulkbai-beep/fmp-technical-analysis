@@ -146,6 +146,76 @@ def test_bullish_signals_in_bearish_regime_conflict():
     assert any(c["type"] == "signals_both_ways" for c in found)
 
 
+def swing_structure(highs, lows, last_high=(104.0, "2026-10-01"), prev_high=(102.0, "2026-09-01"),
+                    last_low=(97.0, "2026-10-12"), prev_low=(95.0, "2026-09-14"), provisional=None):
+    point = lambda p, side: {"price": p[0], "date": p[1], "provisional": side == provisional}  # noqa: E731
+    return {"available": True, "state": "uptrend" if highs == lows == "higher" else "mixed", "highs": highs,
+            "lows": lows, "last_high": point(last_high, "high"), "prev_high": point(prev_high, "high"),
+            "last_low": point(last_low, "low"), "prev_low": point(prev_low, "low")}
+
+
+def test_trend_vs_structure_conflict_when_the_averages_rise_but_the_last_swing_low_is_lower():
+    m = modules_for(1)
+    assert not any(c["type"] == "trend_vs_structure" for c in conflicts(m))          # no structure block: no conflict
+    m["trend_momentum"]["structure"] = swing_structure("higher", "higher")
+    assert not any(c["type"] == "trend_vs_structure" for c in conflicts(m))          # the swings agree with the averages
+    m["trend_momentum"]["structure"] = swing_structure("higher", "lower", last_low=(93.5, "2026-10-12"),
+                                                       provisional="low")
+    (c,) = [c for c in conflicts(m) if c["type"] == "trend_vs_structure"]
+    assert c["key"] == "trend_vs_structure_up" and c["involved"] == ["regime", "swing_structure"]
+    assert c["description"] == ("the moving averages point up while the last swing low (93.50, 2026-10-12) is below "
+                                "the one before (95.00, 2026-09-14)")
+    assert "Dow theory" in c["typical_meaning"] and "will" not in c["typical_meaning"].split()
+    assert c["params"] == {"side": "low", "price": 93.5, "date": "2026-10-12", "prev_price": 95.0,
+                           "prev_date": "2026-09-14", "provisional": True, "structure": "mixed"}
+    # an equal low is not a lower low, and a falling regime does not fire the "up" conflict
+    m["trend_momentum"]["structure"] = swing_structure("higher", "equal")
+    assert not any(c["type"] == "trend_vs_structure" for c in conflicts(m))
+    down = modules_for(-1)
+    down["trend_momentum"]["structure"] = swing_structure("lower", "lower")
+    assert not any(c["type"] == "trend_vs_structure" for c in conflicts(down))
+
+
+def test_trend_vs_structure_conflict_mirrors_for_a_downtrend_and_needs_the_latest_swing():
+    m = modules_for(-1)
+    m["trend_momentum"]["structure"] = swing_structure("higher", "lower", last_high=(106.0, "2026-10-20"),
+                                                       last_low=(93.5, "2026-10-12"))
+    (c,) = [c for c in conflicts(m) if c["type"] == "trend_vs_structure"]
+    assert c["key"] == "trend_vs_structure_down" and "point down while the last swing high (106.00, 2026-10-20) is " \
+        "above the one before (102.00, 2026-09-01)" in c["description"]
+    assert c["params"]["provisional"] is False
+    # a lower low made after that higher high: the downtrend resumed, the high is no longer the latest word
+    m["trend_momentum"]["structure"] = swing_structure("higher", "lower", last_high=(106.0, "2026-10-01"),
+                                                       last_low=(93.5, "2026-10-12"))
+    assert not any(c["type"] == "trend_vs_structure" for c in conflicts(m))
+    # ... but a later low that held above the one before did not resume it: higher high, then higher low
+    st = swing_structure("higher", "higher", last_high=(106.0, "2026-10-01"), last_low=(97.0, "2026-10-12"))
+    m["trend_momentum"]["structure"] = st
+    (c,) = [c for c in conflicts(m) if c["type"] == "trend_vs_structure"]
+    assert c["description"].endswith("is above the one before (102.00, 2026-09-01), and so is the last swing low "
+                                     "(97.00, 2026-10-12): the swings are in an uptrend")
+    assert c["params"]["structure"] == "uptrend"
+    # the same rule the other way round: a higher high after the lower low resumed the uptrend
+    up = modules_for(1)
+    up["trend_momentum"]["structure"] = swing_structure("higher", "lower", last_high=(106.0, "2026-10-20"),
+                                                        last_low=(93.5, "2026-10-12"))
+    assert not any(c["type"] == "trend_vs_structure" for c in conflicts(up))
+    # a lower high after the lower low did not: the swings are in a downtrend against rising averages
+    st = swing_structure("lower", "lower", last_high=(101.0, "2026-10-20"), last_low=(93.5, "2026-10-12"))
+    up["trend_momentum"]["structure"] = {**st, "state": "downtrend"}
+    (c,) = [c for c in conflicts(up) if c["type"] == "trend_vs_structure"]
+    assert c["description"] == ("the moving averages point up while the last swing low (93.50, 2026-10-12) is below "
+                                "the one before (95.00, 2026-09-14), and so is the last swing high (101.00, "
+                                "2026-10-20): the swings are in a downtrend")
+    # a structure that could not be read, or a regime without a direction, flags nothing
+    up["trend_momentum"]["structure"] = {"available": False, "reason": "needs two confirmed swing highs"}
+    assert not any(c["type"] == "trend_vs_structure" for c in conflicts(up))
+    flat = modules_for(1)
+    flat["regime"]["direction_sign"] = 0
+    flat["trend_momentum"]["structure"] = swing_structure("higher", "lower")
+    assert not any(c["type"] == "trend_vs_structure" for c in conflicts(flat))
+
+
 # ---------------------------------------------------------------------------- scenarios
 def test_scenarios_with_levels():
     m = modules_for(1)

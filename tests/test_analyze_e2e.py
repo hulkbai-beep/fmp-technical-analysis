@@ -152,6 +152,40 @@ def test_stock_swing_run():
     assert chart_data["rs_spy"] and chart_data["rs_spy"][0][1] == pytest.approx(100.0)
 
 
+def test_swing_structure_trendlines_and_pattern_places_in_a_full_run():
+    m, chart_data = run(stock_market())
+    lv, tm, weekly = m["levels"], m["trend_momentum"], m["multi_timeframe"]["weekly"]
+    assert tm["structure"]["available"] is True and weekly["structure"]["available"] is True
+    assert lv["weekly_pivots"]["available"] is True and lv["weekly_pivots"]["weeks"] == C.WEEKLY_PIVOT_WEEKS
+    assert lv["round_numbers"]["step"] in C.ROUND_LADDER and len(lv["round_numbers"]["prices"]) >= 2
+    assert {"up", "down", "rule"} <= set(lv["trendlines"])
+    assert all(isinstance(z["round_fill"], bool) for z in lv["supports"] + lv["resistances"])
+    assert m["candlesticks"]["at_level_rule"]
+    assert all(isinstance(a["at_level"], bool) for a in m["candlesticks"]["active"])
+    cfg = m["meta"]["config_snapshot"]
+    assert cfg["levels"]["source_weights"]["weekly_pivot"] == C.LEVEL_SOURCE_WEIGHTS["weekly_pivot"]
+    assert cfg["levels"]["round_steps"][-1] == [None, C.ROUND_STEP_TOP]
+    assert cfg["structure"] == {"lookback": C.STRUCTURE_LOOKBACK, "equal_atr": C.STRUCTURE_EQUAL_ATR,
+                                "swings_listed": C.STRUCTURE_SWINGS}
+    assert chart_data["regime"]["structure"]["state"] == tm["structure"]["state"]
+    assert len(chart_data["levels"]["trendlines"]) == sum(lv["trendlines"][k] is not None for k in ("up", "down"))
+    # the swings are read the same way whatever the horizon; only the levels window (and its trendlines) differs
+    pos, _ = run(stock_market(), horizon="position")
+    assert pos["trend_momentum"]["structure"] == tm["structure"]
+    assert pos["multi_timeframe"]["weekly"]["structure"] == weekly["structure"]
+    assert pos["levels"]["weekly_pivots"]["highs"] == lv["weekly_pivots"]["highs"]
+
+
+def test_a_failing_pattern_place_is_reported_and_the_patterns_stay(monkeypatch):
+    def broken(ctx, cs, lv):
+        raise KeyError("boom")
+    monkeypatch.setattr(analyze.CS, "locate", broken)
+    m, _ = analyze.run_analysis("ACME", client=stock_market(), now=NOW)
+    assert m["candlesticks"]["available"] is True and "at_level_rule" not in m["candlesticks"]
+    assert any(e.startswith("candlesticks.at_level: KeyError") for e in m["meta"]["errors"])
+    assert m["conflicts"]["available"] and m["scenarios"]["horizon_days"] == 10
+
+
 def test_stock_position_run():
     m, chart_data = run(stock_market(), horizon="position")
     assert m["horizon"] == "position"
@@ -314,7 +348,8 @@ def test_sma100_never_changes_the_regime_conflicts_or_signals(monkeypatch, horiz
     """SMA100 is context only: with absurd SMA100 values in the indicator frame, the regime, the conflicts,
     the signals, the SMA20/50/200 stack, everything weekly and the price-action EMA stay exactly as they were.
     Only the SMA100 readings and, through its low-weight level candidate, the levels and what is built from
-    them may move: the scenarios, and the risk block's reference-only structural stop and level target (with
+    them may move: the scenarios, the place of the active candlestick patterns (at_level / level), and the risk
+    block's reference-only structural stop and level target (with
     their distances, touch rates, reward/risk and by_stop.structural size; contract stops_ref.*.structural).
     The volatility-band stop and target, the ATR stop and the headline position-size example do not use the
     levels, so they stay too."""
@@ -335,8 +370,12 @@ def test_sma100_never_changes_the_regime_conflicts_or_signals(monkeypatch, horiz
     assert weird["regime"] == normal["regime"]
     assert weird["conflicts"] == normal["conflicts"]
     assert weird["signals"] == normal["signals"]
-    for k in ("market_context", "multi_timeframe", "mean_reversion", "price_action", "candlesticks"):
+    for k in ("market_context", "multi_timeframe", "mean_reversion", "price_action"):
         assert weird[k] == normal[k], k
+
+    def unplaced(cs):
+        return {**cs, "active": [{k: v for k, v in a.items() if k not in ("at_level", "level")} for a in cs["active"]]}
+    assert unplaced(weird["candlesticks"]) == unplaced(normal["candlesticks"])
     # risk: only the reference-only structural stop / level target built from the zones may follow them
     for side in ("long_side", "short_side"):
         r_n, r_w = normal["risk"][side], weird["risk"][side]

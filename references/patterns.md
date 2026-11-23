@@ -95,6 +95,23 @@ of the bar before the pattern. Single-bar shapes need a range of at least 0.5 x 
 
 **Doji** (`body <= 0.1 x range and range >= 0.5 x ATR14 (marked on the chart; no direction, so no statistics)`): marked on the chart only.
 
+### Where a pattern formed (`at_level`)
+
+Classic candlestick reading gives a reversal pattern more weight when it forms at support or resistance
+(Nison, *Japanese Candlestick Charting Techniques*). Each pattern in `candlesticks.active` therefore carries a label:
+
+- `at_level: true` when a bullish pattern's lowest low reached a support zone, or the zone the close is
+  in (came within `TEST_TOL_ATR` = 0.1 ATR of the zone's top or lower), and its last bar closed at or
+  above the zone's bottom; a bearish pattern mirrors this with its highest high at a resistance zone or
+  the zone the close is in;
+- `level` names the zone (`label` S1..S3, R1..R3 or Z for the zone the close is in; `side`, `price`,
+  `zone_low`, `zone_high`); it carries no score. The zone's test record stays in `levels`;
+- zones are the horizon's key levels as of the last bar, so the same pattern can be at a level for swing
+  and not for position; `at_level` is `null` when the key levels are unavailable.
+
+It is a label only. The statistics stay those of the pattern wherever it formed: a pattern at a level
+is too rare on one stock to measure separately, and no rule or threshold depends on the label.
+
 The chart shows the same window as the main chart; candles that belong to a pattern are solid, the
 rest pale, with the pattern's short name above (bearish) or below (bullish) it and a bracket over
 multi-bar patterns. The panel lists the recent patterns, the patterns that fired in the last 3 bars
@@ -111,6 +128,6 @@ with their statistics, and every pattern's record at the primary horizon.
 - `price_action` also carries `state`, `always_in`, `bar`, `ema`, `ema_slope`, `close_vs_ema_atr`,
   `trading_range`, `gap_bars`, `last_high_count`, `last_low_count`, `last_wedge`,
   `last_failed_breakout` and `measured_moves`; `candlesticks` carries `recent` (the 5 most recent
-  patterns) and `last_doji`.
+  patterns), `last_doji` and, on each `active` row, `at_level` and `level` (see above).
 - Classic candlestick patterns usually show little edge on daily US stocks. A near-zero or wrong-signed
   edge is a result to report as such, not a reason to drop or retune a rule.

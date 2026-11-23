@@ -128,6 +128,8 @@ or ^VIX block shows its `reason`.
   `.compression`, `.bb_width_pctl`;
 - multi-timeframe: `multi_timeframe.weekly.direction`, `.sma10w`, `.sma40w`, `.rsi14w`,
   `.partial_week`, `multi_timeframe.alignment` and `multi_timeframe.note`;
+- weekly swing structure: `multi_timeframe.weekly.structure.state`, `.highs`, `.lows`, `.invalidation`
+  (`price`, `date`, `distance_pct`); when `.available` is false give its `reason`;
 - the Rule column's thresholds: `meta.config_snapshot.regime` (`adx_trend`, `adx_range`, `vol_low_pctl`,
   `vol_high_pctl`, `vol_extreme_pctl`, `compression_bw_pctl`).
 
@@ -135,6 +137,10 @@ or ^VIX block shows its `reason`.
 "ADX 28.7 | trending | ADX ≥ 25". Then 1-2 sentences:
 - what the regime implies for which readings to read first: in trend regimes trend, momentum and RS;
   in range regimes mean reversion, flow and the volatility setup.
+
+Add a "Weekly structure" row after the weekly row: "higher highs and higher lows (uptrend); a weekly
+close below 300.57 (2026-08-07 swing low, -8.1%) would end the sequence". The swing structure is a reading
+next to the regime, never one of its votes: when it disagrees with the regime, say both.
 
 List `regime.notes` and `multi_timeframe.notes` if present, e.g. fewer than 200 bars. Quote the dividend
 note in full when there is one (a large payer: the price as traded lags the total return, so the SMAs, MACD,
@@ -145,12 +151,23 @@ trend votes, weekly direction and 52-week high lean down).
 - trend: `trend_momentum.sma.stack`, `.sma.close_vs`, `.sma.slopes`, `.from_52w_high.pct`;
   `trend_momentum.sma.sma100` and `.sma.close_vs.sma100` as a reference line (e.g. "close +3.1% vs SMA100,
   a widely watched reference line"): it is not part of `.sma.stack` (SMA20/50/200, `.sma.stack_periods`);
+- swing structure: `trend_momentum.structure.state` (`uptrend`, `downtrend`, `mixed`), `.highs`, `.lows`
+  (`higher`, `lower`, `equal`), `.last_high`, `.prev_high`, `.last_low`, `.prev_low` (each `date`, `price`,
+  `provisional`), `.invalidation` (`price`, `date`, `kind`, `distance_pct`, `distance_atr`); when
+  `.available` is false give its `reason`;
 - momentum: `trend_momentum.mom_12_1`, `.returns.1m/3m/6m/12m`, `.macd.hist`, `.macd.last_cross` (type, date);
 - relative strength: `relative_strength.vs_spy.rel_return_3m/6m`, `.rs_new_high` / `.rs_new_low`, the same
   for `relative_strength.vs_sector` (stocks), `relative_strength.beta_1y`, `.corr_1y`;
 - mean reversion: `mean_reversion.rsi14`, `.rsi2`, `.z20`, `.bb_pct_b`, `.dist_sma50_atr`;
 - volume / flow: `volume_flow.rvol`, `.updown_volume_ratio_50d`, `.obv.divergence`, `.ad.divergence`;
 - volatility: `volatility.atr14`, `.atr_pct`, `.bb_width_pctl`, `.squeeze.on`, `.squeeze.bars`.
+
+**Swing structure row.** Put it right after the trend row. Readings: the last two swing highs and lows
+with their dates ("highs 263.10 (09-18) → 271.40 (10-20); lows 244.80 (09-04) → 252.30 (10-07)"). Plain
+reading: "higher highs and higher lows: an uptrend by Dow theory; a close below 252.30 would end the
+sequence (-4.2%, -1.9 ATR)". For `mixed` say which side is higher and which lower, and that there is no
+invalidation price. Mark a `provisional` swing as "(in progress)": it is the leg still running and its
+price can extend. Never write that the trend "will" continue or reverse.
 
 **Layout:** a table (Dimension | Readings | Plain reading), one row per dimension above in that order. The
 plain reading describes the numbers in words ("price above all three trend SMAs, stacked 20>50>200";
@@ -169,7 +186,7 @@ Do not invent conflicts, and do not drop any.
 **Fields:**
 - resistances and supports: `levels.resistances[*]` and `levels.supports[*]`, each with `price`,
   `zone_low`, `zone_high`, `distance_pct`, `distance_atr`, `sources`, `touches` (earlier tests), `holds`,
-  `breaks`, `weak`, `flips`, `fresh`, `last_break`, `holds_since_break`, `score`;
+  `breaks`, `weak`, `flips`, `fresh`, `last_break`, `holds_since_break`, `score`, `round_fill`;
 - the zone the close is in: `levels.current_zone` (the same fields plus `close_position`), or `null`;
 - the last close and ATR: `levels.last_close`, `levels.atr`;
 - the window: `levels.lookback_bars`, `levels.window_start`;
@@ -177,6 +194,10 @@ Do not invent conflicts, and do not drop any.
 - the 52-week range: `levels.high_52w` / `levels.high_52w_date` and `levels.low_52w` / `levels.low_52w_date`;
 - unfilled gaps: `levels.gaps[*]` with `date`, `direction`, `bottom`, `top` (the part still open),
   `partially_filled`, `ex_dividend`;
+- trendlines: `levels.trendlines.up` and `.down`, each `null` or with `anchor` and `second` (`date`,
+  `price`), `price` (the line today), `distance_pct`, `distance_atr`, `touches`, `confirmed`, `state`
+  (`intact` / `broken`), `broken_on`;
+- round numbers: `levels.round_numbers.step`;
 - `levels.extremes` and `levels.notes`;
 - `levels.evidence.note` (the zones are reference only);
 - anchored VWAPs: `volume_flow.anchored_vwaps[*]` with `anchor`, `anchor_date`, `vwap`,
@@ -201,11 +222,20 @@ Do not invent conflicts, and do not drop any.
    `bottom`-`top`, "partly filled" when `partially_filled`, and "ex-dividend bar" when `ex_dividend` is set
    (a gap down there is measured net of the dividend). They count among the zone candidates but appear as a
    zone source only when they fall inside a zone. None: "No unfilled gaps in the window."
-4. A small anchored-VWAP table.
+4. **Trendlines** (`levels.trendlines`), one line each, when not `null`: "Up trendline (2025-04-07 →
+   2026-07-29, 3 touches): at 209.24 today, 0.8% below the close, intact" or "... broken on 2026-10-23
+   (a close more than 0.25 ATR beyond it)". A trendline is not a zone: it has no test record and its price
+   changes every day. A line with two touches is unconfirmed; say "two points so far". Both `null`: leave
+   the item out.
+5. A small anchored-VWAP table.
 
 **Labels:** call the volume profile and VWAPs "daily-bar approximations". The sources `sma50`, `sma100`
 and `sma200` are the 50-, 100- and 200-day SMAs (low-weight moving-average candidates; write them SMA50,
-SMA100, SMA200). If a side has fewer than 3
+SMA100, SMA200). `weekly_pivot_high` / `weekly_pivot_low` are swing highs and lows of the weekly chart
+over about two years (write them "weekly swing high / low": the larger structure); `round_number` is a
+multiple of `levels.round_numbers.step`. A zone with `round_fill: true` is a round number that price has
+not reacted at; it is listed only because that side has few zones: write "round number, weak reference"
+in its Tests cell. If a side has fewer than 3
 levels, quote the note (e.g. "price at an all-time high (available history): no resistance levels
 above the last close in the window"; with a current zone it reads "... above the current zone ..."). Give the other `levels.notes` as short bullets (anchored VWAPs too
 young to be levels, gaps on ex-dividend bars that the dividend explains).
@@ -255,6 +285,8 @@ These two libraries are context (`references/patterns.md`). Say so once.
   `price_action.last_high_count`, `.last_low_count`, `.last_wedge`, `.last_failed_breakout`;
   `price_action.measured_moves[*]` (`kind`, `side`, `target`, `distance_pct`, `distance_atr`, `reached`);
 - `price_action.active[*]` and `candlesticks.active[*]`: the same fields as `signals.active[*]`;
+  `candlesticks.active[*]` also has `at_level` and `level` (`label`, `side`, `price`, `zone_low`,
+  `zone_high`);
 - `price_action.library[*]` and `candlesticks.library[*]`: `name`, `n`, `hit_rate`, `median`,
   `edge_median`, `edge_hit_rate`, `confidence`, `last_fired`;
 - `candlesticks.recent[*]`, `candlesticks.last_doji`; `price_action.approximation`, `.caveats`,
@@ -269,6 +301,11 @@ These two libraries are context (`references/patterns.md`). Say so once.
 3. **Active setups and patterns** (`price_action.active`, `candlesticks.active`): the same table and
    sentence form as section 7, at the primary horizon. None active: "No price-action setup or
    candlestick pattern fired in the last 3 bars."
+   - **Where it formed.** For a candlestick pattern with `at_level: true`, add "formed at S1
+     (251.80-253.10)" from `level` ("in the zone the close is in" when `level.label` is `Z`); with
+     `false`, "not at a support/resistance zone". Classic candlestick reading gives a reversal pattern
+     more weight at a level, but the statistics in the table are for the pattern wherever it formed, so do
+     not present them as the record of the pattern at a level.
 4. **Library record:** one sentence per library. Its edges are against all days (`base_median`,
    `base_hit_rate`), not the same-regime baseline of the active rows; say so once. Use the edge test
    (`meta.config_snapshot.signals.edge_min` on `edge_median`, `.hit_edge_min` on `edge_hit_rate`): name,
@@ -461,6 +498,7 @@ technical analysis for information only, not investment advice.* Chinese: *仅�
 | Trend strength | ADX 28.7 (+DI 42.4 / -DI 13.2) | ADX ≥ 25 → trending |
 | Volatility | normal (rv20 25.2%, 72nd percentile) | 20-80th percentile → normal |
 | Weekly | uptrend, confirms the daily | close > 10w > 40w |
+| Weekly structure | higher highs and higher lows; a weekly close below 3,902.40 (2026-07-24 swing low, -12.8%) would end the sequence | weekly swing points (Dow theory) |
 
 In a trend regime, read trend, momentum and relative strength first.
 
@@ -468,6 +506,7 @@ In a trend regime, read trend, momentum and relative strength first.
 | Dimension | Readings | Plain reading |
 |---|---|---|
 | Trend | close +15.0% vs SMA50, +32.7% vs SMA200; stack 20>50>200 | above all three trend SMAs, stacked bullishly |
+| Swing structure | highs 4,310.20 (08-12) → 4,598.10 (09-02); lows 4,120.40 (08-21) → 4,188.20 (09-18) | higher highs and higher lows: an uptrend by Dow theory; a close below 4,188.20 would end the sequence (-6.4%, -3.0 ATR) |
 | Mean reversion | RSI14 75.2, RSI2 96.1, z20 +2.4 | overbought and stretched above the 20-day mean |
 | … | | |
 
@@ -492,6 +531,9 @@ POC 3,540.12; value area 3,402.55-3,781.20 (daily-bar approximation, last 126 ba
 3,120.40 (2026-01-14) to 4,598.10 (2026-09-02). Unfilled gaps: up 4,201.80-4,266.35 (2026-09-18, partly
 filled).
 
+Up trendline (2026-06-12 → 2026-09-18, 3 touches): at 4,238.60 today, 5.3% below the close, intact. A
+trendline is not a zone and has no test record. No down trendline.
+
 ## 7. Signal statistics
 | Signal | Fired | Regime | n | Hit | Median | Same-regime | Edge | Sample |
 |---|---|---|---|---|---|---|---|---|
@@ -506,7 +548,8 @@ the median 10-day forward return was +0.8% (hit rate 55%), versus +0.4% (53%) fo
 Context only (daily-bar approximation of Al Brooks' methods). The market
 has been in a tight bull channel since 2026-10-09 (6 bars), always-in long since 2026-09-30; the close
 sits 1.4 ATR above the rising 20 EMA. The last H2 was 4 bars ago. Unreached measured-move zone:
-4,701.20 (+3.1%, +1.4 ATR). Recent candlestick patterns: shooting star 2 bars ago.
+4,701.20 (+3.1%, +1.4 ATR). Recent candlestick patterns: shooting star 2 bars ago, not at a
+support/resistance zone.
 
 | Setup / pattern | Fired | Regime | n | Hit | Median | Same-regime | Edge | Sample |
 |---|---|---|---|---|---|---|---|---|

@@ -192,6 +192,38 @@ def _conflicts(ctx, modules, views: list[dict]) -> list[dict]:
                                      "median_abs_move": med, "n": n}))
 
     regime_sign = _sign(direction) if direction is not None else 0
+    st = _block(_usable(modules, "trend_momentum"), "structure")
+    for sign, side, verdict, word, ma_word, meaning in (
+            (1, "low", "lower", "below", "up",
+             "Dow theory asks an uptrend for higher lows. A lower low while the averages still rise is often the "
+             "first sign of a change of trend, or of a deeper pullback than the averages show yet: they lag the swings."),
+            (-1, "high", "higher", "above", "down",
+             "Dow theory asks a downtrend for lower highs. A higher high while the averages still fall is often "
+             "the first sign of a change of trend, or of a sharper rally than the averages show yet: they lag the swings.")):
+        if regime_sign != sign or _get(st, f"{side}s") != verdict:
+            continue
+        now, before = _get(st, f"last_{side}") or {}, _get(st, f"prev_{side}") or {}
+        other_side = "high" if side == "low" else "low"
+        other = _get(st, f"last_{other_side}") or {}
+        if _num(now.get("price")) is None or _num(before.get("price")) is None:
+            continue
+        # a later swing on the other side that resumed the trend (a new higher high after the lower low):
+        # the break is no longer the latest word
+        if (str(other.get("date") or "") > str(now.get("date") or "")
+                and _get(st, f"{other_side}s") == ("higher" if sign > 0 else "lower")):
+            continue
+        desc = (f"the moving averages point {ma_word} while the last swing {side} "
+                f"({_px(now['price'])}, {now.get('date')}) is {word} the one before "
+                f"({_px(before['price'])}, {before.get('date')})")
+        against = _get(st, "state") == ("downtrend" if sign > 0 else "uptrend")
+        if against and _num(other.get("price")) is not None:      # both sides: the swings trend the other way
+            desc += (f", and so is the last swing {other_side} ({_px(other['price'])}, {other.get('date')}): "
+                     f"the swings are in {'a downtrend' if sign > 0 else 'an uptrend'}")
+        out.append(_conflict("trend_vs_structure", ["regime", "swing_structure"], desc,
+                             meaning, key=f"trend_vs_structure_{ma_word}",
+                             params={"side": side, "price": _num(now["price"]), "date": now.get("date"),
+                                     "prev_price": _num(before["price"]), "prev_date": before.get("date"),
+                                     "provisional": bool(now.get("provisional")), "structure": _get(st, "state")}))
     for bias, word, regime_word, meaning in (
             (1, "bullish", "a downtrend",
              "Counter-trend setups: bullish signals in a downtrend have mostly worked as short-lived bounces; "

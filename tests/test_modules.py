@@ -88,6 +88,29 @@ def test_trend_momentum_short_history():
     assert exactly["mom_12_1"] is not None
 
 
+def test_swing_structure_is_the_same_reading_for_both_horizons_and_leaves_the_rest_alone():
+    import swings as SW
+    bars = synthetic_bars(700)
+    ctx = make_ctx(bars)
+    out = M.build_trend_momentum(ctx)
+    st = out["structure"]
+    assert st["available"] is True and st["state"] in ("uptrend", "downtrend", "mixed")
+    # the ZigZag of the key levels over a fixed 504 bars, not the horizon's window
+    atr = ctx["ind"]["atr14"]
+    assert st == SW.swing_structure(bars, SW.daily_pivots(bars, atr, C.STRUCTURE_LOOKBACK), float(atr.iloc[-1]))
+    position = M.build_trend_momentum(make_ctx(bars, horizon="position", hz=C.HORIZONS["position"]))
+    assert position["structure"] == st
+    assert (st["invalidation"] is None) == (st["state"] == "mixed")
+    # a reading next to the averages: nothing else in the module moves with it
+    assert {k for k in out if k != "structure"} == {"available", "close", "mom_12_1", "returns", "sma", "macd",
+                                                    "from_52w_high", "notes"}
+    # too few swings: said in the block, not as a note
+    quiet = bars_from_close(np.full(300, 100.0))
+    flat = M.build_trend_momentum(make_ctx(quiet))
+    assert flat["structure"]["available"] is False and "two confirmed swing highs" in flat["structure"]["reason"]
+    assert not any("swing" in n for n in flat["notes"])
+
+
 def test_sma100_is_reported_but_not_part_of_the_stack():
     bars = bars_from_close(100 * 1.001 ** np.arange(400))
     ctx = make_ctx(bars)
