@@ -94,7 +94,16 @@
     const wedges = (p.wedges || []).map(w => ({ ...w, pts: w.pushes.map(([d, v]) => [at(d), v]) })).filter(w => w.pts.every(([i]) => i != null));
     const ranges = (p.ranges || []).map(r => ({ ...r, i0: at(r.start), i1: at(r.end) })).filter(r => r.i0 != null && r.i1 != null);
     const mms = (p.measured_moves || []).map(m => ({ ...m, i0: at(m.from_date) ?? 0 }));
-    return { ema: align(p.ema), types: p.bar_types || [], states: p.states || [], ai: p.always_in || [], byBar, wedges, ranges, mms };
+    const poly = xs => (xs || []).map(x => ({ ...x, pts: x.points.map(([d, v]) => [at(d), v]) })).filter(x => x.pts.every(([i]) => i != null));
+    // trend channels: the trendline and its channel line on every bar from the line's first point on
+    const N = index.size;
+    const channels = (p.channels || []).filter(c => isNum(c.price) && isNum(c.slope_per_bar)).map(c => {
+      const from = at(c.anchor?.date) ?? 0;
+      const line = off => Array.from({ length: N }, (_, i) => i >= from ? c.price - c.slope_per_bar * (N - 1 - i) + off : null);
+      return { ...c, vals: line(0), chVals: isNum(c.offset) ? line(c.offset) : null };
+    });
+    return { ema: align(p.ema), types: p.bar_types || [], states: p.states || [], ai: p.always_in || [], byBar, wedges, ranges, mms,
+      doubles: poly(p.doubles), mtrs: poly(p.mtrs), channels };
   }
 
   // chart 3: markers by their last bar
@@ -174,13 +183,26 @@
       : `<p class="ta-small">${esc(t("cf_none"))}</p>`, "conflicts");
   }
 
+  // a price-action setup's second line: its stop entry, its signal bar, its variant and where it formed
+  function setupLine(a) {
+    const e = a.entry;
+    if (!e) return "";
+    const bits = [e.status === "pending" ? t(a.bias > 0 ? "en_buy_stop" : "en_sell_stop", fmtPx(e.trigger_price))
+      : t("en_filled", fmtPx(e.entry_price), String(e.entry_date || "").slice(5))];
+    bits.push(a.signal_strong ? t("sb_strong") : t("sb_weak", (a.weak_because || []).map(w => tv("weak_", w)).join(t("sep"))));
+    if (a.variant) bits.push(tv("var_", a.variant));
+    if (a.range_third) bits.push(t("at_third", tv("third_", a.range_third)));
+    if (a.line) bits.push(t("on_line", t((a.line.line === "trendline" ? "tl_" : "ch_") + a.line.kind)));
+    return `<div class="ta-sub">${esc(bits.join(" · "))}</div>`;
+  }
+
   function activeTable(rows, primary) {
     const body = rows.map(a => {
       const arrow = a.bias > 0 ? `<span class="pos" aria-hidden="true">▲</span> ` : a.bias < 0 ? `<span class="neg" aria-hidden="true">▼</span> ` : "";
-      const fired = `${t("th_fired")} ${t("bars_ago", a.bars_ago)} · ${String(a.fired_date || "").slice(5)}`;
+      const fired = `${t(a.entry ? "th_sigbar" : "th_fired")} ${t("bars_ago", a.bars_ago)} · ${String(a.fired_date || "").slice(5)}`;
       const sample = (a.confidence ? ` · ${t("sample")} ${tv("sc_", a.confidence)}` : "") + (a.at_level && a.level ? ` · ${t("at_lvl", a.level)}` : "");
       return `<tr class="${a.confidence === "insufficient" ? "dim" : ""}"><td class="l wrap">${arrow}${esc(I18N.signalName(a.id, a.name))}
-          <div class="ta-sub" title="${esc(a.fired_date)}">${esc(fired + sample)}</div></td>
+          <div class="ta-sub" title="${esc(a.fired_date)}">${esc(fired + sample)}</div>${setupLine(a)}</td>
         <td>${esc(a.n ?? "–")}</td>
         <td>${esc(fmtPct(a.hit_rate, 0))}</td>
         <td class="${pctCls(a.median)}">${esc(fmtPct(a.median, 1, true))}</td>
@@ -691,15 +713,33 @@
   // chart 3 marks the patterns of scripts/candlesticks.py. The side panel shows each library's statistics.
   const PA_STATE_COLORS = { 2: "var(--up)", 1: "var(--up-zone)", 0: "var(--tr-strip)", "-1": "var(--down-zone)", "-2": "var(--down)" };
 
+  // the name of a chart 2 marker in the hover readout
+  function markerName(m) {
+    const up = m.side < 0;
+    switch (m.kind) {
+      case "G20": return t("lg_pa_g20");
+      case "FB": return t(up ? "fb_up" : "fb_down");
+      case "BO": return t(up ? "bo_down" : "bo_up");
+      case "MTR": return t(up ? "mtr_top" : "mtr_bottom");
+      case "DB": return t("dbl_bottom");
+      case "DT": return t("dbl_top");
+      case "CX": return t(up ? "cx_buy" : "cx_sell");
+      default: return m.kind;
+    }
+  }
+
   function patternLegend(kind, P) {
     if (kind === "pa") {
       return [
         { key: "pa_ema", label: t("lg_ema", P.ema_period ?? 20), color: "var(--ema)", sw: "" },
         { key: "pa_counts", label: t("lg_pa_counts"), color: "var(--text)", sw: "box" },
         { key: "pa_wedges", label: t("lg_pa_wedges"), color: "var(--wedge)", sw: "" },
+        { key: "pa_mtr", label: t("lg_pa_mtr"), color: "var(--text)", sw: "box" },
         { key: "pa_ranges", label: t("lg_pa_ranges"), color: "var(--faint)", fill: "var(--tr-zone)", sw: "box" },
         { key: "pa_fb", label: t("lg_pa_fb"), color: "var(--text)", sw: "box" },
         { key: "pa_g20", label: t("lg_pa_g20"), color: "var(--text)", sw: "box" },
+        { key: "pa_cx", label: t("lg_pa_cx"), color: "var(--muted)", sw: "box" },
+        ...(P.channels?.length ? [{ key: "pa_lines", label: t("lg_pa_lines"), color: "var(--text)", sw: "dash" }] : []),
         { key: "pa_mm", label: t("lg_pa_mm"), color: "var(--muted)", sw: "dash" },
       ];
     }
@@ -716,7 +756,7 @@
     const body = rows.map(r => {
       const arrow = r.bias > 0 ? `<span class="pos" aria-hidden="true">▲</span> ` : r.bias < 0 ? `<span class="neg" aria-hidden="true">▼</span> ` : "";
       return `<tr class="${r.confidence === "insufficient" ? "dim" : ""}"><td class="l wrap">${arrow}${esc(I18N.signalName(r.id, r.name))}
-          <div class="ta-sub">${esc(r.last_fired ? t("last_seen", r.last_fired) : t("never_seen"))}</div></td>
+          <div class="ta-sub">${esc(r.last_fired ? t("last_seen", r.last_fired) : t("never_seen"))}${r.triggered_total != null && r.fires_total ? esc(" · " + t("lib_trig", r.triggered_total, r.fires_total)) : ""}</div></td>
         <td>${esc(r.n ?? "–")}</td><td>${esc(fmtPct(r.hit_rate, 0))}</td>
         <td class="${pctCls(r.median)}">${esc(fmtPct(r.median, 1, true))}</td>
         <td class="${pctCls(r.edge_median)}">${esc(fmtPct(r.edge_median, 1, true))}<br><span class="ta-sub">${esc(fmtPP(r.edge_hit_rate))}</span></td></tr>`;
@@ -729,7 +769,8 @@
 
   function paSideHtml(P) {
     const s = P.summary || {}, st = s.state || {}, tr = s.trading_range || {};
-    const ago = x => x ? `${x.label ?? ""} · ${t("bars_ago", x.bars_ago)} (${String(x.date || x.confirmed_date || "").slice(5)})` : "–";
+    const when = x => `${t("bars_ago", x.bars_ago)} (${String(x.date || x.confirmed_date || x.signal_date || "").slice(5)})`;
+    const ago = x => x ? `${x.label ?? ""} · ${when(x)}` : "–";
     const mm = (P.measured_moves || []).map(m => {
       const arrow = m.side === "up" ? "↑" : "↓";
       const dist = `${fmtPct(m.distance_pct, 1, true)} · ${fmtSigned(m.distance_atr, 1)} ATR`;
@@ -739,18 +780,44 @@
     const fb = s.last_failed_breakout ? `${tv("fb_", s.last_failed_breakout.side)} ${fmtPx(s.last_failed_breakout.level)} · ${t("bars_ago", s.last_failed_breakout.bars_ago)}` : "–";
     const gaps = s.gap_bars || {};
     const gap = gaps.bull ? t("gap_bull", gaps.bull) : gaps.bear ? t("gap_bear", gaps.bear) : "–";
-    const kv = `<p class="ta-regime">${esc(tv("state_", st.label))}</p>
+    const bar = [tv("bt_", s.bar?.type), s.bar?.shape ? tv("shape_", s.bar.shape) : null, s.bar?.signal ? tv("sigbar_", s.bar.signal) : null].filter(Boolean).join(" · ");
+    const third = isNum(tr.close_position) ? " · " + t("tr_close", tv("third_", tr.close_position >= 2 / 3 ? "top" : tr.close_position <= 1 / 3 ? "bottom" : "middle")) : "";
+    const cx = s.climax || {};
+    const climax = cx.active ? t("cx_now", tv("cx_", cx.side), cx.bars) : cx.last ? `${tv("cx_", cx.last.side)} · ${when(cx.last)}` : "–";
+    const bm = s.breakout_mode;
+    const mode = bm ? `${bm.pattern} · ${when(bm)} · ${bm.broke ? tv("broke_", bm.broke) : t("broke_none", fmtPx(bm.low), fmtPx(bm.high))}` : "–";
+    const lb = s.last_breakout;
+    const bo = lb ? `${tv("bo_", lb.side)} ${fmtPx(lb.level)} · ${when(lb)} · ${t(lb.follow_through == null ? "ft_wait" : lb.follow_through ? "ft_yes" : "ft_no")}${lb.holding ? "" : " · " + t("bo_back", String(lb.back_inside_date || "").slice(5))}` : "–";
+    const two = (x, pre) => x ? `${tv(pre, x.side)}${x.variant ? t("paren", tv("var_", x.variant)) : ""} · ${when(x)}` : "–";
+    const lines = ["up", "down"].map(k => {
+      const ln = s.trend_channels?.[k];
+      if (!ln) return "";
+      const cl = ln.channel_line;
+      const txt = `${fmtPx(ln.price)} · ${ln.state === "broken" ? t("tl_broken", String(ln.broken_on || "").slice(5)) : t("tl_intact")}` +
+        (cl ? ` · ${t("ch_" + k)} ${fmtPx(cl.price)}${cl.close_side === "beyond" ? " · " + t("ch_beyond") : ""}${cl.overshoots ? " · " + t("ch_over", cl.overshoots) : ""}` : "");
+      return `<dt>${esc(t("tl_" + k))}</dt><dd>${esc(txt)}</dd>`;
+    }).join("");
+    const pending = st.pending ? `<p class="ta-small" style="margin:-4px 0 8px">${esc(t("pa_pending", tv("state_", st.pending.label), st.pending.bars, st.confirm_bars))}</p>` : "";
+    const kv = `<p class="ta-regime">${esc(tv("state_", st.label))}</p>${pending}
       <dl class="ta-kv">
         <dt>${esc(t("pa_since"))}</dt><dd>${esc(st.since ?? "–")} · ${esc(t("n_bars", st.bars ?? 0))}</dd>
         <dt>${esc(t("pa_ai"))}</dt><dd>${esc(tv("ai_", s.always_in?.direction))}${s.always_in?.since ? ` · ${esc(t("since", s.always_in.since))}` : ""}</dd>
         <dt>EMA${esc(P.ema_period)}</dt><dd>${esc(fmtPx(s.ema))} · ${esc(tv("slope_", s.ema_slope))} · ${esc(t("vs_ema", fmtSigned(s.close_vs_ema_atr, 1)))}</dd>
-        <dt>${esc(t("pa_bar"))}</dt><dd>${esc(tv("bt_", s.bar?.type))}</dd>
-        <dt>${esc(t("pa_range"))}</dt><dd>${tr.active ? `${esc(fmtPx(tr.low))}–${esc(fmtPx(tr.high))} · ${esc(fmtNum(tr.height_atr, 1))} ATR` : esc(t("none"))}</dd>
+        <dt>${esc(t("pa_bar"))}</dt><dd>${esc(bar)}</dd>
+        <dt>${esc(t("pa_range"))}</dt><dd>${tr.active ? `${esc(fmtPx(tr.low))}–${esc(fmtPx(tr.high))} · ${esc(fmtNum(tr.height_atr, 1))} ATR${esc(third)}` : esc(t("none"))}</dd>
         <dt>${esc(t("pa_gap"))}</dt><dd>${esc(gap)}</dd>
+        <dt>${esc(t("pa_cx"))}</dt><dd>${esc(climax)}</dd>
         <dt>${esc(t("pa_hcount"))}</dt><dd>${esc(ago(s.last_high_count))}</dd>
         <dt>${esc(t("pa_lcount"))}</dt><dd>${esc(ago(s.last_low_count))}</dd>
+        <dt>${esc(t("pa_trh"))}</dt><dd>${esc(ago(s.last_range_high_count))}</dd>
+        <dt>${esc(t("pa_trl"))}</dt><dd>${esc(ago(s.last_range_low_count))}</dd>
         <dt>${esc(t("pa_wedge"))}</dt><dd>${esc(wedge)}</dd>
+        <dt>${esc(t("pa_double"))}</dt><dd>${esc(two(s.last_double, "dbl_"))}</dd>
+        <dt>${esc(t("pa_mtr"))}</dt><dd>${esc(two(s.last_mtr, "mtr_"))}</dd>
         <dt>${esc(t("pa_fb"))}</dt><dd>${esc(fb)}</dd>
+        <dt>${esc(t("pa_bo"))}</dt><dd>${esc(bo)}</dd>
+        <dt>${esc(t("pa_mode"))}</dt><dd>${esc(mode)}</dd>
+        ${lines}
       </dl>${mm ? `<h4 class="ta-small" style="margin-top:10px">${esc(t("pa_mm"))}</h4><ul class="ta-list">${mm}</ul>` : ""}`;
     return kv + setupsHtml(P);
   }
@@ -762,9 +829,12 @@
   }
 
   function setupsHtml(P) {
-    const active = P.active || [];
-    return `<h4 class="ta-small" style="margin-top:12px">${esc(t("setups_active"))}</h4>` +
-      (active.length ? activeTable(active, P.primary_horizon) + `<p class="ta-small">${esc(t("edge_note"))}</p>` : `<p class="ta-small">${esc(t("sig_none"))}</p>`) +
+    const active = P.active || [], stops = !!P.entry_rule;      // price-action setups are entered on a stop
+    const lapsed = (P.lapsed || []).map(x => `<li class="dim"><span aria-hidden="true">${x.bias > 0 ? "▲" : "▼"}</span> ${esc(I18N.signalName(x.id, x.name))} <span class="ta-sub">${esc(t("lapsed_row", String(x.fired_date || "").slice(5), fmtPx(x.trigger_price), x.bias > 0))}</span></li>`).join("");
+    return `<h4 class="ta-small" style="margin-top:12px">${esc(t(stops ? "setups_active_pa" : "setups_active"))}</h4>` +
+      (active.length ? activeTable(active, P.primary_horizon) + `<p class="ta-small">${esc(t("edge_note"))}</p>` : `<p class="ta-small">${esc(t(stops ? "setups_none_pa" : "sig_none"))}</p>`) +
+      (lapsed ? `<h4 class="ta-small" style="margin-top:10px">${esc(t("setups_lapsed"))}</h4><ul class="ta-list plain">${lapsed}</ul>` : "") +
+      (stops ? `<p class="ta-small">${esc(t("entry_note"))}</p>` : "") +
       libraryTable(P.library) + `<p class="ta-small">${esc(t("not_scored"))}</p>`;
   }
 
@@ -812,6 +882,7 @@
     if (kind === "pa") {
       if (on("pa_ema")) for (const b of bars) take(pp.ema[b.di], 0.5);
       if (on("pa_mm")) for (const m of pp.mms) if (!m.reached) take(m.target, 0.3);
+      if (on("pa_lines")) for (const c of pp.channels) for (const b of bars) { take(c.vals[b.di], 0.25); if (c.chVals) take(c.chVals[b.di], 0.25); }
     }
     // room for the marker labels above the highs and below the lows
     const room = (hi - lo) * 34 / HM;
@@ -889,25 +960,68 @@
         lines += `<polyline points="${pts.map(([a, b]) => a.toFixed(1) + "," + b.toFixed(1)).join(" ")}" fill="none" stroke="var(--wedge)" stroke-width="1.4" stroke-dasharray="5 3"/>`;
         pts.forEach(([a, b], k) => {
           const yy = w.side === "top" ? b - 14 : b + 14;
-          fore += `<g><title>${esc(t("wedge_title", tv("wedge_", w.side), k + 1, w.confirmed_date))}</title><circle cx="${a.toFixed(1)}" cy="${yy.toFixed(1)}" r="7" fill="var(--card)" stroke="${col}"/><text class="e" x="${a.toFixed(1)}" y="${(yy + 3.5).toFixed(1)}" text-anchor="middle">${k + 1}</text></g>`;
+          fore += `<g><title>${esc(t("wedge_title", tv("wedge_", w.side), k + 1, w.confirmed_date) + (w.triggered === false ? " · " + t("mk_not_triggered") : ""))}</title><circle cx="${a.toFixed(1)}" cy="${yy.toFixed(1)}" r="7" fill="var(--card)" stroke="${col}"/><text class="e" x="${a.toFixed(1)}" y="${(yy + 3.5).toFixed(1)}" text-anchor="middle">${k + 1}</text></g>`;
         });
       }
+      // double tops / bottoms: a dashed line joining the two extremes; major trend reversals: extreme, break, test
+      const joined = (xs, key) => {
+        if (on(key)) for (const x of xs) {
+          if (!x.pts.every(([i]) => inView(i))) continue;
+          lines += `<polyline points="${x.pts.map(([i, v]) => cx(i - view.i0).toFixed(1) + "," + y(v).toFixed(1)).join(" ")}" fill="none" stroke="var(--wedge)" stroke-width="1.4" stroke-dasharray="${key === "pa_mtr" ? "2 3" : "5 3"}"/>`;
+        }
+      };
+      joined(pp.doubles, "pa_wedges");
+      joined(pp.mtrs, "pa_mtr");
+      // trend channels: the trendline (as on the main chart) and its paler channel line
+      if (on("pa_lines")) for (const c of pp.channels) {
+        const col = c.kind === "up" ? "var(--up)" : "var(--down)", broken = c.state === "broken";
+        const draw = (vals, ch) => {
+          let pth = "", pen = false;
+          bars.forEach((b, i) => {
+            const v = vals[b.di];
+            if (!isNum(v)) { pen = false; return; }
+            pth += (pen ? "L" : "M") + cx(i).toFixed(1) + "," + y(v).toFixed(1);
+            pen = true;
+          });
+          if (pth) lines += `<path d="${pth}" fill="none" stroke="${col}" stroke-width="${ch ? 1.1 : 1.5}" stroke-dasharray="${ch ? "4 4" : broken ? "2 4" : "11 3 2 3"}" opacity="${ch || broken ? ".6" : ".95"}"><title>${esc(t(ch ? "ch_" + c.kind : "tl_" + c.kind))}</title></path>`;
+        };
+        draw(c.vals, false);
+        if (c.chVals) draw(c.chVals, true);
+      }
+      // a setup whose next bar did not trigger its stop entry is drawn muted; the tooltip says which it was
+      const took = m => m.triggered === false ? " · " + t("mk_not_triggered") : m.triggered == null ? " · " + t("mk_pending") : " · " + t("mk_triggered");
+      const side = (m, up) => m.triggered === false ? "muted" : up ? "neg" : "pos";
       for (let di = view.i0; di <= view.i1; di++) {
         for (const m of pp.byBar.get(di) || []) {
           const i = di - view.i0, up = m.side < 0;
           if (/^[HL]\d$/.test(m.kind)) {
             if (!on("pa_counts") || (!labels && !m.setup)) continue;
-            label(i, up, m.kind, m.setup ? (up ? "neg" : "pos") : "muted", m.setup ? t(up ? "mk_l2" : "mk_h2") : t("mk_count", m.kind), m.setup);
-          } else if (m.kind === "FB") {
+            const title = m.setup ? t(m.range ? (up ? "mk_tr_l2" : "mk_tr_h2") : (up ? "mk_l2" : "mk_h2")) : t(m.range ? "mk_tr_count" : "mk_count", m.kind);
+            label(i, up, m.kind, m.setup ? (up ? "neg" : "pos") : "muted", title, m.setup);
+          } else if (m.kind === "FB" || m.kind === "BO") {
             if (!on("pa_fb")) continue;
-            label(i, up, "FB", up ? "neg" : "pos", t(up ? "mk_fb_up" : "mk_fb_down", fmtPx(m.level), m.breakout_date), true);
+            const fb = m.kind === "FB";
+            const title = fb ? t(up ? "mk_fb_up" : "mk_fb_down", fmtPx(m.level), m.breakout_date) : t(up ? "mk_bo_down" : "mk_bo_up", fmtPx(m.level), m.breakout_date);
+            label(i, up, m.kind, side(m, up), title + took(m), m.triggered !== false);
             if (isNum(m.level)) {
               const yl = Math.round(y(m.level)) + 0.5, b0 = Math.max(view.i0, prep.daily.findIndex(b => b.d === m.breakout_date));
               marks += `<line x1="${(cx(b0 - view.i0) - slot * 2).toFixed(1)}" x2="${(cx(i) + slot).toFixed(1)}" y1="${yl}" y2="${yl}" stroke="var(${up ? "--down" : "--up"})" stroke-dasharray="2 2"/>`;
             }
           } else if (m.kind === "G20") {
             if (!on("pa_g20")) continue;
-            label(i, up, "20", up ? "neg" : "pos", t(up ? "mk_g20_bear" : "mk_g20_bull"), true);
+            label(i, up, "20", side(m, up), t(up ? "mk_g20_bear" : "mk_g20_bull") + took(m), m.triggered !== false);
+          } else if (m.kind === "MTR") {
+            if (!on("pa_mtr")) continue;
+            label(i, up, "MTR", side(m, up), t(up ? "mk_mtr_top" : "mk_mtr_bottom", tv("var_", m.variant)) + took(m), m.triggered !== false);
+          } else if (m.kind === "DB" || m.kind === "DT") {
+            if (!on("pa_wedges")) continue;
+            label(i, up, m.kind, side(m, up), t(up ? "mk_dt" : "mk_db", tv("var_", m.variant)) + took(m), m.triggered !== false);
+          } else if (m.kind === "CX") {
+            if (!on("pa_cx")) continue;
+            label(i, up, "CX", "muted", t(up ? "mk_cx_buy" : "mk_cx_sell"), true);
+          } else if (m.kind === "ii" || m.kind === "ioi") {
+            if (!on("pa_cx") || !labels) continue;
+            label(i, true, m.kind, "muted", t("mk_mode", m.kind), false);
           }
         }
       }
@@ -971,7 +1085,7 @@
           `<span>${esc(t("strip_state"))} <b>${esc(sc == null ? "–" : tv("state_", ["tight_bear_channel", "bear_channel", "trading_range", "bull_channel", "tight_bull_channel"][sc + 2]))}</b></span>` +
           `<span>${esc(t("strip_ai"))} <b>${esc(tv("ai_", { 1: "long", "-1": "short", 0: "none" }[pp.ai[b.di]]))}</b></span>` +
           `<span>EMA <b>${esc(fmtPx(pp.ema[b.di]))}</b></span>` +
-          (pp.byBar.get(b.di) || []).map(m => `<span><b class="${m.side > 0 ? "pos" : "neg"}">${esc(m.kind === "G20" ? t("lg_pa_g20") : m.kind === "FB" ? t(m.side < 0 ? "fb_up" : "fb_down") : m.kind)}</b></span>`).join("");
+          (pp.byBar.get(b.di) || []).map(m => `<span><b class="${m.side > 0 ? "pos" : m.side < 0 ? "neg" : ""}">${esc(markerName(m))}</b></span>`).join("");
       } else {
         extra = (pp.byBar.get(b.di) || []).map(m => `<span><b class="${m.bias > 0 ? "pos" : m.bias < 0 ? "neg" : ""}">${esc(I18N.signalName(m.id, m.id))}</b></span>`).join("");
       }

@@ -9,7 +9,7 @@ metrics.json (every computed number) and a self-contained chart.html.
               position (weekly emphasis, 20/60-day stats, ~2-year levels)
   --out       output folder (default ./ta-output/<TICKER>_<as_of>/)
   --refresh   ignore the local cache and fetch everything again
-  --contract  also write the ta-3.3 contract (both horizons; the other one runs from the cache;
+  --contract  also write the ta-3.4 contract (both horizons; the other one runs from the cache;
               see contract.py)
 
 The NYSE calendar from fetch.py runs through every module that counts trading days. The
@@ -275,6 +275,11 @@ def run_analysis(ticker: str, horizon: str = C.DEFAULT_HORIZON, client=None, now
     except Exception as exc:  # the patterns stand without their place
         errors.append(f"candlesticks.at_level: {type(exc).__name__}: {exc}")
         print(f"[analyze] candlesticks.at_level failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+    try:    # the key zone each active price-action setup formed at
+        mods["price_action"] = PA.locate(ctx, mods["price_action"], mods["levels"])
+    except Exception as exc:  # the setups stand without their place
+        errors.append(f"price_action.at_level: {type(exc).__name__}: {exc}")
+        print(f"[analyze] price_action.at_level failed: {type(exc).__name__}: {exc}", file=sys.stderr)
     mods["conflicts"] = _safe("conflicts", SC.build_conflicts, errors, ctx, mods)
     mods["scenarios"] = _safe("scenarios", SC.build_scenarios, errors, ctx, mods)
     mods["risk"] = _safe("risk", SC.build_risk, errors, ctx, mods, mods["scenarios"])

@@ -743,10 +743,54 @@ Stocks, ETFs and SPY alike, from the parsed dividends (section 1.8) and the bars
 Two further pattern libraries, both context. The rules,
 parameters (`PA_*`, `CS_*` in config.py) and what the daily-bar approximation leaves out are in
 [patterns.md](patterns.md). In short:
-- **Price action:** daily-bar versions of Al Brooks' reading: bar types (trend bar, weak bar, doji),
-  the market state over the last 20 bars (tight / broad channel or trading range against the EMA20),
-  the always-in direction, H1-H4 / L1-L4 pullback counts, wedges, trading-range breakouts that fail,
-  20-gap-bar EMA tests and measured-move targets. Eight setups (`pa_*`) get statistics.
+- **Price action:** daily-bar versions of Al Brooks' reading: bar types (trend bar, weak bar, doji) and
+  signal-bar quality, the market state (tight / broad channel or trading range against the EMA20), the
+  always-in direction, H1-H4 / L1-L4 pullback counts in trends and inside trading ranges, wedges, double
+  tops and bottoms, major trend reversals, trading-range breakouts with follow-through and the ones
+  that fail, climaxes, ii / ioi breakout-mode bars, 20-gap-bar EMA tests, measured-move targets and
+  trend channels. Sixteen setups (`pa_*`) get statistics. What each choice rests on:
+  - **The state changes on evidence** (`market_states`, `STATE_RULE`). Read bar by bar from 20-bar
+    shares, the state used to flip whenever a share crossed its threshold, a median of about 46 changes
+    in two years on 14 large US stocks and ETFs. Dow theory holds that a trend is in force until it
+    gives definite signals that it has reversed (Murphy, *Technical Analysis of the Financial Markets*,
+    ch. 2), and Brooks calls the same thing market inertia: most attempts to end a trend, and most
+    attempts to leave a trading range, fail. So the state changes only after the bars have read
+    differently 3 bars in a row, and a channel in force gets the benefit of the doubt while the close
+    is still on its side of the EMA: thresholds 0.1 lower than the ones needed to enter it, and no end
+    merely because the last 20 bars also fit the range box. The benefit stops with a close on the other
+    side of the EMA, so a channel that price has left is not kept alive: without that condition a tight
+    bull channel was still the state five bars into a 2 ATR fall below the EMA. A trading-range
+    breakout with follow-through is the definite signal and changes the state at once. Result on the
+    same symbols: a median of about 31 changes in two years. The state still trails a sharp turn by up
+    to 3 bars; `state.pending` shows it coming.
+  - **One set of swings** (`swings.zigzag`). Wedges, double tops and bottoms, major trend reversals
+    and measured moves use the 1.5 ATR ZigZag of the key levels and the swing structure, in place of
+    2-bar fractals that turned every wiggle into a push. A swing counts once price has moved 1.5 ATR
+    away from it, so these patterns are known late, and never from a bar the reader could not have seen.
+  - **Entry on a stop** (`stop_entries`, `ENTRY_RULE`). Brooks enters on a stop beyond the signal bar
+    and takes no trade when it is not hit; a setup is an order, not a fill. The statistics follow that:
+    signal bars that did not trigger are left out, returns start at the entry price, and the baselines
+    are every day entered the same way, so the stop entry's own selection (days that kept going) is in
+    both. `fired_date` is the signal bar.
+  - **Major trend reversal** (Brooks, *Trading Price Action: Reversals*): a trend, a break of it, a
+    test of the extreme, a signal bar. The break is coded as a swing with a close on the other side of
+    the EMA, a stand-in for Brooks' trendline break, which needs judgement.
+  - **Double top / bottom** (Edwards and Magee; Murphy ch. 5; Brooks' double-top and double-bottom
+    flags): two swing extremes within 0.5 ATR. The classic texts complete the pattern on a close beyond
+    the valley (peak) between them. Here the setup is the second extreme once the ZigZag confirms it,
+    entered on a stop, as Brooks enters; the statistics measure that rule, not the neckline break.
+  - **Breakout and follow-through**: a trend bar closing beyond the range, read by its size, its close
+    and the bar after it (Brooks: the follow-through bar decides whether a breakout is likely to
+    succeed; Edwards and Magee ask for a decisive close beyond the pattern).
+  - **Climax, ii / ioi**: Brooks' buy and sell climaxes (consecutive trend bars far from the average)
+    and his breakout-mode bars. Readings without statistics: neither names a direction to measure.
+  - **Channel line** (`swings.channel_line`): Murphy ch. 4, the parallel to the trendline through the
+    first prominent swing on the other side (Edwards and Magee's return line). An overshoot of it late
+    in a trend is one of the classic exhaustion signs.
+  - **Where a setup formed** (`location`, `at_level`; `price_action.locate`): the key zone, the
+    trendline or channel line and the third of the trading range the setup's reference price sits at.
+    Labels, by the rule of the candlestick patterns below; the statistics are those of the setup
+    wherever it formed.
 - **Candlestick patterns:** twelve classic directional patterns after a 5-bar decline or advance
   (`cs_*`), plus doji markers without statistics.
 - **Where a pattern formed** (`candlesticks.active[].at_level`, `.level`; `candlesticks.locate`): a
@@ -928,6 +972,8 @@ drop out.
 | Size of the ex-dividend drop | the full split-adjusted dividend (`adjDividend`) | the actual open also reflects news and order flow |
 | Early closes | an early close only the rules know (FMP's list is incomplete before about 2013) closes at `EARLY_CLOSE_DEFAULT` = 13:00 | early closes only decide whether today's bar is complete |
 | Macro event times | FMP's published times, converted from UTC to New York; a date-only row (00:00 UTC) has no time and maps to that day's session | FMP may revise a time; the 12-hour cache picks it up |
+| Price-action entries | a stop at the signal bar's high (low), filled at that price or at the next open when it gaps beyond it; MAE includes the whole entry bar | daily bars: no tick offset, no intraday order of the entry bar's high and low |
+| Major trend reversal | the break of the trend is a swing with a close on the other side of the EMA20 | Brooks' trendline break is a judgement; the EMA is his own reference for the trend |
 | Macro event list | tiers by event name (`MACRO_GROUPS`); releases other than FOMC dates are listed only about 6-8 weeks ahead, FOMC dates up to the request window's end (`coverage`) | FMP's impact label changes between releases of one event |
 
 ---
@@ -944,8 +990,10 @@ drop out.
   - a volume-profile sidebar (POC, value area);
   - volume with RVOL, RSI(14) with 30/70 lines, and the RS line vs SPY rebased to 100 at the window start.
 - **Charts 2 and 3:** below the main chart, daily candles over the same window: price action after
-  Al Brooks (bar types, EMA20, H/L counts, wedges, trading ranges, failed breakouts, 20-gap-bar tests,
-  measured moves, and strips for the market state and always-in direction) and candlestick patterns.
+  Al Brooks (bar types, EMA20, H/L counts, wedges, double tops and bottoms, major trend reversals,
+  trading ranges with their breakouts and failed breakouts, 20-gap-bar tests, climaxes, ii / ioi,
+  trendlines with channel lines, measured moves, and strips for the market state and always-in
+  direction; a setup whose stop entry did not trigger is drawn grey) and candlestick patterns.
   Panning or zooming any of the three moves all of them. Rules: `references/patterns.md`.
 - **Weekly view:** weekly candles are shown automatically when the screen has fewer than 3 px per daily
   bar. In the weekly view, indicator values are the daily readings on each week's last session.

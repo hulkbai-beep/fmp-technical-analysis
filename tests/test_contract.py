@@ -1,4 +1,4 @@
-"""The ta-3.3 contract (scripts/contract.py, contracts/ta-3.3.schema.json) on a fake FMP (no network).
+"""The ta-3.4 contract (scripts/contract.py, contracts/ta-3.4.schema.json) on a fake FMP (no network).
 
 Every contract must match the schema, and its numbers must be the metrics' numbers. A small JSON Schema checker
 lives here so the tests need nothing beyond pandas, numpy and pytest.
@@ -218,7 +218,7 @@ def test_swing_structure_is_the_metrics_structure(stock):
 def test_trendlines_are_the_metrics_trendlines(stock):
     """3.3: horizons.*.trendlines, the up and the down line of that horizon's levels window."""
     swing, position, c = stock
-    seen = 0
+    seen = channels = 0
     for name, m in (("swing", swing), ("position", position)):
         got, lines = c["horizons"][name]["trendlines"], m["levels"]["trendlines"]
         assert set(got) == {"up", "down"}
@@ -235,7 +235,19 @@ def test_trendlines_are_the_metrics_trendlines(stock):
                 assert out[k] == line[k], k
             assert (out["state"] == "broken") == (out["broken_on"] is not None)
             assert out["anchor_date"] < out["second_date"] <= m["as_of"]
+            # 3.4: the channel line of the same line, from price_action.trend_channels
+            pa_line = m["price_action"]["trend_channels"][side]
+            assert pa_line["anchor"] == line["anchor"]
+            cl, got_cl = pa_line["channel_line"], out["channel_line"]
+            assert (got_cl is None) == (cl is None)
+            if cl:
+                channels += 1
+                assert (got_cl["through_date"], got_cl["through_price"]) == (cl["through"]["date"], cl["through"]["price"])
+                for k in ("price", "distance_pct", "distance_atr", "position", "overshoots", "last_overshoot", "close_side"):
+                    assert got_cl[k] == cl[k], k
+                assert out["anchor_date"] < got_cl["through_date"] < out["second_date"]
     assert seen, "the fake history should draw at least one trendline"
+    assert channels, "... and at least one channel line"
     assert "trendlines" in SCHEMA["$defs"]["horizon"]["required"]
     # an older metrics file without trendlines gives null, still valid; a broken line is caught
     old = [copy.deepcopy(m) for m in (swing, position)]
@@ -272,7 +284,7 @@ def test_zones_say_when_they_are_round_number_fills(stock):
 
 
 def test_candlestick_patterns_say_where_they_formed(stock):
-    """3.3: at_level / level on candlestick patterns only, without the zone's score."""
+    """3.3: at_level / level on candlestick patterns (3.4: on price-action setups too), without the zone's score."""
     swing, _, _ = stock
     spec = SCHEMA["$defs"]["evidence"]
     at = {"id": "cs_hammer", "name": "Hammer", "bias": 1, "fired_date": swing["as_of"], "horizons": {},
@@ -288,13 +300,82 @@ def test_candlestick_patterns_say_where_they_formed(stock):
     assert by["cs_hammer"]["level"] == {"label": "S1", "side": "support", "price": 96.0, "low": 95.0, "high": 96.5}
     assert (by["cs_shooting_star"]["at_level"], by["cs_shooting_star"]["level"]) == (False, None)
     assert (by["cs_doji_star"]["at_level"], by["cs_doji_star"]["level"]) == (None, None)
-    assert "at_level" not in by["pa_h2"] and "level" not in by["pa_h2"]          # price-action setups carry none
+    assert by["pa_h2"]["at_level"] is True and by["pa_h2"]["level"] == by["cs_hammer"]["level"]      # 3.4
     assert all(validate(r, spec) == [] for r in rows)
     assert validate({**by["cs_hammer"], "level": {**by["cs_hammer"]["level"], "score": 3.0}}, spec)
-    # the real run: every active candlestick pattern has a place
+    # the real run: every active pattern has a place
     for r in contract._horizon(swing)["patterns"]:
-        if r.get("source") == "candlesticks":
-            assert isinstance(r["at_level"], bool) and (r["level"] is not None) == r["at_level"]
+        assert isinstance(r["at_level"], bool) and (r["level"] is not None) == r["at_level"]
+
+
+def test_price_action_patterns_carry_the_stop_entry_and_where_they_formed(stock):
+    """3.4: entry, signal_bar, variant, range_third and line on price-action patterns only."""
+    swing, _, c = stock
+    spec = SCHEMA["$defs"]["evidence"]
+    row = {"id": "pa_double_bottom", "name": "Double bottom", "bias": 1, "fired_date": swing["as_of"], "bars_ago": 0,
+           "horizons": {}, "variant": "flag", "at_level": False, "level": None,
+           "entry": {"order": "buy_stop", "trigger_price": 101.5, "status": "pending", "entry_date": None,
+                     "entry_price": None},
+           "signal_bar": {"date": swing["as_of"], "high": 101.5, "low": 99.0, "close_position": 0.9, "range_atr": 1.1,
+                          "strong": True, "weak_because": []},
+           "location": {"ref_price": 98.2, "ref_date": "2026-10-12", "range_third": "bottom",
+                        "line": {"kind": "up", "line": "trendline", "price": 98.3, "touches": 3, "state": "intact"}}}
+    m = copy.deepcopy(swing)
+    m["price_action"]["active"] = [row, {**row, "id": "pa_h2_ema", "variant": None,
+                                         "entry": {**row["entry"], "status": "triggered", "entry_date": swing["as_of"],
+                                                   "entry_price": 101.8},
+                                         "location": {**row["location"], "range_third": None, "line": None}}]
+    m["candlesticks"]["active"] = [{"id": "cs_hammer", "name": "Hammer", "bias": 1, "fired_date": swing["as_of"],
+                                    "horizons": {}, "at_level": False, "level": None}]
+    by = {r["id"]: r for r in contract._horizon(m)["patterns"]}
+    d = by["pa_double_bottom"]
+    assert d["entry"] == {"status": "pending", "order": "buy_stop", "trigger_price": 101.5, "entry_date": None,
+                          "entry_price": None}
+    assert d["signal_bar"] == {"date": swing["as_of"], "high": 101.5, "low": 99.0, "strong": True}
+    assert (d["variant"], d["range_third"]) == ("flag", "bottom")
+    assert d["line"] == {"kind": "up", "line": "trendline", "price": 98.3}
+    h2 = by["pa_h2_ema"]
+    assert (h2["entry"]["status"], h2["entry"]["entry_price"], h2["variant"], h2["range_third"], h2["line"]) == \
+        ("triggered", 101.8, None, None, None)
+    assert not {"entry", "signal_bar", "variant", "range_third", "line"} & set(by["cs_hammer"])
+    assert all(validate(r, spec) == [] for r in by.values())
+    assert validate({**d, "entry": {**d["entry"], "status": "filled"}}, spec)        # not a status the schema knows
+    # the real run: every price-action pattern is pending on the last bar or was triggered after it
+    for hz in ("swing", "position"):
+        for r in c["horizons"][hz]["patterns"]:
+            if r["source"] == "price_action":
+                assert r["entry"]["status"] == ("pending" if r["bars_ago"] == 0 else "triggered")
+                assert r["signal_bar"]["date"] == r["fired_date"]
+                assert (r["entry"]["entry_price"] is None) == (r["entry"]["status"] == "pending")
+
+
+def test_context_carries_the_price_action_reading(stock):
+    """3.4: the pending state, climax, breakout mode, the last breakout / wedge / double / reversal and the
+    setups that did not trigger."""
+    swing, _, c = stock
+    ctx, pa = c["context_only"], swing["price_action"]
+    assert ctx["pa_state"] == pa["state"]["label"] and ctx["pa_state_since"] == pa["state"]["since"]
+    pend = pa["state"]["pending"]
+    assert ctx["pa_state_pending"] == (None if pend is None else {"label": pend["label"], "bars": pend["bars"]})
+    assert ctx["climax"]["active"] == pa["climax"]["active"] and ctx["climax"]["side"] == pa["climax"]["side"]
+    assert "rule" not in ctx["climax"]
+    for key, fields in (("breakout_mode", ("pattern", "date", "broke")), ("last_breakout", ("side", "date", "level", "follow_through", "holding")),
+                        ("last_wedge", ("side", "confirmed_date")), ("last_double", ("side", "variant", "confirmed_date")),
+                        ("last_mtr", ("side", "variant", "signal_date"))):
+        if pa[key] is None:
+            assert ctx[key] is None, key
+        else:
+            assert {k: ctx[key][k] for k in fields} == {k: pa[key][k] for k in fields}, key
+    assert [x["id"] for x in ctx["lapsed_setups"]] == [x["id"] for x in pa["lapsed"]]
+    m = copy.deepcopy(swing)
+    m["price_action"]["lapsed"] = [{"id": "pa_mtr_top", "name": "x", "bias": -1, "fired_date": "2026-10-15",
+                                    "bars_ago": 1, "trigger_price": 99.5}]
+    m["price_action"]["state"]["pending"] = {"label": "trading_range", "bars": 2}
+    out = contract._context(m["price_action"], m["candlesticks"])
+    assert out["lapsed_setups"] == [{"id": "pa_mtr_top", "bias": -1, "fired_date": "2026-10-15", "bars_ago": 1,
+                                     "trigger_price": 99.5}]
+    assert out["pa_state_pending"] == {"label": "trading_range", "bars": 2}
+    assert validate(out, SCHEMA["properties"]["context_only"]) == []
 
 
 def test_shared_blocks_are_the_same_in_both_runs(stock):

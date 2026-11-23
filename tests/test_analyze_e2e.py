@@ -186,6 +186,40 @@ def test_a_failing_pattern_place_is_reported_and_the_patterns_stay(monkeypatch):
     assert m["conflicts"]["available"] and m["scenarios"]["horizon_days"] == 10
 
 
+def test_price_action_entries_places_and_channels_in_a_full_run():
+    m, chart_data = run(stock_market())
+    pa = m["price_action"]
+    assert pa["available"] is True and pa["entry_rule"] and pa["signal_bar_rule"] and pa["state"]["rule"]
+    assert len(pa["library"]) == 16
+    assert all(0 <= r["triggered_total"] <= r["fires_total"] for r in pa["library"])
+    assert any(r["triggered_total"] < r["fires_total"] for r in pa["library"])      # some signal bars do not trigger
+    for a in pa["active"]:
+        assert (a["entry"]["status"] == "pending") == (a["bars_ago"] == 0)
+        assert isinstance(a["at_level"], bool) and isinstance(a["signal_bar"]["strong"], bool)
+    # the trend channels are the key levels' trendlines, each with its channel line (or None)
+    for kind in ("up", "down"):
+        line, ref = pa["trend_channels"][kind], m["levels"]["trendlines"][kind]
+        assert (line is None) == (ref is None)
+        if line is not None:
+            assert line["price"] == ref["price"] and "channel_line" in line
+    cfg = m["meta"]["config_snapshot"]["price_action"]
+    assert cfg["state_confirm_bars"] == C.PA_STATE_CONFIRM_BARS and cfg["double_tol_atr"] == C.PA_DOUBLE_TOL_ATR
+    block = chart_data["price_action"]
+    assert block["entry_rule"] == pa["entry_rule"] and {"doubles", "mtrs", "channels", "lapsed"} <= set(block)
+    assert all("triggered_total" in r for r in block["library"])
+
+
+def test_a_failing_setup_place_is_reported_and_the_setups_stay(monkeypatch):
+    def broken(ctx, pa, lv):
+        raise KeyError("boom")
+    monkeypatch.setattr(analyze.PA, "locate", broken)
+    m, _ = analyze.run_analysis("ACME", client=stock_market(), now=NOW)
+    assert m["price_action"]["available"] is True and len(m["price_action"]["library"]) == 16
+    assert all(a["at_level"] is None for a in m["price_action"]["active"])
+    assert any(e.startswith("price_action.at_level: KeyError") for e in m["meta"]["errors"])
+    assert m["conflicts"]["available"] and m["scenarios"]["horizon_days"] == 10
+
+
 def test_stock_position_run():
     m, chart_data = run(stock_market(), horizon="position")
     assert m["horizon"] == "position"
@@ -348,7 +382,8 @@ def test_sma100_never_changes_the_regime_conflicts_or_signals(monkeypatch, horiz
     """SMA100 is context only: with absurd SMA100 values in the indicator frame, the regime, the conflicts,
     the signals, the SMA20/50/200 stack, everything weekly and the price-action EMA stay exactly as they were.
     Only the SMA100 readings and, through its low-weight level candidate, the levels and what is built from
-    them may move: the scenarios, the place of the active candlestick patterns (at_level / level), and the risk
+    them may move: the scenarios, the key zone of the active candlestick patterns and price-action setups
+    (at_level / level), and the risk
     block's reference-only structural stop and level target (with
     their distances, touch rates, reward/risk and by_stop.structural size; contract stops_ref.*.structural).
     The volatility-band stop and target, the ATR stop and the headline position-size example do not use the
@@ -370,12 +405,13 @@ def test_sma100_never_changes_the_regime_conflicts_or_signals(monkeypatch, horiz
     assert weird["regime"] == normal["regime"]
     assert weird["conflicts"] == normal["conflicts"]
     assert weird["signals"] == normal["signals"]
-    for k in ("market_context", "multi_timeframe", "mean_reversion", "price_action"):
+    for k in ("market_context", "multi_timeframe", "mean_reversion"):
         assert weird[k] == normal[k], k
 
     def unplaced(cs):
         return {**cs, "active": [{k: v for k, v in a.items() if k not in ("at_level", "level")} for a in cs["active"]]}
     assert unplaced(weird["candlesticks"]) == unplaced(normal["candlesticks"])
+    assert unplaced(weird["price_action"]) == unplaced(normal["price_action"])     # the EMA readings, setups, statistics
     # risk: only the reference-only structural stop / level target built from the zones may follow them
     for side in ("long_side", "short_side"):
         r_n, r_w = normal["risk"][side], weird["risk"][side]
