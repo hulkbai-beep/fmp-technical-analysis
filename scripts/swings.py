@@ -33,6 +33,11 @@ TRENDLINE_RULE = ("up: from the lowest swing low of the window through the later
                   "confirm it); a close more than {t:g} ATR beyond it breaks it. Straight on an arithmetic price "
                   "scale, one step per trading day")
 
+CHANNEL_RULE = ("the channel line runs parallel to a trendline through the swing on the other side that lies farthest "
+                "from it between the trendline's two points (Murphy: from the first prominent peak between the two "
+                "lows of an up trendline). A bar after the trendline's second point whose high (low for a down "
+                "channel) went more than {t:g} ATR beyond the channel line overshot it")
+
 
 def _num(x) -> float | None:
     """Plain float, or None for missing / non-finite values."""
@@ -48,12 +53,50 @@ def _iso(ts) -> str:
 
 
 # ---------------------------------------------------------------------------- swing pivots
-def swing_pivots(df: pd.DataFrame, atr: pd.Series, mult: float = C.SWING_ATR) -> dict:
-    """ATR ZigZag swing pivots from df's high and low columns.
+def zigzag(high: np.ndarray, low: np.ndarray, atr: np.ndarray, mult: float = C.SWING_ATR) -> tuple[list, float]:
+    """The ATR ZigZag on arrays: ([(bar, +1 high / -1 low, price, confirming bar)], the running extreme of
+    the swing in progress, NaN before the first pivot).
 
-    The running high (low) since the last pivot becomes a pivot high (low) once a later bar's
-    low (high) is at least mult x ATR of that later bar below (above) it; pivots alternate. The
-    latest swing is never confirmed by the data, so it is not a pivot, and neither is the first
+    The running high (low) since the last pivot becomes a pivot high (low) once a later bar's low (high)
+    is at least mult x ATR of that later bar below (above) it; pivots alternate. A pivot and its
+    confirming bar depend on the bars up to that confirming bar only, so a longer series keeps them.
+    """
+    piv: list[tuple[int, int, float, int]] = []
+    direction, hi_i, lo_i = 0, 0, 0
+    for i in range(len(high)):
+        if not (np.isfinite(high[i]) and np.isfinite(low[i])):
+            continue
+        if direction >= 0 and (not np.isfinite(high[hi_i]) or high[i] > high[hi_i]):
+            hi_i = i
+        if direction <= 0 and (not np.isfinite(low[lo_i]) or low[i] < low[lo_i]):
+            lo_i = i
+        thr = mult * atr[i]
+        if not np.isfinite(thr):
+            continue
+        # a pivot is confirmed by a later bar only: the extreme must sit strictly before bar i
+        top = direction >= 0 and hi_i < i and low[i] <= high[hi_i] - thr
+        bottom = direction <= 0 and lo_i < i and high[i] >= low[lo_i] + thr
+        if top and bottom:                       # undecided start: the earlier extreme came first
+            top, bottom = hi_i < lo_i, hi_i >= lo_i
+        if top:
+            piv.append((hi_i, +1, float(high[hi_i]), i))
+            direction, lo_i = -1, hi_i + 1 + int(np.nanargmin(low[hi_i + 1:i + 1]))
+        elif bottom:
+            piv.append((lo_i, -1, float(low[lo_i]), i))
+            direction, hi_i = +1, lo_i + 1 + int(np.nanargmax(high[lo_i + 1:i + 1]))
+    if direction > 0:                            # unconfirmed latest swing: the leg out of the last pivot
+        tail = float(high[hi_i])
+    elif direction < 0:
+        tail = float(low[lo_i])
+    else:
+        tail = float("nan")
+    return piv, tail
+
+
+def swing_pivots(df: pd.DataFrame, atr: pd.Series, mult: float = C.SWING_ATR) -> dict:
+    """ATR ZigZag swing pivots from df's high and low columns (see zigzag).
+
+    The latest swing is never confirmed by the data, so it is not a pivot, and neither is the first
     bar (no left side; it only starts the count). Each pivot carries
     swing_atr: the smaller of the legs into and out of it (the one available at either end), in
     ATRs at the pivot bar, and confirmed: the date of the bar that confirmed it. Bar i's pivots
@@ -63,35 +106,7 @@ def swing_pivots(df: pd.DataFrame, atr: pd.Series, mult: float = C.SWING_ATR) ->
     high = df["high"].to_numpy(dtype=float, na_value=np.nan)
     low = df["low"].to_numpy(dtype=float, na_value=np.nan)
     a = atr.reindex(df.index).to_numpy(dtype=float, na_value=np.nan)
-    piv: list[tuple[int, int, float, int]] = []     # (bar, +1 high / -1 low, price, confirming bar)
-    direction, hi_i, lo_i = 0, 0, 0
-    for i in range(len(df)):
-        if not (np.isfinite(high[i]) and np.isfinite(low[i])):
-            continue
-        if direction >= 0 and (not np.isfinite(high[hi_i]) or high[i] > high[hi_i]):
-            hi_i = i
-        if direction <= 0 and (not np.isfinite(low[lo_i]) or low[i] < low[lo_i]):
-            lo_i = i
-        thr = mult * a[i]
-        if not np.isfinite(thr):
-            continue
-        # a pivot is confirmed by a later bar only: the extreme must sit strictly before bar i
-        top = direction >= 0 and hi_i < i and low[i] <= high[hi_i] - thr
-        bottom = direction <= 0 and lo_i < i and high[i] >= low[lo_i] + thr
-        if top and bottom:                       # undecided start: the earlier extreme came first
-            top, bottom = hi_i < lo_i, hi_i >= lo_i
-        if top:
-            piv.append((hi_i, +1, high[hi_i], i))
-            direction, lo_i = -1, hi_i + 1 + int(np.nanargmin(low[hi_i + 1:i + 1]))
-        elif bottom:
-            piv.append((lo_i, -1, low[lo_i], i))
-            direction, hi_i = +1, lo_i + 1 + int(np.nanargmax(high[lo_i + 1:i + 1]))
-    if direction > 0:                            # unconfirmed latest swing: the leg out of the last pivot
-        tail = high[hi_i]
-    elif direction < 0:
-        tail = low[lo_i]
-    else:
-        tail = np.nan
+    piv, tail = zigzag(high, low, a, mult)
     out = {"highs": [], "lows": []}
     for j, (i, kind, price, conf) in enumerate(piv):
         if i == 0:
@@ -275,3 +290,51 @@ def trendlines(df: pd.DataFrame, atr: pd.Series, pivots: dict) -> dict:
             "tol_atr": C.TRENDLINE_TOL_ATR, "min_bars": C.TRENDLINE_MIN_BARS,
             "min_slope_atr": C.TRENDLINE_MIN_SLOPE_ATR,
             "rule": TRENDLINE_RULE.format(t=C.TRENDLINE_TOL_ATR, b=C.TRENDLINE_MIN_BARS, s=C.TRENDLINE_MIN_SLOPE_ATR)}
+
+
+def channel_line(df: pd.DataFrame, atr: pd.Series, line: dict | None, opposite: list[dict]) -> dict | None:
+    """The channel line of one of trendlines()' lines (df, atr: the same window): the parallel through
+    the opposite swing (a swing high for an up trendline) farthest from the line between its two points,
+    or None when no such swing lies on the far side. See CHANNEL_RULE.
+
+    price: the channel line at the last bar; offset: its distance from the trendline (signed);
+    position: where the last close sits between them (0 on the trendline, 1 on the channel line);
+    overshoots: bars after the trendline's second point whose high (low) went more than
+    C.TRENDLINE_TOL_ATR ATRs beyond the channel line, with the last one's date; close_side: "inside"
+    or "beyond" the channel line now."""
+    if not line:
+        return None
+    pos = {_iso(d): i for i, d in enumerate(df.index)}
+    x0, x1 = pos.get(line["anchor"]["date"]), pos.get(line["second"]["date"])
+    if x0 is None or x1 is None:
+        return None
+    up = line["kind"] == "up"
+    sign = 1.0 if up else -1.0
+    y0, slope = float(line["anchor"]["price"]), float(line["slope_per_bar"])
+    between = [(pos[p["date"]], float(p["price"])) for p in opposite if p["date"] in pos and x0 < pos[p["date"]] < x1]
+    if not between:
+        return None
+    x, y = max(between, key=lambda q: sign * (q[1] - (y0 + slope * (q[0] - x0))))
+    offset = y - (y0 + slope * (x - x0))
+    if sign * offset <= 0:
+        return None
+    n = len(df)
+    base = y0 + slope * (np.arange(n) - x0)
+    ch = base + offset
+    a_s = atr.reindex(df.index).to_numpy(dtype=float, na_value=np.nan)
+    ext = df["high" if up else "low"].to_numpy(dtype=float, na_value=np.nan)
+    with np.errstate(invalid="ignore"):
+        beyond = sign * (ext - ch) > C.TRENDLINE_TOL_ATR * a_s
+    beyond[:x1 + 1] = False
+    hits = np.flatnonzero(beyond)
+    close, last_atr, now = float(df["close"].iloc[-1]), a_s[-1], float(ch[-1])
+    return {
+        "through": {"date": _iso(df.index[x]), "price": y},
+        "offset": float(offset), "price": now,
+        "distance_pct": _num(now / close - 1.0), "distance_atr": _num((now - close) / last_atr),
+        "position": _num((close - float(base[-1])) / offset),
+        "overshoots": int(hits.size),
+        "last_overshoot": _iso(df.index[hits[-1]]) if hits.size else None,
+        "overshoot_bars_ago": int(n - 1 - hits[-1]) if hits.size else None,
+        "close_side": "beyond" if sign * (close - now) > 0 else "inside",
+    }

@@ -9,7 +9,7 @@ and lists where they disagree.
 pip install -r requirements.txt
 python scripts/fmp_client.py check                    # connection and plan check (needs FMP_API_KEY)
 python scripts/analyze.py AAPL --horizon swing        # -> ta-output/AAPL_<date>/metrics.json, chart.html (3 charts)
-python scripts/analyze.py AAPL --contract aapl.json   # also the ta-3.3 contract (swing + position) for other tools
+python scripts/analyze.py AAPL --contract aapl.json   # also the ta-3.4 contract (swing + position) for other tools
 python ui/server.py                                   # local UI at http://127.0.0.1:8876
 python -m pytest -q                                   # offline tests
 ```
@@ -17,7 +17,7 @@ python -m pytest -q                                   # offline tests
 If pytest cannot write to its default temp folder (some Windows sandboxes block
 `%LOCALAPPDATA%\Temp\pytest-of-<user>`), run `python -m pytest -q --basetemp=.pytest_tmp`.
 
-**ta-3.3 contract for other tools.** A decision engine or screener should read the contract, not
+**ta-3.4 contract for other tools.** A decision engine or screener should read the contract, not
 `metrics.json`, whose layout is internal and may change. `--contract PATH` writes it: the requested horizon
 runs as usual and the other one runs from the same-day cache (no extra API calls). To combine two saved runs
 of the same ticker and day instead, give each horizon its own `--out` (by default both write to the same
@@ -29,7 +29,7 @@ python scripts/analyze.py AAPL --horizon position --out runs/aapl_position
 python scripts/contract.py runs/aapl_swing/metrics.json runs/aapl_position/metrics.json -o aapl.json
 ```
 
-`contracts/ta-3.3.schema.json` describes every field: horizon-independent blocks (data quality, market,
+`contracts/ta-3.4.schema.json` describes every field: horizon-independent blocks (data quality, market,
 earnings, dividend, macro, volatility, extension, trend, regime, relative strength, flow, weekly, price-action
 context) at the top, and the conflicts, support/resistance zones (`low` / `high`), `price_location`, scenarios,
 reference stops, earnings, the ex-dividend date and macro events inside the horizon, and signal statistics under
@@ -50,7 +50,13 @@ and `holds_since_break`. 3.3 adds the swing-high / swing-low structure with the 
 (`trend.structure`, `weekly.structure`), per-horizon trendlines (`trendlines.up` / `.down`: price today, touches,
 intact or broken) and, on candlestick patterns, whether they formed at a support/resistance zone (`at_level`,
 `level`); zone `sources` may name weekly swing points and round numbers, and `round_fill` marks a round-number zone listed only
-because its side is short of zones. The contract selects facts and judges nothing; position
+because its side is short of zones. 3.4 strengthens price action: its patterns are entered on a stop
+beyond the signal bar (`entry`: pending or triggered, with the trigger price; `fired_date` is the signal bar;
+statistics count triggered setups only, from the entry price), carry `signal_bar`, `variant` and where they formed
+(`at_level`, `level`, `range_third`, `line`), and eight setups are new (range H2 / L2, double top / bottom, major
+trend reversal, breakout with follow-through); `context_only` gains `pa_state_pending`, `climax`, `breakout_mode`,
+`last_breakout`, `last_wedge`, `last_double`, `last_mtr` and `lapsed_setups` (setups that did not trigger), and each
+trendline its `channel_line`. The contract selects facts and judges nothing; position
 sizing is left to the caller.
 Fields are only ever added within a major version; renaming or removing one means a new major version.
 
@@ -64,8 +70,8 @@ set `FMP_TLS_VERIFY=0`, for that process only (see `SKILL.md` > Setup). Never st
 | Path | Contents |
 |---|---|
 | `SKILL.md` | setup, workflow, interpretation rules, options, edge cases, troubleshooting |
-| `scripts/` | `analyze.py` (entry point), `fmp_client.py`, `fetch.py`, `market_calendar.py` (NYSE trading calendar), `indicators.py`, `regime.py`, `modules.py`, `levels.py`, `dividends.py` (ex-dividend dates), `macro.py` (scheduled US macro events), `signal_stats.py`, `price_action.py`, `candlesticks.py`, `swings.py` (ATR swing points, swing structure, trendlines), `scenarios.py` (conflicts, scenarios, risk), `chart.py`, `crosscheck.py`, `contract.py` (the ta-3.3 contract), `symbols.py` (ticker normalisation), `config.py` (every threshold) |
-| `contracts/` | `ta-3.3.schema.json`: every field of the contract other tools read instead of `metrics.json` (JSON Schema) |
+| `scripts/` | `analyze.py` (entry point), `fmp_client.py`, `fetch.py`, `market_calendar.py` (NYSE trading calendar), `indicators.py`, `regime.py`, `modules.py`, `levels.py`, `dividends.py` (ex-dividend dates), `macro.py` (scheduled US macro events), `signal_stats.py`, `price_action.py`, `candlesticks.py`, `swings.py` (ATR swing points, swing structure, trendlines), `scenarios.py` (conflicts, scenarios, risk), `chart.py`, `crosscheck.py`, `contract.py` (the ta-3.4 contract), `symbols.py` (ticker normalisation), `config.py` (every threshold) |
+| `contracts/` | `ta-3.4.schema.json`: every field of the contract other tools read instead of `metrics.json` (JSON Schema) |
 | `references/` | `report_template.md` (report structure), `methodology.md`, `signals.md`, `patterns.md` (price action and candlestick patterns) |
 | `ui/` | standard-library local web UI and the chart's JS/CSS |
 | `tests/` | offline pytest suite with a fake FMP client (`tests/fakes.py`) and FMP's NYSE holiday list for 1990-2028 (`tests/data/nyse_holidays_fmp.json`) |

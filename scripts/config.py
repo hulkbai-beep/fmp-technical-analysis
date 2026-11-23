@@ -283,11 +283,22 @@ PA_BREAKOUT_FAIL_BARS = 2         # a range breakout that closes back inside wit
 PA_PULLBACK_EMA_ATR = 0.5         # an H2 / L2 needs the pullback to reach within this many ATRs of the EMA
 PA_COUNT_MAX = 4                  # pullback counts beyond H4 / L4 are not labelled
 PA_GAP_BARS = 20                  # "20 gap bars": this many bars in a row not touching the EMA
-PA_PIVOT_K = 2                    # swing pivots for wedges and measured moves (confirmed k bars later)
 PA_WEDGE_MAX_BARS = 60            # three pushes inside this many bars
 PA_WEDGE_MIN_SPACING = 3          # bars between consecutive pushes, at least
 PA_MM_MAX_AGE = 120               # measured moves only from swings whose first point is at most this many bars old
 PA_ALWAYS_IN_BARS = 2             # consecutive strong trend bars that flip the always-in direction
+PA_STATE_CONFIRM_BARS = 3         # the market state changes once the reading has differed from it this many bars in a row (or at once on a breakout with follow-through)
+PA_STATE_EXIT_MARGIN = 0.1        # while the close is on a channel's own side of the EMA its share thresholds are this much lower (60% in, 50% out; 80% in, 70% out): a state ends on evidence, not on a wobble
+PA_BREAKOUT_HOLD_BARS = 20        # after a range breakout with follow-through the state is at least a channel that way for up to this many bars, while closes hold beyond the range
+PA_SIGNAL_CLOSE = 1.0 / 3.0       # a strong signal bar closes within this share of its range from its high (bull) or low (bear) ...
+PA_SIGNAL_MAX_ATR = 2.0           # ... is not a doji, and its range is at most this many ATRs (a bigger bar puts the stop too far away)
+PA_DOUBLE_TOL_ATR = 0.5           # double top / bottom: two swing highs (lows) within this many ATRs of each other; also how far an MTR test may undercut the extreme
+PA_DOUBLE_MAX_BARS = 60           # ... and at most this many bars apart
+PA_TREND_EXTREME_BARS = 60        # "the extreme of a trend": the lowest low / highest high of this many bars (MTR, double top / bottom variant)
+PA_MTR_SIGNAL_BARS = 3            # an MTR signal bar is the bar of the test's extreme or one of the next bars, this many bars in all
+PA_CLIMAX_BARS = 3                # climax: this many trend bars in a row in one direction ...
+PA_CLIMAX_EMA_ATR = 2.0           # ... the last one closing more than this many ATRs beyond the EMA
+PA_RANGE_THIRD = 1.0 / 3.0        # the bottom / top third of a trading range: where range H2s (L2s) count and how setups are located
 
 # ---------------------------------------------------------------------------- candlestick patterns (candlesticks.py, chart 3)
 CS_TREND_BARS = 5                 # prior trend: close[t-k-1] vs close[t-k-1-this] before a k-bar pattern

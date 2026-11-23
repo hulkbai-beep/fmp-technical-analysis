@@ -40,8 +40,8 @@ MODULE_NAMES = ("market_context", "regime", "trend_momentum", "relative_strength
 TRENDLINE_KEYS = ("kind", "slope_per_bar", "price", "distance_pct", "distance_atr", "touches", "confirmed", "state",
                   "broken_on", "close_side")
 STRUCTURE_KEYS = ("state", "highs", "lows", "last_high", "prev_high", "last_low", "prev_low", "invalidation", "swings")
-LIBRARY_KEYS = ("id", "name", "bias", "last_fired", "fires_total", "horizon", "n", "hit_rate", "median",
-                "confidence", "base_median", "base_hit_rate", "edge_median", "edge_hit_rate")
+LIBRARY_KEYS = ("id", "name", "bias", "last_fired", "fires_total", "triggered_total", "horizon", "n", "hit_rate",
+                "median", "confidence", "base_median", "base_hit_rate", "edge_median", "edge_hit_rate")
 
 
 # ---------------------------------------------------------------------------- value helpers
@@ -311,9 +311,13 @@ def _active_table(sg: dict, primary: int) -> list[dict]:
             "base_median": _get(h, "same_regime", "median"), "base_hit_rate": _get(h, "same_regime", "hit_rate"),
             "edge_median": _get(h, "edge", "median"), "edge_hit_rate": _get(h, "edge", "hit_rate"),
             "confidence": a.get("confidence") or h.get("confidence"),
-            # candlestick patterns: the key zone the pattern formed at (None = not at one, or unknown)
+            # candlestick patterns and price-action setups: the key zone it formed at (None = not at one, or unknown)
             "at_level": a.get("at_level"), "level": _get(a, "level", "label"),
         })
+        if isinstance(a.get("entry"), dict):       # price-action setups: the stop entry, the signal bar, the place
+            rows[-1].update(entry=a["entry"], signal_strong=_get(a, "signal_bar", "strong"),
+                            weak_because=_get(a, "signal_bar", "weak_because") or [], variant=a.get("variant"),
+                            range_third=_get(a, "location", "range_third"), line=_get(a, "location", "line"))
     return rows
 
 
@@ -339,7 +343,7 @@ def _pattern_block(name: str, payload, ctx, modules: dict, win: pd.DataFrame, pr
     out["primary_horizon"] = int(mod.get("primary_horizon") or primary)
     out["active"] = _active_table(mod, primary)
     out["library"] = [{k: r.get(k) for k in LIBRARY_KEYS} for r in mod.get("library") or []]
-    for key in ("recent", "last_doji"):
+    for key in ("recent", "last_doji", "lapsed", "entry_rule"):
         if key in mod:
             out[key] = mod[key]
     return out

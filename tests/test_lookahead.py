@@ -80,8 +80,11 @@ def test_no_lookahead(full, t):
     assert list(ind_head.columns) == list(I.IND_COLUMNS)
 
 
-PA_SERIES = ("ema", "types", "state", "always_in", "h_cnt", "h_ext", "l_cnt", "l_ext", "gap_bull", "gap_bear",
-             "tr", "rh", "rl")
+PA_SERIES = ("ema", "types", "state", "state_reading", "state_pending", "bo_live", "always_in",
+             "h_cnt", "h_ext", "h_next", "h_pb", "l_cnt", "l_ext", "l_next", "l_pb",
+             "th_cnt", "th_next", "th_pb", "tl_cnt", "tl_next", "tl_pb", "gap_bull", "gap_bear",
+             "bull_sig", "bear_sig", "shape", "climax", "tr", "rh", "rl")
+BREAKOUT_AT_BAR = ("side", "bar", "level", "range_atr", "close_position", "gap_open", "trend_bars")
 
 
 @pytest.fixture(scope="module")
@@ -92,7 +95,7 @@ def full_patterns(full):
 
 def test_fixture_exercises_the_pattern_libraries(full_patterns):
     _, pa_ev, cs_fr = full_patterns
-    assert pa_ev.to_numpy().any(axis=0).sum() >= 6, pa_ev.sum().to_dict()
+    assert pa_ev.to_numpy().any(axis=0).sum() >= 14, pa_ev.sum().to_dict()
     assert cs_fr.to_numpy().any(axis=0).sum() >= 6, cs_fr.sum().to_dict()
 
 
@@ -107,9 +110,36 @@ def test_patterns_have_no_lookahead(full, full_patterns, t):
             np.testing.assert_array_equal(np.asarray(fr[key])[:t + 1], np.asarray(fr_full[key])[:t + 1], err_msg=key)
         pd.testing.assert_frame_equal(PA.events(variant, ind).iloc[:t + 1], pa_full.iloc[:t + 1])
         pd.testing.assert_frame_equal(CS.pattern_frame(variant, ind).iloc[:t + 1], cs_full.iloc[:t + 1])
-        known = lambda ws: [w for w in ws if w["confirm"] <= t]  # noqa: E731
+        known = lambda ws, key="confirm": [w for w in ws if w[key] <= t]  # noqa: E731
         assert known(fr["wedges"]) == known(fr_full["wedges"])
-        assert [f for f in fr["fails"] if f["fail"] <= t] == [f for f in fr_full["fails"] if f["fail"] <= t]
+        assert known(fr["doubles"]) == known(fr_full["doubles"])
+        assert known(fr["mtrs"], "signal") == known(fr_full["mtrs"], "signal")
+        assert known(fr["pivots"]) == known(fr_full["pivots"])
+        assert known(fr["fails"], "fail") == known(fr_full["fails"], "fail")
+        # a breakout is known on its bar; its follow-through, its end and the close back only as they happen
+        at_bar = lambda bs: [{k: b[k] for k in BREAKOUT_AT_BAR} for b in bs if b["bar"] <= t]  # noqa: E731
+        assert at_bar(fr["breakouts"]) == at_bar(fr_full["breakouts"])
+        later = lambda bs, key: [(b["bar"], b[key]) for b in bs if b[key] is not None and b[key] <= t]  # noqa: E731
+        for key in ("follow", "back"):
+            assert later(fr["breakouts"], key) == later(fr_full["breakouts"], key), key
+
+
+@pytest.mark.parametrize("t", CUTS)
+def test_stop_entries_and_setup_statistics_have_no_lookahead(full, t):
+    """A stop entry needs the next bar, so signal bar s is settled once bar s+1 is in: cutting or scrambling the
+    data after t leaves the entries of signal bars <= t-1, and their outcomes at horizon h for s <= t-1-h."""
+    bars, _, _ = full
+    stop_full = PA.stop_entries(bars)
+    h = 5
+    for variant in (bars.iloc[:t + 1], scramble_after(bars, t, seed=t)):
+        stop = PA.stop_entries(variant)
+        for side in (1, -1):
+            np.testing.assert_array_equal(stop[side][0][:t], stop_full[side][0][:t])
+            np.testing.assert_array_equal(stop[side][1][:t], stop_full[side][1][:t])
+            assert not stop[side][0][len(variant) - 1]                 # the last bar is never triggered
+            for a, b in zip(PA.stop_outcomes(variant, h, side), PA.stop_outcomes(bars, h, side)):
+                np.testing.assert_array_equal(a[:t - h], b[:t - h])
+    assert np.isnan(PA.stop_outcomes(bars.iloc[:t + 1], h, 1)[0][t - h:]).all()    # no outcome without its exit bar
 
 
 # A dividend read one bar early can only change row t, and only by switching off a gap down at t, so the

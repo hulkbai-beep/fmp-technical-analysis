@@ -1,6 +1,6 @@
 ---
 name: fmp-technical-analysis
-description: Technical analysis of one US-listed stock or ETF from Financial Modeling Prep (FMP) daily data - market regime, trend and moving averages, RSI, MACD, momentum, relative strength vs SPY and the sector ETF, volume flow, volatility, support/resistance levels, back-tested signal statistics, Al Brooks-style price action (trend vs trading range, H2/L2, wedges, failed breakouts, measured moves) and candlestick patterns with their own back-tested statistics, event risk (earnings, ex-dividend dates and scheduled US macro releases inside the horizon), scenarios and risk arithmetic, plus three interactive charts. Use it when the user asks for technical analysis, a chart, support/resistance, moving averages, RSI, MACD, momentum, price action, Al Brooks, candlestick patterns or the trend of a ticker, including in Chinese (技术面, 技术分析, K线, K线形态, 价格行为, 支撑阻力, 均线, 趋势, 走势).
+description: Technical analysis of one US-listed stock or ETF from Financial Modeling Prep (FMP) daily data - market regime, trend and moving averages, RSI, MACD, momentum, relative strength vs SPY and the sector ETF, volume flow, volatility, support/resistance levels, back-tested signal statistics, Al Brooks-style price action (trend vs trading range, H2/L2, wedges, double tops and bottoms, major trend reversals, breakouts and failed breakouts, measured moves, trend channels) and candlestick patterns with their own back-tested statistics, event risk (earnings, ex-dividend dates and scheduled US macro releases inside the horizon), scenarios and risk arithmetic, plus three interactive charts. Use it when the user asks for technical analysis, a chart, support/resistance, moving averages, RSI, MACD, momentum, price action, Al Brooks, candlestick patterns or the trend of a ticker, including in Chinese (技术面, 技术分析, K线, K线形态, 价格行为, 支撑阻力, 均线, 趋势, 走势).
 ---
 
 # Technical analysis (FMP)
@@ -52,7 +52,7 @@ is not advice.
 2. **Run** from the skill folder:
    `python scripts/analyze.py TICKER --horizon swing|position [--out DIR] [--refresh] [--history-start YYYY-MM-DD] [--contract PATH]`.
    - Output goes to `./ta-output/<TICKER>_<as_of>/` by default.
-   - Add `--contract PATH` only when another tool needs the ta-3.3 contract: the other horizon also runs,
+   - Add `--contract PATH` only when another tool needs the ta-3.4 contract: the other horizon also runs,
      from the cache, and the contract covers both (see "Contract for other tools").
    - An uncached run makes 13 API calls for a stock, 11 for an ETF and 10 for SPY. A same-day
      re-run makes 0.
@@ -73,8 +73,9 @@ is not advice.
    - the horizon's 1σ range and calibrated 95% range (±2.4σ, not ±2σ), and the volatility stop with
      how often a stop that far away was touched in calibration;
    - any active signals, each with its n;
-   - the price-action state and always-in direction, and any setup or candlestick pattern that fired
-     in the last 3 bars, each with its n (context);
+   - the price-action state and always-in direction, and any setup or candlestick pattern of the last
+     3 bars, each with its n (context); for a price-action setup say whether its stop entry has
+     triggered or is still pending, and at what price;
    - the earnings date if it falls inside the horizon;
    - the next ex-dividend date if it falls inside the horizon (`dividends.within_horizon`), with its
      amount: the price opens lower by about that much for mechanical reasons; when none is announced but
@@ -132,6 +133,19 @@ is not advice.
     all days (`base_median`), not the same-regime baseline; a pattern with no edge on this stock is
     reported as such;
   - measured-move targets are zones, never price targets presented as advice;
+  - a price-action setup is an order, not a fill (`entry_rule`): it is entered only when the bar after
+    its signal bar trades beyond that bar's high (bullish) or low (bearish). Report `entry.status`:
+    `pending` with the `trigger_price` ("becomes an entry only if tomorrow trades below 365.27"), or
+    `triggered` with the entry date and price. Setups under `lapsed` did not trigger: mention them as
+    not triggered, never as signals. The statistics count triggered setups only, from the entry price;
+  - say where a setup formed (`at_level` and `level`, `location.range_third`, `location.line`) and
+    whether its signal bar is strong (`signal_bar.strong`, else `weak_because`). These are labels: the
+    statistics are for the setup anywhere, with any signal bar;
+  - `state.pending` is a reading that has not yet replaced the state: report the state, and mention
+    the pending reading as unconfirmed. A channel as the state with `trading_range.active` true is a
+    broad channel moving inside a range box: give both;
+  - a climax, an ii / ioi (`breakout_mode`) and a channel-line overshoot are readings without
+    statistics. Describe them; never call one a buy or sell signal;
   - a candlestick pattern with `at_level: true` formed at a support/resistance zone (`level`). Say where
     it formed; the statistics are for the pattern anywhere, not for the pattern at a level.
 - **Ex-dividend dates and macro events** (`dividends`, `macro_events`) are scheduled context:
@@ -164,7 +178,7 @@ is not advice.
 | `--out` | folder | `./ta-output/<TICKER>_<as_of>/` | where `metrics.json` and `chart.html` go |
 | `--refresh` | flag | off | ignore the cache and fetch everything again |
 | `--history-start` | `YYYY-MM-DD` | IPO date | ignore the symbol's history before this date (e.g. a pre-merger SPAC shell) |
-| `--contract` | file path | off | also write the ta-3.3 contract for another tool (both horizons; see below) |
+| `--contract` | file path | off | also write the ta-3.4 contract for another tool (both horizons; see below) |
 | `FMP_BASE_URL` | URL | unset (official FMP) | only for a third-party proxy |
 | `FMP_TLS_VERIFY` | `0` / `1` | `1` | `0` only per process, only for a proxy; ignored for the official host |
 | `FMP_CACHE_DIR` | folder | `~/.cache/fmp-technical` | response cache (never contains the key) |
@@ -173,16 +187,16 @@ is not advice.
 All analysis thresholds live in `scripts/config.py`, and each run records them in
 `meta.config_snapshot`.
 
-## Contract for other tools (ta-3.3)
+## Contract for other tools (ta-3.4)
 
-Tools that build on this skill (a decision engine, a screener) read the **ta-3.3 contract**, not
+Tools that build on this skill (a decision engine, a screener) read the **ta-3.4 contract**, not
 `metrics.json`, whose layout is internal and may change.
 - `python scripts/analyze.py TICKER --contract out.json` writes it: the requested horizon runs as usual and
   the other one runs from the same-day cache, so it costs no extra API calls.
 - `python scripts/contract.py SWING/metrics.json POSITION/metrics.json [-o out.json]` builds it from two saved
   runs of the same ticker and day. Give each run its own `--out`: by default both horizons write to the same
   folder.
-- `contracts/ta-3.3.schema.json` describes every field. Horizon-independent blocks (data quality, market,
+- `contracts/ta-3.4.schema.json` describes every field. Horizon-independent blocks (data quality, market,
   earnings, dividend, macro, volatility, extension, trend, regime, RS, flow, weekly, price-action context)
   sit at the top; the conflicts, zones (`low` / `high`), `price_location`, scenarios, reference stops,
   earnings, the ex-dividend date and macro events inside the horizon, and signal and pattern statistics
@@ -238,6 +252,25 @@ Tools that build on this skill (a decision engine, a screener) read the **ta-3.3
   over about two years, weighted above daily pivots) and `round_number`. A round-number zone that has not
   earned its place on the test record is shown only where a side has fewer than three zones, and is
   marked `round_fill: true`.
+- 3.4 strengthens price action:
+  - price-action patterns are entered on a stop: `fired_date` is the **signal bar**, and each pattern
+    carries `entry` (`status` `pending` or `triggered`, the `trigger_price`, and the entry date and price
+    once triggered), `signal_bar` (its high and low and whether it is `strong`), `variant`, and where it
+    formed: `at_level` / `level` (as on candlestick patterns), `range_third` and `line` (the trendline
+    or channel line it sits on). Their statistics count triggered setups only, from the entry price,
+    against baselines entered the same way. A setup whose next bar did not trigger is not a pattern: it
+    is listed in `context_only.lapsed_setups`;
+  - eight more setups: `pa_tr_h2`, `pa_tr_l2`, `pa_double_bottom`, `pa_double_top`, `pa_mtr_bottom`,
+    `pa_mtr_top`, `pa_breakout_up`, `pa_breakout_down`;
+  - `context_only` gains `pa_state_pending`, `climax`, `breakout_mode`, `last_breakout`, `last_wedge`,
+    `last_double`, `last_mtr` and `lapsed_setups`;
+  - each trendline gains `channel_line` (the parallel through the farthest swing on the other side,
+    with its price, where the close sits between the two lines, and its overshoots).
+
+  `context_only.pa_state` keeps its name and values but changes less often: it needs three bars in a
+  row that read differently (or a breakout with follow-through), so it can trail a sharp turn by up to
+  three bars; `pa_state_pending` shows the change coming. Wedges are now found on the 1.5 ATR ZigZag swings,
+  so `pa_wedge_*` fires on different bars than before.
 - It selects facts and judges nothing; position sizing is left to the caller. Fields are only ever added
   within a major version; renaming or removing one means a new major version, and `tests/test_contract.py` checks the
   output against the schema.

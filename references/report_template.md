@@ -279,33 +279,71 @@ single stock, in-sample, no costs or slippage, and history depth.
 These two libraries are context (`references/patterns.md`). Say so once.
 
 **Fields:**
-- `price_action.state.label`, `.since`, `.bars`; `price_action.always_in.direction`, `.since`;
-  `price_action.ema`, `.ema_slope`, `.close_vs_ema_atr`; `price_action.bar.type`;
-  `price_action.trading_range` (`active`, `low`, `high`, `height_atr`); `price_action.gap_bars`;
-  `price_action.last_high_count`, `.last_low_count`, `.last_wedge`, `.last_failed_breakout`;
-  `price_action.measured_moves[*]` (`kind`, `side`, `target`, `distance_pct`, `distance_atr`, `reached`);
-- `price_action.active[*]` and `candlesticks.active[*]`: the same fields as `signals.active[*]`;
-  `candlesticks.active[*]` also has `at_level` and `level` (`label`, `side`, `price`, `zone_low`,
-  `zone_high`);
+- `price_action.state.label`, `.since`, `.bars`, `.pending` (`label`, `bars`; null when the last bars
+  agree with the state); `price_action.always_in.direction`, `.since`; `price_action.ema`, `.ema_slope`,
+  `.close_vs_ema_atr`; `price_action.bar` (`type`, `shape`, `signal`);
+  `price_action.trading_range` (`active`, `low`, `high`, `height_atr`, `close_position`);
+  `price_action.gap_bars`; `price_action.climax` (`active`, `side`, `bars`, `last`);
+  `price_action.breakout_mode` (`pattern`, `date`, `bars_ago`, `high`, `low`, `broke`);
+- the latest patterns, each with its date and `bars_ago`: `price_action.last_high_count`,
+  `.last_low_count`, `.last_range_high_count`, `.last_range_low_count`, `.last_wedge`, `.last_double`
+  (`side`, `variant`), `.last_mtr` (`side`, `variant`, `extreme`, `break`, `test`),
+  `.last_failed_breakout`, `.last_breakout` (`side`, `level`, `range_atr`, `close_position`,
+  `gap_open`, `trend_bars`, `follow_through`, `holding`, `back_inside_date`);
+- `price_action.trend_channels.up` / `.down`: the trendline of section 5 plus `channel_line` (`price`,
+  `distance_pct`, `position`, `overshoots`, `last_overshoot`, `overshoot_bars_ago`, `close_side`);
+- `price_action.measured_moves[*]` (`kind`, `side`, `target`, `distance_pct`, `distance_atr`, `reached`);
+- `price_action.active[*]` and `candlesticks.active[*]`: the same fields as `signals.active[*]`, plus
+  `at_level` and `level` (`label`, `side`, `price`, `zone_low`, `zone_high`);
+- `price_action.active[*]` also has `entry` (`status`, `order`, `trigger_price`, `entry_date`,
+  `entry_price`), `signal_bar` (`date`, `high`, `low`, `strong`, `weak_because`), `variant` and
+  `location` (`range_third`, `line`); `price_action.lapsed[*]` (`name`, `fired_date`, `trigger_price`);
+  `price_action.entry_rule`;
 - `price_action.library[*]` and `candlesticks.library[*]`: `name`, `n`, `hit_rate`, `median`,
-  `edge_median`, `edge_hit_rate`, `confidence`, `last_fired`;
+  `edge_median`, `edge_hit_rate`, `confidence`, `last_fired`; `price_action.library[*]` also has
+  `fires_total` (signal bars) and `triggered_total` (those entered);
 - `candlesticks.recent[*]`, `candlesticks.last_doji`; `price_action.approximation`, `.caveats`,
   `candlesticks.caveats`.
 
 **Layout:**
-1. **Price action:** two or three sentences: the market state since when, the always-in direction,
-   where the close sits against the EMA, a trading range if one is on, and the latest wedge, failed
-   breakout or H2 / L2 if it is recent (within the primary horizon). List the measured-move targets
-   that are not `reached`, with their distance, as "measured-move zones", never as targets to aim for.
+1. **Price action:** three or four sentences.
+   - The market state since when, the always-in direction, where the close sits against the EMA. When
+     `state.pending` is set, add it as unconfirmed: "the last 2 bars no longer read as a tight bull
+     channel (latest reading: trading range); the state changes after 3". When a channel is the state and `trading_range.active` is true, give both: "a
+     broad bull channel, moving inside a 345.88-388.86 range box; the close is in its middle third".
+   - The latest patterns that are recent (within the primary horizon): a wedge, a double top / bottom
+     with its `variant` (a `flag` is a with-trend pattern, a `reversal` ends a move), a major trend
+     reversal, a failed breakout, a breakout ("broke above 368.92 on 2026-09-03 with no follow-through
+     and closed back inside the next day"), an H2 / L2.
+   - A climax when `climax.active` or `climax.last.bars_ago` is 5 or less; an ii / ioi when it is the
+     last bar or has not broken yet (`broke: null`), with its high and low; a channel line when the close
+     is `beyond` it or it was overshot in the last 5 bars (`overshoot_bars_ago`). These three are
+     readings without statistics: describe them and name no direction to trade.
+   - The measured-move targets that are not `reached`, with their distance, as "measured-move zones",
+     never as targets to aim for.
 2. **Candlestick patterns:** the most recent patterns (`candlesticks.recent`, up to 3) in one line.
 3. **Active setups and patterns** (`price_action.active`, `candlesticks.active`): the same table and
-   sentence form as section 7, at the primary horizon. None active: "No price-action setup or
-   candlestick pattern fired in the last 3 bars."
-   - **Where it formed.** For a candlestick pattern with `at_level: true`, add "formed at S1
+   sentence form as section 7, at the primary horizon. None active: "No price-action setup is entered
+   or pending, and no candlestick pattern fired in the last 3 bars."
+   - **Entry of a price-action setup.** A setup is an order, not a fill (`entry_rule`). In the Fired
+     column give its signal bar and its entry: "signal bar 2026-10-22, entered 2026-10-23 at 373.20"
+     for `entry.status: "triggered"`; "signal bar today, pending: entered only if the next bar trades
+     below 365.27" for `"pending"` (above the trigger for a bullish setup). Never write a pending setup
+     as a signal that has fired, and never as an instruction to place the order. Say once that these
+     statistics count triggered setups only, from the entry price, against days entered the same way.
+   - **Setups that did not trigger** (`price_action.lapsed`): one line, "Not triggered: wedge top
+     (signal bar 2026-10-21, the next bar did not trade below 361.40)". They are not signals and get no
+     statistics row.
+   - **Signal bar.** `signal_bar.strong: true`: "a strong signal bar"; `false`: "a weak signal bar
+     (not a bear bar, close above the bottom third)" from `weak_because`. Brooks gives a setup with a
+     weak signal bar less weight; the statistics cover both.
+   - **Where it formed.** For a setup or pattern with `at_level: true`, add "formed at S1
      (251.80-253.10)" from `level` ("in the zone the close is in" when `level.label` is `Z`); with
-     `false`, "not at a support/resistance zone". Classic candlestick reading gives a reversal pattern
-     more weight at a level, but the statistics in the table are for the pattern wherever it formed, so do
-     not present them as the record of the pattern at a level.
+     `false`, "not at a support/resistance zone". For a price-action setup add `location.range_third`
+     ("in the top third of the trading range") and `location.line` ("at the down trendline", "at the
+     channel line of the up trend") when set. Classic reading gives a reversal more weight at a level, a
+     trendline or a range edge, but the statistics in the table are for the setup wherever it formed, so
+     do not present them as its record at that place.
 4. **Library record:** one sentence per library. Its edges are against all days (`base_median`,
    `base_hit_rate`), not the same-regime baseline of the active rows; say so once. Use the edge test
    (`meta.config_snapshot.signals.edge_min` on `edge_median`, `.hit_edge_min` on `edge_hit_rate`): name,
@@ -316,8 +354,11 @@ These two libraries are context (`references/patterns.md`). Say so once.
    methods; his own probabilities are not used.
 
 **Wording:** Brooks' terms stay recognisable: "tight bull channel", "trading range", "always-in long",
-"H2", "wedge", "failed breakout", "measured move". In Chinese: 紧密上升通道, 交易区间, Always-in 多头,
-H2, 楔形, 假突破, 等距目标位.
+"H2", "wedge", "failed breakout", "measured move", "signal bar", "major trend reversal", "double top",
+"double-bottom bull flag", "breakout with follow-through", "buy climax", "breakout mode (ii, ioi)",
+"channel line". In Chinese: 紧密上升通道, 交易区间, Always-in 多头, H2, 楔形, 假突破, 等距目标位, 信号 K 线,
+主要趋势反转, 双顶 / 双底, 双底牛旗 / 双顶熊旗, 带跟进的突破, 买入高潮 / 卖出高潮, 突破模式（ii、ioi）, 通道线.
+Entry states: pending 等待触发（下一根涨过 / 跌破信号 K 线才入场）, triggered 已触发, not triggered 未触发（不算交易）.
 
 ### 9. Event risk (事件风险)
 Scheduled events: earnings (stocks only), the next ex-dividend date and US macro releases. They are
@@ -547,9 +588,11 @@ the median 10-day forward return was +0.8% (hit rate 55%), versus +0.4% (53%) fo
 ## 8. Price action and candlestick patterns
 Context only (daily-bar approximation of Al Brooks' methods). The market
 has been in a tight bull channel since 2026-10-09 (6 bars), always-in long since 2026-09-30; the close
-sits 1.4 ATR above the rising 20 EMA. The last H2 was 4 bars ago. Unreached measured-move zone:
+sits 1.4 ATR above the rising 20 EMA. The last breakout above a trading range (2026-09-24, above
+4,310.00) had follow-through and has not closed back inside. The last H2 was 4 bars ago: its signal
+bar was 2026-10-09, entered 2026-10-12 at 4,402.60. No climax. Unreached measured-move zone:
 4,701.20 (+3.1%, +1.4 ATR). Recent candlestick patterns: shooting star 2 bars ago, not at a
-support/resistance zone.
+support/resistance zone. No price-action setup is entered or pending in the last 3 bars.
 
 | Setup / pattern | Fired | Regime | n | Hit | Median | Same-regime | Edge | Sample |
 |---|---|---|---|---|---|---|---|---|
@@ -557,7 +600,8 @@ support/resistance zone.
 
 Library record at 10 days, against all days (not the same-regime baseline): H2 pullbacks near the rising
 EMA (n = 74, +0.6% / +6 pp) passed both edge thresholds in their own direction; none went against
-its hypothesis, and the other 7 price-action rules show no edge beyond both thresholds. No candlestick
+its hypothesis, and the other 15 price-action rules show no edge beyond both thresholds. Price-action
+rules are measured from a stop entry beyond the signal bar; 79 of the 152 H2 signal bars triggered. No candlestick
 pattern passed both thresholds either way.
 
 ## 9. Event risk

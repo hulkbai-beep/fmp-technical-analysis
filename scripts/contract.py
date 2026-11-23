@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-The ta-3.3 contract: a small, versioned summary of one stock's swing and position runs for other tools.
+The ta-3.4 contract: a small, versioned summary of one stock's swing and position runs for other tools.
 
 metrics.json is internal and may change between versions. The contract is the public interface: within a major
 version fields are only ever added, and renaming or removing one means a new major version (ta-4.0). It selects and
-normalises facts and judges nothing (no "buy", no target of its own). contracts/ta-3.3.schema.json describes every
+normalises facts and judges nothing (no "buy", no target of its own). contracts/ta-3.4.schema.json describes every
 field; tests/test_contract.py checks both.
 
 Blocks that do not depend on the horizon (data quality, market, event, dividend, macro, volatility, extension,
@@ -29,7 +29,7 @@ from pathlib import Path
 import config as C
 import scenarios as SC
 
-CONTRACT = "ta-3.3"   # 1.1 adds event.last_earnings*, targets' kind; 1.2 levels_note, range_95, vol stops;
+CONTRACT = "ta-3.4"   # 1.1 adds event.last_earnings*, targets' kind; 1.2 levels_note, range_95, vol stops;
 #                       2.0 removes event.eps_estimated (no fundamentals); 2.x only add fields:
 #                       2.1 data_quality.calendar_source, dividend, macro, horizons.*.ex_dividend_within_horizon /
 #                       macro_within_horizon / macro_complete (session counts exclude NYSE holidays),
@@ -41,7 +41,12 @@ CONTRACT = "ta-3.3"   # 1.1 adds event.last_earnings*, targets' kind; 1.2 levels
 #                       price_location state "inside_zone"; 3.3 trend.structure and weekly.structure (swing highs
 #                       and lows, the price that ends the sequence), horizons.*.trendlines, at_level / level on
 #                       candlestick patterns; zone sources may name weekly_pivot_high / _low and round_number, and
-#                       round_fill marks a round-number zone listed only because its side is short of zones
+#                       round_fill marks a round-number zone listed only because its side is short of zones;
+#                       3.4 price action: stop entries (a pattern's fired_date is its signal bar, its statistics run
+#                       from the entry beyond that bar, untriggered setups are not listed: context_only.lapsed_setups),
+#                       entry / signal_bar / variant / at_level / level / range_third / line on price-action
+#                       patterns, context_only.pa_state_pending, climax, breakout_mode, last_breakout, last_wedge,
+#                       last_double, last_mtr, and channel_line on each trendline
 HORIZONS = ("swing", "position")
 MACRO_EVENT_KEYS = ("id", "label", "tier", "date", "time_ny", "timing", "session", "trading_days_to")
 MACRO_BRIEF_KEYS = ("id", "label", "tier", "date", "time_ny", "timing", "trading_days_to")
@@ -297,11 +302,23 @@ def _weekly(mtf):
 def _context(pa, cs):
     """Price-action state and recent candlesticks: context."""
     st, ai = _get(pa, "state") or {}, _get(pa, "always_in") or {}
+    cx = _get(pa, "climax")
     return {"pa_state": st.get("label"), "pa_state_since": st.get("since"),
             "always_in": ai.get("direction"), "always_in_since": ai.get("since"),
             "last_failed_breakout": _pick(_get(pa, "last_failed_breakout"), ("side", "date", "level", "bars_ago")),
             "measured_moves": [_pick(x, ("side", "target", "reached", "distance_pct")) for x in _get(pa, "measured_moves") or []],
-            "recent_candles": [_pick(x, ("id", "bias", "date", "bars_ago")) for x in (_get(cs, "recent") or [])[:5]]}
+            "recent_candles": [_pick(x, ("id", "bias", "date", "bars_ago")) for x in (_get(cs, "recent") or [])[:5]],
+            # 3.4
+            "pa_state_pending": _pick(st.get("pending"), ("label", "bars")),
+            "climax": None if not isinstance(cx, dict) else {
+                "active": cx.get("active"), "side": cx.get("side"),
+                "last": _pick(cx.get("last"), ("side", "date", "bars_ago"))},
+            "breakout_mode": _pick(_get(pa, "breakout_mode"), ("pattern", "date", "bars_ago", "high", "low", "broke")),
+            "last_breakout": _pick(_get(pa, "last_breakout"), ("side", "date", "bars_ago", "level", "follow_through", "holding")),
+            "last_wedge": _pick(_get(pa, "last_wedge"), ("side", "confirmed_date", "bars_ago")),
+            "last_double": _pick(_get(pa, "last_double"), ("side", "variant", "confirmed_date", "bars_ago")),
+            "last_mtr": _pick(_get(pa, "last_mtr"), ("side", "variant", "signal_date", "bars_ago")),
+            "lapsed_setups": [_pick(x, ("id", "bias", "fired_date", "bars_ago", "trigger_price")) for x in _get(pa, "lapsed") or []]}
 
 
 # ---------------------------------------------------------------------------- per-horizon blocks
@@ -315,17 +332,26 @@ def _zone(z):
             "distance_pct": _num(z.get("distance_pct")), "distance_atr": _num(z.get("distance_atr"))}
 
 
-def _trendline(t):
-    """3.3: one trendline of the levels window: its two points, its price at the last bar and its state."""
+def _trendline(t, channel=None):
+    """3.3: one trendline of the levels window: its two points, its price at the last bar and its state.
+    3.4: channel_line, the parallel through the farthest opposite swing between the line's two points
+    (price_action.trend_channels, which builds the same lines), or None."""
     if not isinstance(t, dict):
         return None
     a, b = t.get("anchor") or {}, t.get("second") or {}
+    cl = channel.get("channel_line") if isinstance(channel, dict) and channel.get("anchor") == t.get("anchor") else None
     return {"anchor_date": a.get("date"), "anchor_price": _num(a.get("price")),
             "second_date": b.get("date"), "second_price": _num(b.get("price")),
             "slope_per_bar": _num(t.get("slope_per_bar")), "price": _num(t.get("price")),
             "distance_pct": _num(t.get("distance_pct")), "distance_atr": _num(t.get("distance_atr")),
             "touches": t.get("touches"), "confirmed": t.get("confirmed"), "state": t.get("state"),
-            "broken_on": t.get("broken_on"), "close_side": t.get("close_side")}
+            "broken_on": t.get("broken_on"), "close_side": t.get("close_side"),
+            "channel_line": None if not isinstance(cl, dict) else {
+                "price": _num(cl.get("price")), "through_date": _get(cl, "through", "date"),
+                "through_price": _num(_get(cl, "through", "price")), "distance_pct": _num(cl.get("distance_pct")),
+                "distance_atr": _num(cl.get("distance_atr")), "position": _num(cl.get("position")),
+                "overshoots": cl.get("overshoots"), "last_overshoot": cl.get("last_overshoot"),
+                "close_side": cl.get("close_side")}}
 
 
 def _scenario(s):
@@ -373,12 +399,25 @@ def _evidence(entries, primary, source=None):
                "edge_median": v["edge_median"], "edge_hit_rate": v["edge_hit_rate"], "confirmed": v["confirmed"]}
         if source:
             row["source"] = source
-        if source == "candlesticks":       # 3.3: where the pattern formed (None = the key levels are unavailable)
+        if source:       # 3.3 candlesticks, 3.4 price action: the key zone it formed at (None = levels unavailable)
             lvl = e.get("level")
             row["at_level"] = e.get("at_level")
             row["level"] = None if not isinstance(lvl, dict) else {
                 "label": lvl.get("label"), "side": lvl.get("side"), "price": _num(lvl.get("price")),
                 "low": _num(lvl.get("zone_low")), "high": _num(lvl.get("zone_high"))}
+        if source == "price_action":       # 3.4: the stop entry, the signal bar, and where the setup formed
+            en, sb, loc = e.get("entry"), e.get("signal_bar"), e.get("location") or {}
+            ln = loc.get("line")
+            row["entry"] = None if not isinstance(en, dict) else {
+                "status": en.get("status"), "order": en.get("order"), "trigger_price": _num(en.get("trigger_price")),
+                "entry_date": en.get("entry_date"), "entry_price": _num(en.get("entry_price"))}
+            row["signal_bar"] = None if not isinstance(sb, dict) else {
+                "date": sb.get("date"), "high": _num(sb.get("high")), "low": _num(sb.get("low")),
+                "strong": sb.get("strong")}
+            row["variant"] = e.get("variant")
+            row["range_third"] = loc.get("range_third")
+            row["line"] = None if not isinstance(ln, dict) else {
+                "kind": ln.get("kind"), "line": ln.get("line"), "price": _num(ln.get("price"))}
         out.append(row)
     return out
 
@@ -405,7 +444,8 @@ def _horizon(m):
         "resistances": resistances,
         "levels_window": None if not lv else _pick(lv, ("lookback_bars", "window_start", "window_end")),
         "trendlines": None if not lv or not isinstance(lv.get("trendlines"), dict) else {
-            "up": _trendline(lv["trendlines"].get("up")), "down": _trendline(lv["trendlines"].get("down"))},
+            "up": _trendline(lv["trendlines"].get("up"), _get(pa, "trend_channels", "up")),
+            "down": _trendline(lv["trendlines"].get("down"), _get(pa, "trend_channels", "down"))},
         "levels_note": _get(lv, "evidence", "note"),
         "bull": _scenario(_get(sn, "bull")),
         "bear": _scenario(_get(sn, "bear")),

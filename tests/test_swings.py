@@ -1,4 +1,4 @@
-"""Tests for scripts/swings.py: weekly swing pivots, the swing structure and trendlines, on hand-built
+"""Tests for scripts/swings.py: weekly swing pivots, the swing structure, trendlines and channel lines, on hand-built
 bars with known answers (no network). swing_pivots itself is tested in test_levels.py."""
 import numpy as np
 import pandas as pd
@@ -281,6 +281,55 @@ def test_down_trendline_mirrors_the_up_line():
     up_break.iloc[90, up_break.columns.get_loc("close")] = line[90] + 0.5
     down = SW.trendlines(up_break, flat_atr(up_break), {"lows": [], "highs": highs})["down"]
     assert (down["state"], down["broken_on"]) == ("broken", day(df, 90))
+
+
+def test_channel_line_runs_parallel_through_the_farthest_swing_between_the_two_points():
+    df, line = line_frame()                              # closes 2 above the up line, highs 0.5 above the closes
+    lows = piv(df, [(10, 100.0), (40, 106.0), (70, 115.0)])
+    highs = piv(df, [(20, 108.0), (30, 111.0), (60, 125.0)])     # 6 and 7 above the line between its points; 15 later
+    up = SW.trendlines(df, flat_atr(df), {"lows": lows, "highs": highs})["up"]
+    ch = SW.channel_line(df, flat_atr(df), up, highs)
+    assert ch["through"] == {"date": day(df, 30), "price": 111.0}          # bar 60 lies after the line's second point
+    assert ch["offset"] == pytest.approx(7.0) and ch["price"] == pytest.approx(line[-1] + 7.0)
+    assert ch["position"] == pytest.approx(2.0 / 7.0)                      # the close is 2 above the trendline
+    assert ch["distance_atr"] == pytest.approx(5.0) and ch["close_side"] == "inside"
+    assert (ch["overshoots"], ch["last_overshoot"], ch["overshoot_bars_ago"]) == (0, None, None)
+    # a high beyond the channel line by more than the tolerance is an overshoot; one before the second point is not
+    spike = df.copy()
+    spike.iloc[80, spike.columns.get_loc("high")] = line[80] + 7.0 + C.TRENDLINE_TOL_ATR + 0.1
+    spike.iloc[35, spike.columns.get_loc("high")] = line[35] + 9.0
+    spike.iloc[90, spike.columns.get_loc("high")] = line[90] + 7.0 + C.TRENDLINE_TOL_ATR - 0.1
+    ch2 = SW.channel_line(spike, flat_atr(spike), up, highs)
+    assert (ch2["overshoots"], ch2["last_overshoot"], ch2["overshoot_bars_ago"]) == (1, day(df, 80), 19)
+    # a close beyond the channel line
+    high_close = df.copy()
+    high_close.iloc[-1, high_close.columns.get_loc("close")] = line[-1] + 8.0
+    assert SW.channel_line(high_close, flat_atr(df), up, highs)["close_side"] == "beyond"
+
+
+def test_channel_line_needs_a_swing_between_the_points_on_the_far_side():
+    df, _ = line_frame()
+    lows = piv(df, [(10, 100.0), (40, 106.0)])
+    up = SW.trendlines(df, flat_atr(df), {"lows": lows, "highs": []})["up"]
+    assert SW.channel_line(df, flat_atr(df), up, []) is None
+    assert SW.channel_line(df, flat_atr(df), up, piv(df, [(60, 125.0)])) is None       # after the second point
+    assert SW.channel_line(df, flat_atr(df), up, piv(df, [(20, 101.0)])) is None       # below the line: not a channel
+    assert SW.channel_line(df, flat_atr(df), None, piv(df, [(20, 108.0)])) is None
+
+
+def test_down_channel_line_mirrors_it():
+    n = 100
+    line = 200.0 - 0.3 * (np.arange(n) - 10)
+    df = frame(line - 2.0)
+    highs = piv(df, [(10, 200.0), (40, 191.0)])
+    lows = piv(df, [(25, 189.5)])                        # the line is at 195.5 there: 6 below
+    down = SW.trendlines(df, flat_atr(df), {"lows": [], "highs": highs})["down"]
+    ch = SW.channel_line(df, flat_atr(df), down, lows)
+    assert ch["offset"] == pytest.approx(-6.0) and ch["price"] == pytest.approx(line[-1] - 6.0)
+    assert ch["position"] == pytest.approx(2.0 / 6.0) and ch["close_side"] == "inside"
+    low_bar = df.copy()
+    low_bar.iloc[70, low_bar.columns.get_loc("low")] = line[70] - 6.0 - C.TRENDLINE_TOL_ATR - 0.1
+    assert SW.channel_line(low_bar, flat_atr(df), down, lows)["overshoots"] == 1
 
 
 def test_trendlines_ignore_pivots_outside_the_window():
