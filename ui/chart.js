@@ -71,7 +71,14 @@
     const avwaps = Object.entries(data.avwaps || {}).map(([name, pairs]) => ({ name, key: "avwap_" + name, vals: align(pairs) }));
     // a panned view can put any close on the last-close chip, so the chip is sized for the longest one
     const widestClose = daily.reduce((w, b) => { const s = fmtPx(b.c); return s.length > w.length ? s : w; }, "");
-    return { daily, weekly, series, avwaps, widestClose, pa: preparePA(data.price_action, index, align), cs: prepareCS(data.candlesticks, index) };
+    // trendlines: the line's price on every bar from its first point on (straight on the daily index)
+    const N = daily.length;
+    const trendlines = (data.levels?.trendlines || []).filter(x => isNum(x.price) && isNum(x.slope_per_bar)).map(x => {
+      const from = index.get(x.anchor_date) ?? 0;
+      const vals = daily.map((b, i) => i >= from ? x.price - x.slope_per_bar * (N - 1 - i) : null);
+      return { ...x, vals, i0: index.get(x.anchor_date), i1: index.get(x.second_date) };
+    });
+    return { daily, weekly, series, avwaps, widestClose, trendlines, pa: preparePA(data.price_action, index, align), cs: prepareCS(data.candlesticks, index) };
   }
 
   // chart 2: per-bar arrays share the candles' order; markers, wedges and ranges get daily indices
@@ -133,6 +140,15 @@
       <div class="ta-stats">${tiles.join("")}</div>`;
   }
 
+  // swing structure (Dow theory): state, the last high and low against the ones before, the price that ends it
+  function structRow(key, s) {
+    if (!s) return "";
+    const inv = s.invalidation;
+    const text = `${tv("ss_", s.state)} · ${t("struct_seq", tv("sw_", s.highs), tv("sw_", s.lows))}` +
+      (inv && isNum(inv.price) ? ` · ${t("struct_inval", fmtPx(inv.price), fmtPct(inv.distance_pct, 1, true))}` : "");
+    return `<dt title="${esc(t("struct_title"))}">${esc(t(key))}</dt><dd>${esc(text)}</dd>`;
+  }
+
   function regimeHtml(r) {
     if (!r || !r.available) return card(t("t_regime"), `<p class="ta-small">${esc(t("unavailable"))}: ${esc(r?.reason)}</p>`, "regime");
     const dir = r.direction ? tv("dir_", r.direction_sign) : "–";
@@ -145,6 +161,7 @@
         <dt>${esc(t("rg_dir"))}</dt><dd>${esc(dir)}</dd>
         <dt>${esc(t("rg_vol"))}</dt><dd>${esc(vol)}</dd>
         <dt>${esc(t("rg_weekly"))}</dt><dd>${esc(weekly)}</dd>
+        ${structRow("rg_struct", r.structure)}${structRow("rg_wstruct", r.weekly_structure)}
       </dl>${r.mtf_note && I18N.lang() === "en" ? `<p class="ta-small">${esc(r.mtf_note)}</p>` : ""}`;
     return card(t("t_regime"), body, "regime");
   }
@@ -161,7 +178,7 @@
     const body = rows.map(a => {
       const arrow = a.bias > 0 ? `<span class="pos" aria-hidden="true">▲</span> ` : a.bias < 0 ? `<span class="neg" aria-hidden="true">▼</span> ` : "";
       const fired = `${t("th_fired")} ${t("bars_ago", a.bars_ago)} · ${String(a.fired_date || "").slice(5)}`;
-      const sample = a.confidence ? ` · ${t("sample")} ${tv("sc_", a.confidence)}` : "";
+      const sample = (a.confidence ? ` · ${t("sample")} ${tv("sc_", a.confidence)}` : "") + (a.at_level && a.level ? ` · ${t("at_lvl", a.level)}` : "");
       return `<tr class="${a.confidence === "insufficient" ? "dim" : ""}"><td class="l wrap">${arrow}${esc(I18N.signalName(a.id, a.name))}
           <div class="ta-sub" title="${esc(a.fired_date)}">${esc(fired + sample)}</div></td>
         <td>${esc(a.n ?? "–")}</td>
@@ -196,16 +213,22 @@
         <td>${esc(fmtPct(x.distance_pct, 1, true))}<br><span class="ta-sub">${esc(fmtSigned(x.distance_atr, 1))} ATR</span></td>
         <td class="l wrap" title="${esc(src.join(", "))}">${esc(src.slice(0, MAX_SRC).join(", ") + more)}
           ${isNum(x.touches) ? `<div class="ta-sub">${esc(t("touches", x.touches, x.holds, x.breaks))}</div>` : ""}
-          ${x.last_break ? `<div class="ta-sub">${esc(t("since_break", x.last_break, x.holds_since_break))}</div>` : ""}</td></tr>`;
+          ${x.last_break ? `<div class="ta-sub">${esc(t("since_break", x.last_break, x.holds_since_break))}</div>` : ""}
+          ${x.round_fill ? `<div class="ta-sub">${esc(t("round_fill"))}</div>` : ""}</td></tr>`;
     };
     const res = lv.resistances.map((x, i) => row("R" + (i + 1), x, "neg")).reverse().join("");
     const sup = lv.supports.map((x, i) => row("S" + (i + 1), x, "pos")).join("");
     // the zone the close is in sits next to the price row: it is neither support nor resistance
     const cur = lv.current_zone ? row(esc(t("k_zone")), lv.current_zone, "") : "";
     const price = cur + `<tr class="price"><td>${esc(t("k_price"))}</td><td>${esc(fmtPx(d.key_numbers?.price))}</td><td></td><td></td></tr>`;
+    const tls = (lv.trendlines || []).map(x => `<tr title="${esc(t("tl_title"))}"><td class="${x.kind === "up" ? "pos" : "neg"}"><b>${x.kind === "up" ? "↗" : "↘"}</b></td>
+        <td>${esc(fmtPx(x.price))}</td>
+        <td>${esc(fmtPct(x.distance_pct, 1, true))}<br><span class="ta-sub">${esc(fmtSigned(x.distance_atr, 1))} ATR</span></td>
+        <td class="l wrap">${esc(t("tl_" + x.kind))} · ${esc(x.state === "broken" ? t("tl_broken", x.broken_on) : t("tl_intact"))}
+          <div class="ta-sub">${esc(t("tl_from", x.anchor_date, x.second_date))} · ${esc(t("tl_touches", x.touches))}</div></td></tr>`).join("");
     return card(t("t_levels"), `<div class="ta-tablewrap"><table class="ta-table"><thead><tr><th></th><th>${esc(t("th_level"))}</th>
       <th>${esc(t("th_dist"))}</th><th class="l">${esc(t("th_src"))}</th></tr></thead>
-      <tbody>${res}${price}${sup}</tbody></table></div><p class="ta-small">${esc(t("lv_ref"))}</p>`);
+      <tbody>${res}${price}${sup}${tls}</tbody></table></div><p class="ta-small">${esc(t("lv_ref"))}</p>`);
   }
 
   function notesHtml(d) {
@@ -234,6 +257,7 @@
     if (d.levels?.supports?.length) items.push({ key: "supports", label: t("lg_supports"), color: "var(--up)", fill: "var(--up-zone)", sw: "box" });
     if (d.levels?.resistances?.length) items.push({ key: "resistances", label: t("lg_resistances"), color: "var(--down)", fill: "var(--down-zone)", sw: "box" });
     if (d.levels?.current_zone) items.push({ key: "current", label: t("lg_current"), color: "var(--mid)", fill: "var(--mid-zone)", sw: "box" });
+    if (prep.trendlines.length) items.push({ key: "trendlines", label: t("lg_trendlines"), color: "var(--text)", sw: "dash", title: t("tl_title") });
     if (d.volume_profile?.available) items.push({ key: "vp", label: t("lg_vp"), color: "var(--va)", sw: "box" });
     if ((d.earnings_dates || []).length) items.push({ key: "earnings", label: t("lg_earnings"), color: "var(--text)", sw: "box" });
     return items;
@@ -514,6 +538,20 @@
     for (const ln of lines) {
       const p = path(ln.vals, y);
       if (p) lineSvg += `<path d="${p}" fill="none" stroke="${ln.color}" stroke-width="${ln.w}" stroke-linejoin="round"${ln.dash ? ` stroke-dasharray="${ln.dash}"` : ""}/>`;
+    }
+
+    // trendlines: up line in the support colour, down line in the resistance colour; a broken line is dotted.
+    // Dots mark the two swings that define the line.
+    if (on("trendlines")) {
+      for (const tl of prep.trendlines) {
+        const p = path(tl.vals, y), col = tl.kind === "up" ? "var(--up)" : "var(--down)", broken = tl.state === "broken";
+        if (!p) continue;
+        lineSvg += `<path d="${p}" fill="none" stroke="${col}" stroke-width="1.5" stroke-dasharray="${broken ? "2 4" : "11 3 2 3"}" opacity="${broken ? ".7" : ".95"}"><title>${esc(t("tl_" + tl.kind))} ${esc(fmtPx(tl.price))}</title></path>`;
+        for (const [di, px] of [[tl.i0, tl.anchor_price], [tl.i1, tl.second_price]]) {
+          const i = di == null ? -1 : bars.findIndex(b => b.di >= di);
+          if (i >= 0 && isNum(px) && (tf === "weekly" || bars[i].di === di)) lineSvg += `<circle cx="${cx(i).toFixed(1)}" cy="${y(px).toFixed(1)}" r="3" fill="var(--card)" stroke="${col}" stroke-width="1.5"/>`;
+        }
+      }
     }
 
     // last close tag on the price axis

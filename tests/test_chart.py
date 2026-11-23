@@ -272,6 +272,66 @@ def test_chart_data_from_the_real_module_builders():
     assert all(mk["date"] >= first for mk in pa["markers"] + cs["markers"])
 
 
+def test_trendlines_swing_structure_and_pattern_places_reach_the_chart():
+    import candlesticks
+    import levels
+    import modules
+    import regime
+    _, plain = _data()
+    assert plain["levels"]["trendlines"] == [] and plain["regime"]["structure"] is None
+    assert plain["regime"]["weekly_structure"] is None
+
+    ctx = _ctx(n=700)
+    m = _modules(ctx)
+    m["levels"] = levels.build_levels(ctx)
+    m["trend_momentum"] = modules.build_trend_momentum(ctx)
+    m["multi_timeframe"] = regime.build_multi_timeframe(ctx)
+    hammer = {"id": "cs_hammer", "name": "Hammer", "bias": 1, "fired_date": ctx["as_of"], "bars_ago": 0, "horizons": {}}
+    cs = candlesticks.locate(ctx, {"available": True, "primary_horizon": 10, "active": [hammer], "library": []},
+                             {**m["levels"], "supports": [{"price": 1.0, "zone_low": 0.0, "zone_high": 1e9,
+                                                           "sources": ["pivot_low"]}]})
+    m["candlesticks"] = cs
+    d = chart.build_chart_data(ctx, m)
+    json.dumps(d, allow_nan=False)
+
+    lines = [x for x in (m["levels"]["trendlines"]["up"], m["levels"]["trendlines"]["down"]) if x]
+    assert lines, "the synthetic history should draw at least one trendline"
+    assert [x["kind"] for x in d["levels"]["trendlines"]] == [x["kind"] for x in lines]
+    for got, line in zip(d["levels"]["trendlines"], lines):
+        assert set(got) == set(chart.TRENDLINE_KEYS) | {"anchor_date", "anchor_price", "second_date", "second_price"}
+        assert (got["anchor_date"], got["second_date"]) == (line["anchor"]["date"], line["second"]["date"])
+        assert got["price"] == pytest.approx(line["price"]) and got["state"] == line["state"]
+        # the two points and the slope are all the page needs to draw the line on the daily axis
+        bars_between = len(ctx["bars"].loc[got["anchor_date"]:got["second_date"]]) - 1
+        assert got["anchor_price"] + got["slope_per_bar"] * bars_between == pytest.approx(got["second_price"])
+
+    st, wk = m["trend_momentum"]["structure"], m["multi_timeframe"]["weekly"]["structure"]
+    assert st["available"] and wk["available"]
+    assert set(d["regime"]["structure"]) == set(chart.STRUCTURE_KEYS)
+    assert d["regime"]["structure"]["state"] == st["state"] and d["regime"]["weekly_structure"]["state"] == wk["state"]
+    inv = st["invalidation"]
+    assert (d["regime"]["structure"]["invalidation"] is None) == (inv is None)
+    if inv:                                                                 # rounded like every chart number
+        assert d["regime"]["structure"]["invalidation"]["price"] == pytest.approx(inv["price"], abs=1e-4)
+        assert d["regime"]["structure"]["invalidation"]["date"] == inv["date"]
+    assert [s["label"] for s in d["regime"]["structure"]["swings"]] == [s["label"] for s in st["swings"]]
+
+    (row,) = d["candlesticks"]["active"]
+    assert (row["at_level"], row["level"]) == (True, "S1")
+    assert all("at_level" in r for r in d["signals"]["active"])              # one table shape; None off candlesticks
+
+
+def test_ui_names_the_new_readings_in_both_languages():
+    js, i18n = (UI / "chart.js").read_text(encoding="utf-8"), (UI / "i18n.js").read_text(encoding="utf-8")
+    for key in ("lg_trendlines", "rg_struct", "rg_wstruct", "ss_uptrend", "sw_higher", "struct_inval", "tl_up",
+                "tl_down", "tl_intact", "tl_broken", "tl_title", "at_lvl", "round_fill"):
+        assert len(re.findall(rf"\b{key}:", i18n)) == 2, key                # zh and en
+    for source in ("weekly_pivot_high", "weekly_pivot_low", "round_number"):
+        assert len(re.findall(rf"\b{source}:", i18n)) == 2, source
+    assert "lv.trendlines" in js and "x.round_fill" in js and "a.at_level" in js
+    assert "structRow(" in js and "weekly_structure" in js
+
+
 def test_pattern_charts_without_their_modules():
     _, d = _data()
     assert d["price_action"]["available"] is False and d["price_action"]["reason"]

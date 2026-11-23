@@ -126,7 +126,10 @@ MR_Z_EXTENDED = 2.0               # z20 beyond +-this -> stretched (= %B outside
 
 # ---------------------------------------------------------------------------- levels
 SWING_ATR = 1.5                   # ATR ZigZag: a swing high/low is confirmed once price reverses this many ATRs from it
+SWING_LEAD_BARS = 15              # the ZigZag count starts this many bars before a window, so its first pivots have a left side
 SWING_WEIGHT_CAP = 3.0            # a swing pivot's weight = its swing size / SWING_ATR, between 1 and this
+WEEKLY_PIVOT_WEEKS = 104          # major swings: ZigZag pivots of the weekly chart over this many complete weeks (~2 years),
+WEEKLY_PIVOT_LEAD = 26            # ... the count starting this many weeks earlier; the same window for both horizons
 PROFILE_BINS = 60                 # volume-profile price bins over the lookback range
 VALUE_AREA_SHARE = 0.70
 HVN_FACTOR = 1.5                  # bin volume > 1.5 x mean bin volume and a local peak -> HVN
@@ -135,8 +138,8 @@ BASE_MAX_ATR = 1.0                # supply/demand: a base bar's high-low range i
 IMPULSE_ATR = 2.0                 # ... and the close moves this many ATRs away from the base close ...
 IMPULSE_BARS = 3                  # ... within this many bars after it, without trading back through the base
 LEVEL_SOURCE_WEIGHTS = {          # candidate weight per source type (x swing size for pivots, x recency when dated)
-    "pivot": 1.0, "volume_profile": 1.0, "range_52w": 1.0, "supply_demand": 1.0, "gap": 0.75,
-    "moving_average": 0.25, "anchored_vwap": 0.25,
+    "pivot": 1.0, "weekly_pivot": 2.0, "volume_profile": 1.0, "range_52w": 1.0, "supply_demand": 1.0, "gap": 0.75,
+    "moving_average": 0.25, "anchored_vwap": 0.25, "round_number": 0.25,
 }
 LEVEL_VALUE_AREA_WEIGHT = 0.5     # value-area edges and HVNs weigh this much of the POC
 LEVEL_FRESH_FACTOR = 1.5          # an untested supply/demand zone weighs this much more
@@ -159,6 +162,19 @@ LEVEL_MIN_SCORE = 1.0             # a zone scoring below this is too weak to be 
 LEVEL_AVWAP_MIN_BARS = 10         # an anchored VWAP is a level candidate only once its anchor is this many bars old
 GAP_ZONE_MAX_ATR = 1.0            # an unfilled gap at most this many ATRs wide is one level zone; wider: two edges
 LARGEST_GAP_LOOKBACK = 126        # bars searched for the largest gap (anchored VWAP anchor)
+# Round numbers: low-weight candidates at multiples of a step that depends on the price, and is at least
+# ROUND_MIN_STEP_ATR ATRs so a volatile or high-priced stock does not get one every day's range.
+ROUND_STEPS = ((10.0, 1.0), (50.0, 5.0), (200.0, 10.0), (1000.0, 50.0))   # (close below this, step); above the last:
+ROUND_STEP_TOP = 100.0
+ROUND_LADDER = (1.0, 5.0, 10.0, 50.0, 100.0, 500.0, 1000.0, 5000.0, 10000.0)   # steps tried when the tier's is too fine
+ROUND_MIN_STEP_ATR = 2.0
+# Trend structure (swings.swing_structure) and trendlines (swings.trendlines)
+STRUCTURE_LOOKBACK = 504          # daily bars searched for the swings of trend_momentum.structure (both horizons alike)
+STRUCTURE_EQUAL_ATR = 0.25        # two swing highs (lows) within this many ATRs are equal, neither higher nor lower
+STRUCTURE_SWINGS = 6              # labelled swings listed (HH, HL, LH, LL)
+TRENDLINE_TOL_ATR = 0.25          # a swing within this many ATRs of a trendline touches it; a close further beyond breaks it
+TRENDLINE_MIN_BARS = 20           # a trendline's two defining swings are at least this many bars apart (about a month)
+TRENDLINE_MIN_SLOPE_ATR = 0.01    # ... and it rises (falls) at least this many ATRs a bar, ~2.5 ATR a year: flatter is a level
 
 # ---------------------------------------------------------------------------- multi-timeframe
 WEEKLY_RULE = "W-FRI"

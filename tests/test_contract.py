@@ -1,4 +1,4 @@
-"""The ta-3.2 contract (scripts/contract.py, contracts/ta-3.2.schema.json) on a fake FMP (no network).
+"""The ta-3.3 contract (scripts/contract.py, contracts/ta-3.3.schema.json) on a fake FMP (no network).
 
 Every contract must match the schema, and its numbers must be the metrics' numbers. A small JSON Schema checker
 lives here so the tests need nothing beyond pandas, numpy and pytest.
@@ -177,6 +177,124 @@ def test_squeeze_last_release_is_the_metrics_release(stock):
     bad = copy.deepcopy(c)
     bad["volatility"]["squeeze_last_release"]["direction"] = "sideways"
     assert validate(bad, SCHEMA)
+
+
+def test_swing_structure_is_the_metrics_structure(stock):
+    """3.3: trend.structure (daily swings) and weekly.structure (weekly swings)."""
+    swing, position, c = stock
+    pairs = ((c["trend"]["structure"], swing["trend_momentum"]["structure"]),
+             (c["weekly"]["structure"], swing["multi_timeframe"]["weekly"]["structure"]))
+    for got, m in pairs:
+        assert m["available"] is True, "the fake history should have two swing highs and two swing lows"
+        assert (got["state"], got["highs"], got["lows"]) == (m["state"], m["highs"], m["lows"])
+        assert got["state"] in ("uptrend", "downtrend", "mixed")
+        for k in ("last_high", "prev_high", "last_low", "prev_low"):
+            assert got[k] == {x: m[k][x] for x in ("price", "date", "provisional")}
+        assert (got["invalidation"] is None) == (m["state"] == "mixed")
+        if got["invalidation"]:
+            assert got["invalidation"] == {x: m["invalidation"][x]
+                                           for x in ("price", "date", "kind", "distance_pct", "distance_atr")}
+        assert set(got) == set(SCHEMA["$defs"]["structure"]["required"])          # no rule text, no swing list
+    # the structure does not depend on the horizon
+    assert position["trend_momentum"]["structure"] == swing["trend_momentum"]["structure"]
+    # a structure that could not be read (or an older metrics file without it) is null, still valid
+    for drop in (False, True):
+        old = [copy.deepcopy(m) for m in (swing, position)]
+        for m in old:
+            if drop:
+                del m["trend_momentum"]["structure"], m["multi_timeframe"]["weekly"]["structure"]
+            else:
+                m["trend_momentum"]["structure"] = {"available": False, "reason": "needs two confirmed swing highs"}
+                m["multi_timeframe"]["weekly"]["structure"] = {"available": False, "reason": "no weekly pivots"}
+        c_old = contract.build(*old)
+        assert c_old["trend"]["structure"] is None and c_old["weekly"]["structure"] is None
+        assert validate(c_old, SCHEMA) == []
+    bad = copy.deepcopy(c)
+    bad["trend"]["structure"]["state"] = "sideways"
+    assert validate(bad, SCHEMA)
+    assert "structure" in SCHEMA["properties"]["trend"]["required"] and "trend.structure" in SCHEMA["description"]
+
+
+def test_trendlines_are_the_metrics_trendlines(stock):
+    """3.3: horizons.*.trendlines, the up and the down line of that horizon's levels window."""
+    swing, position, c = stock
+    seen = 0
+    for name, m in (("swing", swing), ("position", position)):
+        got, lines = c["horizons"][name]["trendlines"], m["levels"]["trendlines"]
+        assert set(got) == {"up", "down"}
+        for side in ("up", "down"):
+            line, out = lines[side], got[side]
+            assert (out is None) == (line is None)
+            if line is None:
+                continue
+            seen += 1
+            assert (out["anchor_date"], out["anchor_price"]) == (line["anchor"]["date"], line["anchor"]["price"])
+            assert (out["second_date"], out["second_price"]) == (line["second"]["date"], line["second"]["price"])
+            for k in ("slope_per_bar", "price", "distance_pct", "distance_atr", "touches", "confirmed", "state",
+                      "broken_on", "close_side"):
+                assert out[k] == line[k], k
+            assert (out["state"] == "broken") == (out["broken_on"] is not None)
+            assert out["anchor_date"] < out["second_date"] <= m["as_of"]
+    assert seen, "the fake history should draw at least one trendline"
+    assert "trendlines" in SCHEMA["$defs"]["horizon"]["required"]
+    # an older metrics file without trendlines gives null, still valid; a broken line is caught
+    old = [copy.deepcopy(m) for m in (swing, position)]
+    for m in old:
+        del m["levels"]["trendlines"]
+    c_old = contract.build(*old)
+    assert c_old["horizons"]["swing"]["trendlines"] is None and validate(c_old, SCHEMA) == []
+    h = copy.deepcopy(c["horizons"]["swing"])
+    h["trendlines"] = {"up": {"price": 1.0}, "down": None}
+    assert validate(h, SCHEMA["$defs"]["horizon"])
+
+
+def test_zones_say_when_they_are_round_number_fills(stock):
+    """3.3: zone sources may name weekly pivots and round numbers; round_fill marks a zone listed as a fill."""
+    swing, position, c = stock
+    for name, m in (("swing", swing), ("position", position)):
+        h = c["horizons"][name]
+        for side in ("supports", "resistances"):
+            assert [z["round_fill"] for z in h[side]] == [z["round_fill"] for z in m["levels"][side]]
+            assert [z["sources"] for z in h[side]] == [z["sources"] for z in m["levels"][side]]
+            assert all(not z["round_fill"] or "round_number" in z["sources"] for z in h[side])
+    # the weekly swings are candidates for both horizons
+    for m in (swing, position):
+        assert m["levels"]["weekly_pivots"]["available"] is True
+        assert any(x["source"].startswith("weekly_pivot_") for x in m["levels"]["candidates"])
+    zone = {"price": 110.0, "zone_low": 110.0, "zone_high": 110.0, "score": 0.25, "touches": 0, "holds": 0, "breaks": 0,
+            "flips": 0, "fresh": True, "last_test": None, "last_break": None, "holds_since_break": 0,
+            "reaction_score": 0.0, "sources": ["round_number"], "round_fill": True, "distance_pct": 0.05,
+            "distance_atr": 2.5}
+    out = contract._zone(zone)
+    assert out["round_fill"] is True and validate(out, SCHEMA["$defs"]["zone"]) == []
+    assert contract._zone({k: v for k, v in zone.items() if k != "round_fill"})["round_fill"] is False
+    assert validate({**out, "round_fill": None}, SCHEMA["$defs"]["zone"])
+
+
+def test_candlestick_patterns_say_where_they_formed(stock):
+    """3.3: at_level / level on candlestick patterns only, without the zone's score."""
+    swing, _, _ = stock
+    spec = SCHEMA["$defs"]["evidence"]
+    at = {"id": "cs_hammer", "name": "Hammer", "bias": 1, "fired_date": swing["as_of"], "horizons": {},
+          "at_level": True, "level": {"label": "S1", "side": "support", "price": 96.0, "zone_low": 95.0,
+                                      "zone_high": 96.5, "sources": ["pivot_low"], "score": 3.0}}
+    m = copy.deepcopy(swing)
+    m["candlesticks"]["active"] = [at, {**at, "id": "cs_shooting_star", "bias": -1, "at_level": False, "level": None},
+                                   {**at, "id": "cs_doji_star", "at_level": None, "level": None}]
+    m["price_action"]["active"] = [{**at, "id": "pa_h2"}]
+    rows = contract._horizon(m)["patterns"]
+    by = {r["id"]: r for r in rows}
+    assert by["cs_hammer"]["at_level"] is True
+    assert by["cs_hammer"]["level"] == {"label": "S1", "side": "support", "price": 96.0, "low": 95.0, "high": 96.5}
+    assert (by["cs_shooting_star"]["at_level"], by["cs_shooting_star"]["level"]) == (False, None)
+    assert (by["cs_doji_star"]["at_level"], by["cs_doji_star"]["level"]) == (None, None)
+    assert "at_level" not in by["pa_h2"] and "level" not in by["pa_h2"]          # price-action setups carry none
+    assert all(validate(r, spec) == [] for r in rows)
+    assert validate({**by["cs_hammer"], "level": {**by["cs_hammer"]["level"], "score": 3.0}}, spec)
+    # the real run: every active candlestick pattern has a place
+    for r in contract._horizon(swing)["patterns"]:
+        if r.get("source") == "candlesticks":
+            assert isinstance(r["at_level"], bool) and (r["level"] is not None) == r["at_level"]
 
 
 def test_shared_blocks_are_the_same_in_both_runs(stock):

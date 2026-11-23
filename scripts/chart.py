@@ -33,10 +33,13 @@ VWAP_NOTE = ("Anchored VWAPs are a daily-bar approximation: typical price (H+L+C
 PROFILE_NOTE = ("Volume profile is a daily-bar approximation: each bar's volume is spread evenly across "
                 "its high-low range.")
 LEVEL_KEYS = ("price", "zone_low", "zone_high", "sources", "touches", "holds", "breaks", "flips", "fresh",
-              "last_break", "holds_since_break", "volume_share", "score", "distance_pct", "distance_atr")
+              "last_break", "holds_since_break", "volume_share", "score", "round_fill", "distance_pct", "distance_atr")
 MODULE_NAMES = ("market_context", "regime", "trend_momentum", "relative_strength", "mean_reversion",
                 "volume_flow", "volatility", "levels", "multi_timeframe", "event_risk", "dividends",
                 "macro_events", "signals", "price_action", "candlesticks", "conflicts", "scenarios", "risk")
+TRENDLINE_KEYS = ("kind", "slope_per_bar", "price", "distance_pct", "distance_atr", "touches", "confirmed", "state",
+                  "broken_on", "close_side")
+STRUCTURE_KEYS = ("state", "highs", "lows", "last_high", "prev_high", "last_low", "prev_low", "invalidation", "swings")
 LIBRARY_KEYS = ("id", "name", "bias", "last_fired", "fires_total", "horizon", "n", "hit_rate", "median",
                 "confidence", "base_median", "base_hit_rate", "edge_median", "edge_hit_rate")
 
@@ -223,14 +226,22 @@ def _earnings(ctx, modules: dict, bars: pd.DataFrame, start: pd.Timestamp) -> li
 def _levels(lv: dict) -> dict:
     if not lv.get("available"):
         return {"available": False, "reason": lv.get("reason") or "levels module unavailable",
-                "current_zone": None, "supports": [], "resistances": []}
+                "current_zone": None, "supports": [], "resistances": [], "trendlines": []}
     def side(xs):
         return [{k: x.get(k) for k in LEVEL_KEYS} for x in xs or []]
 
+    def line(tl):
+        return {**{k: tl.get(k) for k in TRENDLINE_KEYS},
+                "anchor_date": _get(tl, "anchor", "date"), "anchor_price": _get(tl, "anchor", "price"),
+                "second_date": _get(tl, "second", "date"), "second_price": _get(tl, "second", "price")}
+
     cz = lv.get("current_zone")
+    tls = lv.get("trendlines") or {}
     return {"available": True, "supports": side(lv.get("supports")), "resistances": side(lv.get("resistances")),
             # the zone the close is in: on neither side, drawn in a neutral colour
             "current_zone": None if not cz else {**side([cz])[0], "close_position": cz.get("close_position")},
+            # sloping support / resistance: the up line along the swing lows, the down line along the swing highs
+            "trendlines": [line(tls[k]) for k in ("up", "down") if isinstance(tls.get(k), dict)],
             "high_52w": lv.get("high_52w"), "low_52w": lv.get("low_52w"),
             "lookback_bars": lv.get("lookback_bars"), "window_start": lv.get("window_start"),
             "notes": lv.get("notes") or []}
@@ -259,7 +270,16 @@ def _regime(modules: dict) -> dict:
             "rv20": _get(rg, "volatility", "rv20"), "compression": _get(rg, "volatility", "compression"),
             "weekly_direction": _get(mtf, "weekly", "direction"), "weekly_sign": _get(mtf, "weekly", "sign"),
             "alignment": mtf.get("alignment"),
-            "mtf_note": mtf.get("note")}
+            "mtf_note": mtf.get("note"),
+            # swing structure (Dow theory) of the daily and the weekly chart: readings, not regime votes
+            "structure": _structure(_get(modules, "trend_momentum", "structure")),
+            "weekly_structure": _structure(_get(mtf, "weekly", "structure"))}
+
+
+def _structure(st) -> dict | None:
+    if not isinstance(st, dict) or not st.get("available"):
+        return None
+    return {k: st.get(k) for k in STRUCTURE_KEYS}
 
 
 def _conflicts(modules: dict) -> dict:
@@ -291,6 +311,8 @@ def _active_table(sg: dict, primary: int) -> list[dict]:
             "base_median": _get(h, "same_regime", "median"), "base_hit_rate": _get(h, "same_regime", "hit_rate"),
             "edge_median": _get(h, "edge", "median"), "edge_hit_rate": _get(h, "edge", "hit_rate"),
             "confidence": a.get("confidence") or h.get("confidence"),
+            # candlestick patterns: the key zone the pattern formed at (None = not at one, or unknown)
+            "at_level": a.get("at_level"), "level": _get(a, "level", "label"),
         })
     return rows
 

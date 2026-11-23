@@ -7,6 +7,10 @@ Each pattern is a fixed rule (references/patterns.md) with a prior-trend conditi
 with the same forward-return statistics as signal_stats; the library table reports every pattern's
 record on this stock at the primary horizon so a pattern without an edge is visible as such.
 Patterns are context. Causal: a pattern ending at bar t uses bars <= t only.
+
+Where a pattern forms matters as much as its shape (Nison): locate() marks each active pattern with
+the key zone it formed at, a bullish one at support and a bearish one at resistance. That is a
+label only; the statistics stay those of the pattern wherever it formed.
 """
 from __future__ import annotations
 
@@ -62,6 +66,11 @@ SIGNAL_IDS = [s["id"] for s in SIGNALS]
 _BY_ID = {s["id"]: s for s in SIGNALS}
 DOJI_RULE = (f"body <= {C.CS_DOJI_BODY:g} x range and range >= {C.CS_MIN_RANGE_ATR:g} x ATR14 "
              "(marked on the chart; no direction, so no statistics)")
+AT_LEVEL_RULE = (f"a bullish pattern is at a level when the lowest low of its bars reached a support zone, or the "
+                 f"zone the close is in (came within {C.TEST_TOL_ATR:g} ATR of its top or lower), and its last bar "
+                 f"closed at or above that zone's bottom; a bearish pattern mirrors this with its highest high at a "
+                 f"resistance zone or the zone the close is in. Zones are the horizon's key levels as of the last "
+                 f"bar. A label only: the statistics are those of the pattern wherever it formed")
 
 
 def _iso(ts) -> str:
@@ -194,6 +203,61 @@ def build_candlesticks(ctx) -> dict:
         "last_doji": None if not dojis.size else {"date": _iso(bars.index[dojis[-1]]), "bars_ago": n - 1 - int(dojis[-1])},
         "caveats": _caveats(ctx.get("ticker", "this stock")),
     }
+
+
+def _level_for(bias: int, low: float, high: float, close: float, zones: list[tuple[str, dict]], tol: float):
+    """(label, zone) of the key zone a pattern with these extremes formed at, or None."""
+    hit = []
+    for label, z in zones:
+        lo, hi = z.get("zone_low"), z.get("zone_high")
+        if lo is None or hi is None:
+            continue
+        if bias > 0 and label[0] in "SZ" and low <= hi + tol and close >= lo:
+            hit.append((max(lo - low, low - hi, 0.0), label, z))      # how far the low is from the zone
+        elif bias < 0 and label[0] in "RZ" and high >= lo - tol and close <= hi:
+            hit.append((max(lo - high, high - hi, 0.0), label, z))
+    return min(hit, key=lambda x: x[0])[1:] if hit else None
+
+
+def locate(ctx, cs: dict, lv: dict | None) -> dict:
+    """cs with the place of each active pattern: at_level (True, False, or None when the key levels are
+    unavailable) and level, the zone it formed at ({label S1.. / R1.. / Z, side, price, zone_low,
+    zone_high, sources}; its test record stays with the key levels) or None. See AT_LEVEL_RULE.
+    Nothing else in cs changes."""
+    if not isinstance(cs, dict) or not cs.get("available"):
+        return cs
+    out = {**cs, "at_level_rule": AT_LEVEL_RULE}
+    bars = ctx.get("bars")
+    atr = (lv or {}).get("atr")
+    if not isinstance(lv, dict) or not lv.get("available") or not atr or bars is None:
+        out["active"] = [{**a, "at_level": None, "level": None} for a in cs.get("active") or []]
+        out["notes"] = list(cs.get("notes") or []) + ["key levels unavailable: the patterns' place (at_level) is unknown"]
+        return out
+    zones = [(f"S{i}", z) for i, z in enumerate(lv.get("supports") or [], 1)]
+    zones += [(f"R{i}", z) for i, z in enumerate(lv.get("resistances") or [], 1)]
+    if lv.get("current_zone"):
+        zones.append(("Z", lv["current_zone"]))
+    side = {"S": "support", "R": "resistance", "Z": "current"}
+    pos = {_iso(d): i for i, d in enumerate(bars.index)}
+    hi, lo, cl = (bars[k].to_numpy(dtype=float) for k in ("high", "low", "close"))
+    active = []
+    for a in cs.get("active") or []:
+        end = pos.get(a.get("fired_date"))
+        spec = _BY_ID.get(a.get("id"))
+        if end is None or spec is None:
+            active.append({**a, "at_level": None, "level": None})
+            continue
+        start = max(0, end - spec["bars"] + 1)
+        found = _level_for(spec["bias"], float(np.nanmin(lo[start:end + 1])), float(np.nanmax(hi[start:end + 1])),
+                           float(cl[end]), zones, C.TEST_TOL_ATR * float(atr))
+        level = None
+        if found:
+            label, z = found
+            level = {"label": label, "side": side[label[0]], "price": z.get("price"), "zone_low": z.get("zone_low"),
+                     "zone_high": z.get("zone_high"), "sources": list(z.get("sources") or [])}
+        active.append({**a, "at_level": level is not None, "level": level})
+    out["active"] = active
+    return out
 
 
 def chart_payload(ctx, modules: dict, win_index: pd.DatetimeIndex) -> dict:

@@ -255,6 +255,26 @@ def test_multi_timeframe_partial_week_and_short_history():
     assert any("40 weekly bars" in n for n in short["notes"])
 
 
+def test_multi_timeframe_weekly_swing_structure():
+    import swings as SW
+    bars = synthetic_bars(700)
+    ctx = make_ctx(bars)
+    out = regime.build_multi_timeframe(ctx)
+    st = out["weekly"]["structure"]
+    major = SW.weekly_pivots(bars)
+    assert st["available"] is True
+    # weekly swings compared in weekly ATRs; the distance to the invalidation price in daily ATRs
+    assert st == SW.swing_structure(bars, major, major["atr_weekly"], float(ctx["ind"]["atr14"].iloc[-1]))
+    assert major["atr_weekly"] > float(ctx["ind"]["atr14"].iloc[-1])
+    # a reading only: the weekly direction and the alignment do not use it
+    assert {k for k in out["weekly"] if k != "structure"} == {"date", "bars", "close", "sma10w", "sma40w", "rsi14w",
+                                                              "direction", "sign", "partial_week"}
+    short = regime.build_multi_timeframe(make_ctx(synthetic_bars(60)))
+    assert short["weekly"]["structure"]["available"] is False
+    assert "complete weekly bars" in short["weekly"]["structure"]["reason"]
+    assert not any("swing" in n or "pivot" in n for n in short["notes"])
+
+
 def test_multi_timeframe_week_cut_short_by_a_holiday_is_complete_with_the_calendar():
     import market_calendar as MC
     bars = synthetic_bars(400, start="2023-01-02").loc[:"2024-03-28"]   # the Thursday before Good Friday 2024

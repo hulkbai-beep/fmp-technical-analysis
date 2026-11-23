@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "ta-3.2",
-  "title": "Technical analysis contract ta-3.2",
-  "description": "The stable summary of one stock's swing and position runs that other tools read, built by scripts/contract.py. Within a major version fields are only ever added; renaming or removing one means a new major version. 1.1 adds event.last_earnings, event.days_since_last_earnings, event.last_earnings_move and the kind of each scenario target. 1.2 adds levels_note, range_95 and the volatility-band stop and target with calibrated touch rates in stops_ref; the support/resistance zones are reference only. 2.0 removes event.eps_estimated: the contract carries no fundamentals. 2.1 adds data_quality.calendar_source, the dividend and macro blocks, trend.sma100 (a context line, not part of the SMA stack) and, per horizon, ex_dividend_within_horizon, macro_within_horizon and macro_complete; trading-day counts (event.trading_days_to, data_quality.business_days_behind) now count NYSE sessions, exchange holidays excluded. 3.0 removes every score: the per-horizon bias (weighted score, label, confidence), pillars and weights_used, the pillar of each signal or pattern and context_only.scored; the contract carries no scores, ratings or bias. 3.1 adds volatility.squeeze_last_release, the last bar the squeeze switched off (its date, bars ago, direction and how many bars the squeeze had lasted). 3.2 adds, per horizon, current_zone (the zone the last close is in, which is on neither side), each zone's last_break and holds_since_break, and the price_location state inside_zone; zones may be up to 1.5 ATR wide and a break now cancels one hold in the score. Ex-dividend dates and macro events are context. Horizon-independent blocks sit at the top, the rest under horizons.swing / horizons.position. Prices are split-adjusted closes; fractions are decimals (0.05 = 5%); null means missing, never estimated.",
+  "$id": "ta-3.3",
+  "title": "Technical analysis contract ta-3.3",
+  "description": "The stable summary of one stock's swing and position runs that other tools read, built by scripts/contract.py. Within a major version fields are only ever added; renaming or removing one means a new major version. 1.1 adds event.last_earnings, event.days_since_last_earnings, event.last_earnings_move and the kind of each scenario target. 1.2 adds levels_note, range_95 and the volatility-band stop and target with calibrated touch rates in stops_ref; the support/resistance zones are reference only. 2.0 removes event.eps_estimated: the contract carries no fundamentals. 2.1 adds data_quality.calendar_source, the dividend and macro blocks, trend.sma100 (a context line, not part of the SMA stack) and, per horizon, ex_dividend_within_horizon, macro_within_horizon and macro_complete; trading-day counts (event.trading_days_to, data_quality.business_days_behind) now count NYSE sessions, exchange holidays excluded. 3.0 removes every score: the per-horizon bias (weighted score, label, confidence), pillars and weights_used, the pillar of each signal or pattern and context_only.scored; the contract carries no scores, ratings or bias. 3.1 adds volatility.squeeze_last_release, the last bar the squeeze switched off (its date, bars ago, direction and how many bars the squeeze had lasted). 3.2 adds, per horizon, current_zone (the zone the last close is in, which is on neither side), each zone's last_break and holds_since_break, and the price_location state inside_zone; zones may be up to 1.5 ATR wide and a break now cancels one hold in the score. 3.3 adds trend.structure and weekly.structure (the swing structure of the daily and the weekly chart: whether the last swing highs and lows are higher or lower, and the price that ends the sequence), per horizon trendlines (the up line along the swing lows and the down line along the swing highs of the levels window), and at_level / level on candlestick patterns (the key zone the pattern formed at); zone sources may now name weekly_pivot_high / weekly_pivot_low (swings of the weekly chart, candidates for both horizons) and round_number, a side short of three zones may list round-number zones (marked round_fill), and conflicts may list trend_vs_structure. Ex-dividend dates and macro events are context. Horizon-independent blocks sit at the top, the rest under horizons.swing / horizons.position. Prices are split-adjusted closes; fractions are decimals (0.05 = 5%); null means missing, never estimated.",
   "type": "object",
   "additionalProperties": false,
   "required": ["contract", "config_hash", "ticker", "generated_at", "as_of", "as_of_basis", "data_source", "last_close",
@@ -10,7 +10,7 @@
                "extension", "trend", "regime", "rs", "flow", "weekly", "context_only", "horizons", "skipped",
                "modules_unavailable", "restricted", "warnings", "errors", "disclaimer"],
   "properties": {
-    "contract": {"const": "ta-3.2"},
+    "contract": {"const": "ta-3.3"},
     "config_hash": {"type": "string", "description": "hash of both runs' meta.config_snapshot"},
     "ticker": {"type": "string"},
     "generated_at": {"type": "string"},
@@ -155,8 +155,9 @@
     "trend": {
       "type": ["object", "null"], "additionalProperties": false,
       "required": ["sma20", "sma50", "sma200", "sma100", "slopes", "close_vs", "stack", "stack_state", "mom_12_1",
-                   "returns", "macd", "high_52w", "high_52w_date", "from_52w_high", "low_52w", "low_52w_date"],
+                   "returns", "macd", "high_52w", "high_52w_date", "from_52w_high", "low_52w", "low_52w_date", "structure"],
       "properties": {
+        "structure": {"$ref": "#/$defs/structure", "description": "3.3: swing structure of the daily chart (ATR ZigZag swings of 1.5 daily ATR, the same swings as the key levels); a reading next to the averages, not a regime vote; null when the last 504 bars hold fewer than two swing highs and two swing lows"},
         "sma20": {"$ref": "#/$defs/num"}, "sma50": {"$ref": "#/$defs/num"}, "sma200": {"$ref": "#/$defs/num"},
         "sma100": {"$ref": "#/$defs/num", "description": "100-day SMA, a widely watched reference line (2.1): context only, not part of stack / stack_state and never a trend vote; null with fewer than 100 bars"},
         "slopes": {"type": ["object", "null"], "description": "20-bar slope of each SMA, keyed sma20 / sma50 / sma100 / sma200"},
@@ -218,8 +219,9 @@
     },
     "weekly": {
       "type": ["object", "null"], "additionalProperties": false,
-      "required": ["direction", "sign", "sma10w", "sma40w", "rsi14w", "daily_sign", "alignment"],
+      "required": ["direction", "sign", "sma10w", "sma40w", "rsi14w", "daily_sign", "alignment", "structure"],
       "properties": {
+        "structure": {"$ref": "#/$defs/structure", "description": "3.3: swing structure of the weekly chart (ZigZag swings of 1.5 weekly ATR over complete weeks: the major swings); invalidation.distance_atr is in daily ATRs"},
         "direction": {"$ref": "#/$defs/str"}, "sign": {"$ref": "#/$defs/sign"},
         "sma10w": {"$ref": "#/$defs/num"}, "sma40w": {"$ref": "#/$defs/num"}, "rsi14w": {"$ref": "#/$defs/num"},
         "daily_sign": {"$ref": "#/$defs/sign"}, "alignment": {"$ref": "#/$defs/str"}
@@ -274,7 +276,8 @@
     "zone": {
       "type": "object", "additionalProperties": false,
       "required": ["price", "low", "high", "score", "touches", "holds", "breaks", "flips", "fresh", "last_test",
-                   "last_break", "holds_since_break", "reaction_score", "sources", "distance_pct", "distance_atr"],
+                   "last_break", "holds_since_break", "reaction_score", "sources", "round_fill", "distance_pct",
+                   "distance_atr"],
       "properties": {
         "price": {"$ref": "#/$defs/num"}, "low": {"$ref": "#/$defs/num"}, "high": {"$ref": "#/$defs/num"},
         "score": {"$ref": "#/$defs/num"}, "touches": {"type": ["integer", "null"]}, "holds": {"type": ["integer", "null"]},
@@ -283,7 +286,9 @@
         "last_break": {"$ref": "#/$defs/str", "description": "3.2: date of the most recent break of the zone; null if it never broke in the window"},
         "holds_since_break": {"type": ["integer", "null"], "description": "3.2: holds after last_break (every hold if it never broke): the zone's record in its present role"},
         "reaction_score": {"$ref": "#/$defs/num"},
-        "sources": {"$ref": "#/$defs/strings"}, "distance_pct": {"$ref": "#/$defs/num"}, "distance_atr": {"$ref": "#/$defs/num"},
+        "sources": {"$ref": "#/$defs/strings", "description": "the candidates inside the zone; 3.3 adds weekly_pivot_high / weekly_pivot_low (swings of the weekly chart) and round_number"},
+        "round_fill": {"type": "boolean", "description": "3.3: true for a round-number zone that has not earned its place on the test record and is listed only because its side has fewer than three zones; treat it as a weak reference"},
+        "distance_pct": {"$ref": "#/$defs/num"}, "distance_atr": {"$ref": "#/$defs/num"},
         "close_position": {"$ref": "#/$defs/num", "description": "current_zone only: where the last close sits in the zone, 0 at its bottom and 1 at its top"}
       }
     },
@@ -360,13 +365,61 @@
         "edge_median": {"$ref": "#/$defs/num", "description": "median return minus the same-regime baseline"},
         "edge_hit_rate": {"$ref": "#/$defs/num"},
         "confirmed": {"type": "boolean", "description": "sample-backed edge over the same-regime baseline in the signal's direction"},
-        "source": {"enum": ["price_action", "candlesticks"]}
+        "source": {"enum": ["price_action", "candlesticks"]},
+        "at_level": {"type": ["boolean", "null"], "description": "3.3, candlestick patterns only: the pattern formed at a key zone of this horizon, a bullish one at a support zone or the zone the close is in, a bearish one at a resistance zone or the zone the close is in; null when the key levels are unavailable. A label: the statistics are those of the pattern wherever it formed"},
+        "level": {"type": ["object", "null"], "additionalProperties": false, "description": "3.3: the zone the pattern formed at, null when at_level is not true",
+                  "required": ["label", "side", "price", "low", "high"],
+                  "properties": {"label": {"type": "string", "description": "S1..S3, R1..R3 (index into supports / resistances, from 1) or Z (current_zone)"},
+                                 "side": {"enum": ["support", "resistance", "current"]},
+                                 "price": {"$ref": "#/$defs/num"}, "low": {"$ref": "#/$defs/num"}, "high": {"$ref": "#/$defs/num"}}}
+      }
+    },
+    "swing": {
+      "type": ["object", "null"], "additionalProperties": false, "required": ["price", "date", "provisional"],
+      "properties": {"price": {"$ref": "#/$defs/num"}, "date": {"$ref": "#/$defs/str"},
+                     "provisional": {"type": "boolean", "description": "true for the swing in progress: it has closed beyond the last confirmed swing of its side but no reversal has confirmed it yet, so its price can still extend"}}
+    },
+    "structure": {
+      "type": ["object", "null"], "additionalProperties": false,
+      "description": "Dow-theory reading of the last swings. A swing is an ATR ZigZag pivot (confirmed once price reverses 1.5 ATR from it); the swing in progress counts once a close passes the last swing of its side",
+      "required": ["state", "highs", "lows", "last_high", "prev_high", "last_low", "prev_low", "invalidation"],
+      "properties": {
+        "state": {"enum": ["uptrend", "downtrend", "mixed"], "description": "uptrend = the last swing high and the last swing low are both higher than the ones before; downtrend = both lower; mixed = anything else"},
+        "highs": {"enum": ["higher", "lower", "equal"], "description": "last swing high against the one before; equal = within 0.25 ATR"},
+        "lows": {"enum": ["higher", "lower", "equal"]},
+        "last_high": {"$ref": "#/$defs/swing"}, "prev_high": {"$ref": "#/$defs/swing"},
+        "last_low": {"$ref": "#/$defs/swing"}, "prev_low": {"$ref": "#/$defs/swing"},
+        "invalidation": {"type": ["object", "null"], "additionalProperties": false,
+                         "description": "the price that ends the sequence: a close below the last swing low of an uptrend, or above the last swing high of a downtrend; null when mixed",
+                         "required": ["price", "date", "kind", "distance_pct", "distance_atr"],
+                         "properties": {"price": {"$ref": "#/$defs/num"}, "date": {"$ref": "#/$defs/str"},
+                                        "kind": {"enum": ["swing_low", "swing_high"]},
+                                        "distance_pct": {"$ref": "#/$defs/num", "description": "price / close - 1 (negative below the close)"},
+                                        "distance_atr": {"$ref": "#/$defs/num"}}}
+      }
+    },
+    "trendline": {
+      "type": ["object", "null"], "additionalProperties": false,
+      "description": "a straight line (arithmetic price scale, one step per trading day) through two swings of the levels window; null when the swings make no line whose two points are at least 20 bars apart and which moves at least 0.01 ATR a bar",
+      "required": ["anchor_date", "anchor_price", "second_date", "second_price", "slope_per_bar", "price", "distance_pct",
+                   "distance_atr", "touches", "confirmed", "state", "broken_on", "close_side"],
+      "properties": {
+        "anchor_date": {"$ref": "#/$defs/str"}, "anchor_price": {"$ref": "#/$defs/num"},
+        "second_date": {"$ref": "#/$defs/str"}, "second_price": {"$ref": "#/$defs/num"},
+        "slope_per_bar": {"$ref": "#/$defs/num", "description": "price change of the line per trading day"},
+        "price": {"$ref": "#/$defs/num", "description": "the line's price at the last bar"},
+        "distance_pct": {"$ref": "#/$defs/num", "description": "price / close - 1"}, "distance_atr": {"$ref": "#/$defs/num"},
+        "touches": {"type": ["integer", "null"], "description": "swings within 0.25 ATR of the line, its two points included"},
+        "confirmed": {"type": ["boolean", "null"], "description": "three touches or more"},
+        "state": {"enum": ["intact", "broken"], "description": "broken = a close after the second point lay more than 0.25 ATR beyond the line"},
+        "broken_on": {"$ref": "#/$defs/str", "description": "the first such close; null while intact"},
+        "close_side": {"enum": ["above", "below"], "description": "where the last close is against the line now"}
       }
     },
     "horizon": {
       "type": "object", "additionalProperties": false,
       "required": ["horizon_days", "stat_horizons", "conflicts", "price_location", "current_zone",
-                   "supports", "resistances", "levels_window", "levels_note", "bull", "bear", "range_1sd", "range_95", "stops_ref",
+                   "supports", "resistances", "levels_window", "trendlines", "levels_note", "bull", "bear", "range_1sd", "range_95", "stops_ref",
                    "earnings_within_horizon", "ex_dividend_within_horizon", "macro_within_horizon", "macro_complete",
                    "signals", "patterns"],
       "properties": {
@@ -384,6 +437,10 @@
         "supports": {"type": "array", "items": {"$ref": "#/$defs/zone"}, "description": "zones below the close, nearest first"},
         "resistances": {"type": "array", "items": {"$ref": "#/$defs/zone"}, "description": "zones above the close, nearest first"},
         "levels_window": {"type": ["object", "null"]},
+        "trendlines": {"type": ["object", "null"], "additionalProperties": false, "required": ["up", "down"],
+                       "description": "3.3: sloping support and resistance of the levels window, reported next to the zones and never mixed into them; reference only, like the zones. null when the key levels are unavailable",
+                       "properties": {"up": {"$ref": "#/$defs/trendline", "description": "along the swing lows: from the window's lowest swing low through the later swing low that keeps every later swing low on or above the line"},
+                                      "down": {"$ref": "#/$defs/trendline", "description": "the mirror along the swing highs"}}},
         "levels_note": {"$ref": "#/$defs/str", "description": "the key levels' reference-only note (levels.evidence.note)"},
         "bull": {"$ref": "#/$defs/scenario"},
         "bear": {"$ref": "#/$defs/scenario"},

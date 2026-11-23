@@ -11,8 +11,8 @@ import levels as L
 from conftest import synthetic_bars
 
 REQUIRED_LEVEL_KEYS = {"price", "zone_low", "zone_high", "sources", "touches", "holds", "breaks", "weak", "flips",
-                       "fresh", "last_break", "holds_since_break", "volume_share", "score", "distance_pct",
-                       "distance_atr"}
+                       "fresh", "last_break", "holds_since_break", "volume_share", "score", "round_fill",
+                       "distance_pct", "distance_atr"}
 
 
 def frame(highs, lows, volumes=None, start="2024-01-01"):
@@ -384,6 +384,119 @@ def patched_candidates(monkeypatch, make):
     monkeypatch.setattr(L, "_candidates", lambda *a, **k: make(close, atr))
     monkeypatch.setattr(C, "LEVEL_MIN_SCORE", -1e9)              # keep every cluster: this tests sides only
     return L.build_levels(ctx), close, atr
+
+
+def test_round_numbers_step_follows_the_price_and_the_daily_range():
+    # 200-1000: steps of 50; within 4 ATR (190-230) only 200, plus the nearest one above
+    assert L.round_numbers(210.0, 5.0, 4.0) == {"step": 50.0, "prices": [200.0, 250.0]}
+    # 10-50: steps of 5, raised to 10 because 5 is less than 2 ATR; the close itself is not a level
+    assert L.round_numbers(30.0, 4.0, 4.0) == {"step": 10.0, "prices": [20.0, 40.0]}
+    assert L.round_numbers(5.0, 0.2, 4.0) == {"step": 1.0, "prices": [4.0, 6.0]}
+    # 50-200: steps of 10; position reaches 8 ATR
+    assert L.round_numbers(152.0, 2.0, 8.0) == {"step": 10.0, "prices": [140.0, 150.0, 160.0]}
+    assert L.round_numbers(150.0, 2.0, 8.0)["prices"] == [140.0, 160.0]
+    # above 1000: steps of 100; the tiers' edges belong to the upper tier
+    assert L.round_numbers(1000.0, 20.0, 4.0) == {"step": 100.0, "prices": [900.0, 1100.0]}
+    assert L.round_numbers(50.0, 1.0, 1.0) == {"step": 10.0, "prices": [40.0, 60.0]}
+    # without a reach only the nearest one on each side
+    assert L.round_numbers(210.0, 5.0, float("inf"))["prices"] == [200.0, 250.0]
+    # a range no step of the ladder covers: nothing, never a negative or zero price
+    assert L.round_numbers(2500.0, 800.0, 4.0) == {"step": 5000.0, "prices": [5000.0]}
+    assert L.round_numbers(2500.0, 9000.0, 4.0) == {"step": None, "prices": []}
+    assert all(s2 > s1 for s1, s2 in zip(C.ROUND_LADDER, C.ROUND_LADDER[1:]))
+    assert {s for _, s in C.ROUND_STEPS} | {C.ROUND_STEP_TOP} <= set(C.ROUND_LADDER)
+
+
+def test_select_levels_fills_a_short_side_with_round_numbers_only():
+    rnd = lambda price, score=0.2, reaction=0.0: {**lv(price, score, sources=["round_number"]),  # noqa: E731
+                                                  "reaction_score": reaction}
+    clusters = [lv(101, 2.0), rnd(105), rnd(110), rnd(115), lv(104, 0.4), rnd(107, reaction=-1.0),
+                lv(99, 2.0), lv(97, 2.0), lv(95, 2.0), rnd(98)]
+    sup, res = L.select_levels(clusters, close=100.0, atr=2.0, per_side=3, min_score=1.0, reach_atr=4.0)
+    # one qualifying resistance: the two nearest round numbers fill the side. 104 is weak and no round number,
+    # 107 has broken more than it held, 115 is not needed
+    assert [(c["price"], c["round_fill"]) for c in res] == [(101, False), (105, True), (110, True)]
+    # a full side takes no round number
+    assert [(c["price"], c["round_fill"]) for c in sup] == [(99, False), (97, False), (95, False)]
+    assert res[1]["score"] == 0.2 and res[1]["distance_atr"] == pytest.approx(2.5)
+    # a round number inside a zone that qualifies is an ordinary zone, not a fill
+    strong = [lv(105, 3.0, sources=["pivot_high", "round_number"])]
+    assert [c["round_fill"] for c in L.select_levels(strong, 100.0, 2.0, 3, 1.0)[1]] == [False]
+    # a side with no qualifying zone at all still gets them, nearest first
+    assert [c["price"] for c in L.select_levels([rnd(110), rnd(105)], 100.0, 2.0, 3, 1.0)[1]] == [105, 110]
+    assert L.round_fill(rnd(105)) and not L.round_fill(rnd(105, score=1.5)) and not L.round_fill(lv(105, 0.2))
+
+
+def test_candidates_weigh_weekly_pivots_above_daily_ones_and_round_numbers_lowest():
+    W = C.LEVEL_SOURCE_WEIGHTS
+    assert W["weekly_pivot"] > W["pivot"] > W["round_number"] and W["round_number"] == W["moving_average"]
+    pivots = {"highs": [{"date": "2024-03-01", "price": 110.0, "swing_atr": 1.5}], "lows": []}
+    weekly = {"highs": [{"date": "2023-06-01", "price": 130.0, "swing_atr": 1.5}],
+              "lows": [{"date": "2023-09-01", "price": 80.0, "swing_atr": 9.0}]}
+    r52 = {"high_52w": 131.0, "high_52w_date": "2023-06-01", "low_52w": 79.0, "low_52w_date": "2023-09-01"}
+    cands = L._candidates(pivots, [], {"available": False}, r52, [], pd.Series({"sma50": 100.0, "sma100": 99.0,
+                          "sma200": 98.0}), [], 2.0, lambda d: 0.5, [], weekly, lambda d: 0.8, [100.0, 150.0])
+    by = {c["source"]: c for c in cands}
+    assert by["pivot_high"]["weight"] == pytest.approx(W["pivot"] * 0.5)
+    assert by["weekly_pivot_high"]["weight"] == pytest.approx(W["weekly_pivot"] * 0.8)       # its own, slower recency
+    assert by["weekly_pivot_low"]["weight"] == pytest.approx(W["weekly_pivot"] * C.SWING_WEIGHT_CAP * 0.8)
+    assert by["weekly_pivot_low"]["date"] == "2023-09-01"
+    assert [c["price"] for c in cands if c["source"] == "round_number"] == [100.0, 150.0]
+    assert by["round_number"]["weight"] == W["round_number"] and "date" not in by["round_number"]
+    assert L._SOURCE_TYPES["weekly_pivot_high"] == L._SOURCE_TYPES["weekly_pivot_low"] == "weekly_pivot"
+    # without weekly pivots or round numbers the list is the one before 3.3
+    old = L._candidates(pivots, [], {"available": False}, r52, [], pd.Series({"sma50": 100.0, "sma100": 99.0,
+                        "sma200": 98.0}), [], 2.0, lambda d: 0.5, [])
+    assert {c["source"] for c in old} == {"pivot_high", "high_52w", "low_52w", "sma50", "sma100", "sma200"}
+
+
+def test_build_levels_adds_weekly_pivots_round_numbers_and_trendlines():
+    bars = synthetic_bars()
+    for horizon in ("swing", "position"):
+        out = L.build_levels(make_ctx(bars, horizon))
+        wp, rn, tl = out["weekly_pivots"], out["round_numbers"], out["trendlines"]
+        # the same two years of weekly swings for both horizons, with their own half-life
+        assert wp["available"] is True and wp["weeks"] == C.WEEKLY_PIVOT_WEEKS and wp["highs"] and wp["lows"]
+        assert wp["half_life_bars"] == C.LEVEL_HALF_LIFE * C.WEEKLY_PIVOT_WEEKS * 5
+        assert wp == {**wp, **L.SW.weekly_pivots(bars)}
+        sources = [c["source"] for c in out["candidates"]]
+        assert sources.count("weekly_pivot_high") == len(wp["highs"])
+        assert sources.count("weekly_pivot_low") == len(wp["lows"])
+        assert sources.count("round_number") == len(rn["prices"]) >= 2
+        assert rn == {**L.round_numbers(out["last_close"], out["atr"], out["selection"]["reach_atr"]), "note": rn["note"]}
+        assert set(tl) == {"up", "down", "tol_atr", "min_bars", "min_slope_atr", "rule"}
+        window = bars.iloc[-out["lookback_bars"]:]
+        assert tl == L.SW.trendlines(window, make_ctx(bars, horizon)["ind"]["atr14"], out["pivots"])
+        for z in out["supports"] + out["resistances"]:
+            assert z["round_fill"] is L.round_fill(z)
+        assert out["current_zone"] is None or out["current_zone"]["round_fill"] is False
+        assert "round-number" in out["selection"]["rule"]
+
+
+def test_build_levels_without_enough_weeks_says_so_and_goes_on():
+    bars = synthetic_bars(n=60)
+    out = L.build_levels(make_ctx(bars))
+    assert out["available"] is True and out["weekly_pivots"]["available"] is False
+    assert any(n.startswith("weekly pivots not used as level candidates") for n in out["notes"])
+    assert not any(c["source"].startswith("weekly_") for c in out["candidates"])
+
+
+def test_build_levels_at_a_new_high_lists_round_numbers_above():
+    # a steady climb to a record: nothing above the close but round numbers
+    n = 400
+    close = 100.0 + 0.25 * np.arange(n) + 3.0 * np.sin(np.arange(n) / 6.0)
+    close[-1] = close.max() + 1.0
+    idx = pd.bdate_range("2023-01-02", periods=n, name="date")
+    bars = pd.DataFrame({"open": close, "high": close + 1.0, "low": close - 1.0, "close": close,
+                         "volume": 1000.0}, index=idx)
+    out = L.build_levels(make_ctx(bars))
+    res = out["resistances"]
+    assert out["extremes"]["at_all_time_high"] is True and res
+    assert all(z["round_fill"] and z["sources"] == ["round_number"] and z["fresh"] for z in res)
+    step = out["round_numbers"]["step"]
+    assert [z["price"] for z in res] == [p for p in out["round_numbers"]["prices"] if p > out["last_close"]][:3]
+    assert all(z["price"] % step == 0 for z in res)
+    assert any("resistance" in n for n in out["notes"]) is (len(res) < C.LEVELS_PER_SIDE)
 
 
 def test_build_levels_gives_a_cluster_holding_the_close_as_the_current_zone(monkeypatch):

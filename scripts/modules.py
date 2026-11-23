@@ -15,6 +15,7 @@ import pandas as pd
 import config as C
 import indicators as I
 import regime as R
+import swings as SW
 from dividends import prev_close_net
 from regime import iso, last, num, pct
 
@@ -69,7 +70,9 @@ def _last_macd_cross(ind: pd.DataFrame) -> dict | None:
 
 def build_trend_momentum(ctx) -> dict:
     """C: 12-1 momentum, period returns, SMA stack (SMA20/50/200) and slopes, the context SMA100, MACD,
-    distance from the 52-week high."""
+    distance from the 52-week high, and the swing structure: whether the last swing highs and lows are
+    rising or falling (Dow theory) and the price that ends the sequence. The structure is a reading
+    next to the averages; it does not vote in the regime."""
     bars, ind = ctx["bars"], ctx["ind"]
     n = len(bars)
     notes: list[str] = []
@@ -120,8 +123,12 @@ def build_trend_momentum(ctx) -> dict:
     from_high = {"high": hi, "date": iso(hi_date), "bars_ago": n - 1 - bars.index.get_loc(hi_date),
                  "pct": pct(close, hi), "atr": _atr_units(close, hi, atr)}
 
+    # the same daily ZigZag as the key levels, over a fixed window so both horizons read the same swings
+    # (when the swings do not make one, structure.reason says why)
+    structure = SW.swing_structure(bars, SW.daily_pivots(bars, ind["atr14"], C.STRUCTURE_LOOKBACK), atr)
+
     return {"available": True, "close": close, "mom_12_1": mom, "returns": returns, "sma": sma,
-            "macd": macd, "from_52w_high": from_high, "notes": notes}
+            "macd": macd, "from_52w_high": from_high, "structure": structure, "notes": notes}
 
 
 # ---------------------------------------------------------------------------- D. relative strength

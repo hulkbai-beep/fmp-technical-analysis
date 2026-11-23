@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-The ta-3.2 contract: a small, versioned summary of one stock's swing and position runs for other tools.
+The ta-3.3 contract: a small, versioned summary of one stock's swing and position runs for other tools.
 
 metrics.json is internal and may change between versions. The contract is the public interface: within a major
 version fields are only ever added, and renaming or removing one means a new major version (ta-4.0). It selects and
-normalises facts and judges nothing (no "buy", no target of its own). contracts/ta-3.2.schema.json describes every
+normalises facts and judges nothing (no "buy", no target of its own). contracts/ta-3.3.schema.json describes every
 field; tests/test_contract.py checks both.
 
 Blocks that do not depend on the horizon (data quality, market, event, dividend, macro, volatility, extension,
@@ -29,7 +29,7 @@ from pathlib import Path
 import config as C
 import scenarios as SC
 
-CONTRACT = "ta-3.2"   # 1.1 adds event.last_earnings*, targets' kind; 1.2 levels_note, range_95, vol stops;
+CONTRACT = "ta-3.3"   # 1.1 adds event.last_earnings*, targets' kind; 1.2 levels_note, range_95, vol stops;
 #                       2.0 removes event.eps_estimated (no fundamentals); 2.x only add fields:
 #                       2.1 data_quality.calendar_source, dividend, macro, horizons.*.ex_dividend_within_horizon /
 #                       macro_within_horizon / macro_complete (session counts exclude NYSE holidays),
@@ -38,7 +38,10 @@ CONTRACT = "ta-3.2"   # 1.1 adds event.last_earnings*, targets' kind; 1.2 levels
 #                       pillar and context_only.scored (the scorecard is gone; conflicts stay);
 #                       3.x only add fields: 3.1 volatility.squeeze_last_release; 3.2 horizons.*.current_zone
 #                       (the zone the close is in), the zones' last_break and holds_since_break, and the
-#                       price_location state "inside_zone"
+#                       price_location state "inside_zone"; 3.3 trend.structure and weekly.structure (swing highs
+#                       and lows, the price that ends the sequence), horizons.*.trendlines, at_level / level on
+#                       candlestick patterns; zone sources may name weekly_pivot_high / _low and round_number, and
+#                       round_fill marks a round-number zone listed only because its side is short of zones
 HORIZONS = ("swing", "position")
 MACRO_EVENT_KEYS = ("id", "label", "tier", "date", "time_ny", "timing", "session", "trading_days_to")
 MACRO_BRIEF_KEYS = ("id", "label", "tier", "date", "time_ny", "timing", "trading_days_to")
@@ -211,6 +214,24 @@ def _extension(mr):
     return _pick(mr, ("rsi14", "rsi14_state", "rsi2", "rsi2_state", "z20", "z20_state", "bb_pct_b", "dist_sma50_atr"))
 
 
+def _swing(p):
+    return None if not isinstance(p, dict) else {"price": _num(p.get("price")), "date": p.get("date"),
+                                                 "provisional": bool(p.get("provisional"))}
+
+
+def _structure(st):
+    """3.3: the swing structure (Dow theory) of the daily chart (trend) or the weekly chart (weekly)."""
+    if not isinstance(st, dict) or not st.get("available"):
+        return None
+    inv = st.get("invalidation")
+    return {"state": st.get("state"), "highs": st.get("highs"), "lows": st.get("lows"),
+            "last_high": _swing(st.get("last_high")), "prev_high": _swing(st.get("prev_high")),
+            "last_low": _swing(st.get("last_low")), "prev_low": _swing(st.get("prev_low")),
+            "invalidation": None if not inv else {"price": _num(inv.get("price")), "date": inv.get("date"),
+                                                  "kind": inv.get("kind"), "distance_pct": _num(inv.get("distance_pct")),
+                                                  "distance_atr": _num(inv.get("distance_atr"))}}
+
+
 def _trend(tm, lv):
     if not tm:
         return None
@@ -223,7 +244,8 @@ def _trend(tm, lv):
             "macd": {"macd": _num(macd.get("macd")), "signal": _num(macd.get("signal")), "hist": _num(macd.get("hist")),
                      "last_cross": _pick(cross, ("type", "date", "bars_ago", "zero_side"))},
             "high_52w": _num(hi.get("high")), "high_52w_date": hi.get("date"), "from_52w_high": _num(hi.get("pct")),
-            "low_52w": _num(_get(lv, "low_52w")), "low_52w_date": _get(lv, "low_52w_date")}
+            "low_52w": _num(_get(lv, "low_52w")), "low_52w_date": _get(lv, "low_52w_date"),
+            "structure": _structure(tm.get("structure"))}
 
 
 def _regime(rg):
@@ -269,7 +291,7 @@ def _weekly(mtf):
     w = mtf.get("weekly") or {}
     return {"direction": w.get("direction"), "sign": w.get("sign"), "sma10w": _num(w.get("sma10w")),
             "sma40w": _num(w.get("sma40w")), "rsi14w": _num(w.get("rsi14w")), "daily_sign": mtf.get("daily_sign"),
-            "alignment": mtf.get("alignment")}
+            "alignment": mtf.get("alignment"), "structure": _structure(w.get("structure"))}
 
 
 def _context(pa, cs):
@@ -289,7 +311,21 @@ def _zone(z):
             "flips": z.get("flips"), "fresh": z.get("fresh"), "last_test": z.get("last_test"),
             "last_break": z.get("last_break"), "holds_since_break": z.get("holds_since_break"),
             "reaction_score": _num(z.get("reaction_score")), "sources": list(z.get("sources") or []),
+            "round_fill": bool(z.get("round_fill")),
             "distance_pct": _num(z.get("distance_pct")), "distance_atr": _num(z.get("distance_atr"))}
+
+
+def _trendline(t):
+    """3.3: one trendline of the levels window: its two points, its price at the last bar and its state."""
+    if not isinstance(t, dict):
+        return None
+    a, b = t.get("anchor") or {}, t.get("second") or {}
+    return {"anchor_date": a.get("date"), "anchor_price": _num(a.get("price")),
+            "second_date": b.get("date"), "second_price": _num(b.get("price")),
+            "slope_per_bar": _num(t.get("slope_per_bar")), "price": _num(t.get("price")),
+            "distance_pct": _num(t.get("distance_pct")), "distance_atr": _num(t.get("distance_atr")),
+            "touches": t.get("touches"), "confirmed": t.get("confirmed"), "state": t.get("state"),
+            "broken_on": t.get("broken_on"), "close_side": t.get("close_side")}
 
 
 def _scenario(s):
@@ -337,6 +373,12 @@ def _evidence(entries, primary, source=None):
                "edge_median": v["edge_median"], "edge_hit_rate": v["edge_hit_rate"], "confirmed": v["confirmed"]}
         if source:
             row["source"] = source
+        if source == "candlesticks":       # 3.3: where the pattern formed (None = the key levels are unavailable)
+            lvl = e.get("level")
+            row["at_level"] = e.get("at_level")
+            row["level"] = None if not isinstance(lvl, dict) else {
+                "label": lvl.get("label"), "side": lvl.get("side"), "price": _num(lvl.get("price")),
+                "low": _num(lvl.get("zone_low")), "high": _num(lvl.get("zone_high"))}
         out.append(row)
     return out
 
@@ -362,6 +404,8 @@ def _horizon(m):
         "supports": supports,
         "resistances": resistances,
         "levels_window": None if not lv else _pick(lv, ("lookback_bars", "window_start", "window_end")),
+        "trendlines": None if not lv or not isinstance(lv.get("trendlines"), dict) else {
+            "up": _trendline(lv["trendlines"].get("up")), "down": _trendline(lv["trendlines"].get("down"))},
         "levels_note": _get(lv, "evidence", "note"),
         "bull": _scenario(_get(sn, "bull")),
         "bear": _scenario(_get(sn, "bear")),
